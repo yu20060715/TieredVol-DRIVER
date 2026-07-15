@@ -163,6 +163,13 @@ static void parse_disk_list() {
         d->size_gb = 0;
         if (*p) {
             d->size_gb = atoll(p);
+            const char *tp = p;
+            while (*tp && *tp != ' ') tp++;
+            if (tp > p && *(tp - 1) == 'T') {
+                d->size_gb *= 1024;
+            } else if (tp > p + 1 && *(tp - 2) == '.' && *(tp - 1) == 'T') {
+                d->size_gb = (long long)((atof(p)) * 1024);
+            }
             end = strchr(p, ' ');
             if (end) p = end;
             while (*p == ' ') p++;
@@ -185,16 +192,20 @@ static void parse_disk_list() {
 static void parse_bench_output(const char *out, ui_disk_t *d) {
     d->speed_write = 0;
     d->speed_read = 0;
-    char *line = strstr(out, d->disk);
+    char needle[64];
+    snprintf(needle, sizeof(needle), "  /dev/%s:", d->disk);
+    char *line = strstr(out, needle);
     if (!line) return;
+    char *eol = strchr(line, '\n');
+    int line_len = eol ? (int)(eol - line) : (int)strlen(line);
     char *w = strstr(line, "Write:");
-    if (w) {
+    if (w && (int)(w - line) < line_len) {
         w += 6;
         while (*w == ' ') w++;
         d->speed_write = atof(w);
     }
     char *r = strstr(line, "Read:");
-    if (r) {
+    if (r && (int)(r - line) < line_len) {
         r += 5;
         while (*r == ' ') r++;
         d->speed_read = atof(r);
@@ -275,12 +286,9 @@ static void auto_bench_poll() {
 }
 
 static int bench_disk_done(const char *disk) {
-    char pattern[64];
-    snprintf(pattern, sizeof(pattern), "Testing /dev/%s", disk);
-    if (!strstr(bench_buf, pattern)) return 0;
-    char search[128];
-    snprintf(search, sizeof(search), "%s ... Write:", disk);
-    return strstr(bench_buf, search) != NULL;
+    char needle[64];
+    snprintf(needle, sizeof(needle), "  /dev/%s: Write", disk);
+    return strstr(bench_buf, needle) != NULL;
 }
 
 static void draw_box(int y, int x, int h, int w, const char *title) {
@@ -857,6 +865,22 @@ static int screen_create_select_disks() {
             if (!input_name[0]) { snprintf(status_msg, sizeof(status_msg), "Error: name required"); continue; }
             if (!input_mount[0]) { snprintf(status_msg, sizeof(status_msg), "Error: mount point required"); continue; }
             if (!input_fs[0]) { snprintf(status_msg, sizeof(status_msg), "Error: filesystem required"); continue; }
+            {
+                int valid = 1;
+                for (const char *p = input_name; *p; p++) {
+                    if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                          (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
+                        { valid = 0; break; }
+                }
+                if (!valid) { snprintf(status_msg, sizeof(status_msg), "Error: name must be alphanumeric (a-z, 0-9, . _ -)"); continue; }
+            }
+            if (input_mount[0] != '/') { snprintf(status_msg, sizeof(status_msg), "Error: mount must start with /"); continue; }
+            {
+                const char *ok_fs[] = {"ext4","ext3","xfs","btrfs","none",NULL};
+                int valid = 0;
+                for (int fi = 0; ok_fs[fi]; fi++) if (strcmp(input_fs, ok_fs[fi]) == 0) valid = 1;
+                if (!valid) { snprintf(status_msg, sizeof(status_msg), "Error: invalid filesystem (ext4/ext3/xfs/btrfs/none)"); continue; }
+            }
             mvprintw(by + 7, bx + 2, "Will create: %s", input_name);
             mvprintw(by + 8, bx + 2, "Mount at: %s", input_mount);
             mvprintw(by + 9, bx + 2, "Filesystem: %s", input_fs);
@@ -1029,7 +1053,9 @@ static void screen_status() {
         sy += 6;
     } else {
         char lv_out[2048] = "";
-        run_cmd("sudo lvs --noheadings -o lv_name,lv_size,stripes,stripesize tv_vg_" "2>/dev/null", lv_out, sizeof(lv_out));
+        char lv_cmd[512];
+        snprintf(lv_cmd, sizeof(lv_cmd), "sudo lvs --noheadings -o lv_name,lv_size,stripes,stripesize tv_vg_%s 2>/dev/null", vol_name);
+        run_cmd(lv_cmd, lv_out, sizeof(lv_out));
         char df_out[2048] = "";
         if (mount_point[0]) {
             char df_cmd[512];
