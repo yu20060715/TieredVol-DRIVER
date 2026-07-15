@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -O2
+CFLAGS=-Wall -Wextra -Wpedantic -std=gnu11 -O2
 PREFIX=/usr/local
 
 all: tiered_setup tiered_ui

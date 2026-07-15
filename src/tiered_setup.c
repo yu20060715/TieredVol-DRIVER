@@ -8,14 +8,32 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <time.h>
+#include <signal.h>
 
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
 
-#define VERSION "1.0.0"
+#define VERSION "1.1.0"
 #define MAX_DISKS 8
 #define MAX_NAME 64
 #define MAX_PATH 512
+
+static volatile sig_atomic_t bench_interrupted = 0;
+
+static void bench_signal_handler(int sig) {
+    (void)sig;
+    bench_interrupted = 1;
+}
+
+static int is_valid_name(const char *name) {
+    if (!name || !*name) return 0;
+    for (const char *p = name; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
+            return 0;
+    }
+    return 1;
+}
 
 static int run(const char *fmt, ...) {
     char cmd[4096];
@@ -109,6 +127,15 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
     char mp[512] = {0};
     int need_unmount = 0;
 
+    struct sigaction sa_new, sa_old_int, sa_old_term;
+    memset(&sa_new, 0, sizeof(sa_new));
+    sa_new.sa_handler = bench_signal_handler;
+    sigemptyset(&sa_new.sa_mask);
+    sa_new.sa_flags = 0;
+    sigaction(SIGINT, &sa_new, &sa_old_int);
+    sigaction(SIGTERM, &sa_new, &sa_old_term);
+    bench_interrupted = 0;
+
     {
         char cmd[256];
         snprintf(cmd, sizeof(cmd), "awk -v d=/dev/%s '$1==d{print $2}' /proc/mounts", disk);
@@ -170,6 +197,8 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
     if (!ws || !rs) { free(ws); free(rs); return -1; }
 
     for (int iter = 0; iter < iterations; iter++) {
+        if (bench_interrupted) break;
+
         char testpath[600];
         snprintf(testpath, sizeof(testpath), "%s/.bench_%s", mp, disk);
 
@@ -233,6 +262,9 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
         rmdir(mp);
     }
 
+    sigaction(SIGINT, &sa_old_int, NULL);
+    sigaction(SIGTERM, &sa_old_term, NULL);
+
     free(ws);
     free(rs);
     return (*write_spd > 0 || *read_spd > 0) ? 0 : -1;
@@ -279,14 +311,17 @@ static int cmd_list(void) {
 
 static int cmd_bench(int argc, char *argv[]) {
     char *disk_list = NULL;
+    int sequential = 0;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--disks") == 0 && i + 1 < argc) {
             disk_list = argv[++i];
+        } else if (strcmp(argv[i], "--sequential") == 0) {
+            sequential = 1;
         }
     }
 
     if (!disk_list) {
-        fprintf(stderr, "Usage: tiered_setup --bench --disks sda,sdb,sdc\n");
+        fprintf(stderr, "Usage: tiered_setup --bench --disks sda,sdb,sdc [--sequential]\n");
         return 1;
     }
 
@@ -297,6 +332,10 @@ static int cmd_bench(int argc, char *argv[]) {
     buf[sizeof(buf) - 1] = 0;
     char *tok = strtok(buf, ",");
     while (tok && nd < MAX_DISKS) {
+        if (!is_valid_name(tok)) {
+            fprintf(stderr, "Error: invalid disk name '%s'\n", tok);
+            return 1;
+        }
         strncpy(disks[nd], tok, 31);
         disks[nd][31] = 0;
         nd++;
@@ -312,14 +351,72 @@ static int cmd_bench(int argc, char *argv[]) {
         info[i].size_gb = sysfs_size_gb(disks[i]);
     }
 
-    printf("Benchmarking %d disks...\n", nd);
-    for (int i = 0; i < nd; i++) {
-        printf("  Testing /dev/%s ... ", info[i].disk);
-        fflush(stdout);
-        if (bench_disk(info[i].disk, &info[i].speed_write, &info[i].speed_read) == 0) {
-            printf("Write: %.0f MB/s  Read: %.0f MB/s\n", info[i].speed_write, info[i].speed_read);
-        } else {
-            printf("FAILED\n");
+    if (sequential || nd <= 1) {
+        printf("Benchmarking %d disk(s) sequentially...\n", nd);
+        for (int i = 0; i < nd; i++) {
+            printf("  Testing /dev/%s ... ", info[i].disk);
+            fflush(stdout);
+            if (bench_disk(info[i].disk, &info[i].speed_write, &info[i].speed_read) == 0) {
+                printf("Write: %.0f MB/s  Read: %.0f MB/s\n", info[i].speed_write, info[i].speed_read);
+            } else {
+                printf("FAILED\n");
+            }
+        }
+    } else {
+        printf("Benchmarking %d disks in parallel...\n", nd);
+
+        typedef struct { pid_t pid; int pipe_fd; int idx; } bench_child_t;
+        bench_child_t children[MAX_DISKS];
+        int nchildren = 0;
+
+        for (int i = 0; i < nd; i++) {
+            int pipefd[2];
+            if (pipe(pipefd) < 0) { fprintf(stderr, "pipe failed\n"); continue; }
+
+            pid_t pid = fork();
+            if (pid < 0) { close(pipefd[0]); close(pipefd[1]); continue; }
+
+            if (pid == 0) {
+                close(pipefd[0]);
+                double w = 0, r = 0;
+                int ret = bench_disk(info[i].disk, &w, &r);
+                struct { int ret; double w; double r; } result = { ret, w, r };
+                (void)!write(pipefd[1], &result, sizeof(result));
+                close(pipefd[1]);
+                _exit(0);
+            }
+
+            close(pipefd[1]);
+            children[nchildren].pid = pid;
+            children[nchildren].pipe_fd = pipefd[0];
+            children[nchildren].idx = i;
+            nchildren++;
+            printf("  Started benchmark for /dev/%s (pid %d)\n", info[i].disk, (int)pid);
+        }
+
+        int done = 0;
+        while (done < nchildren) {
+            int status;
+            for (int c = 0; c < nchildren; c++) {
+                if (children[c].pid <= 0) continue;
+                pid_t ret = waitpid(children[c].pid, &status, WNOHANG);
+                if (ret > 0) {
+                    struct { int ret; double w; double r; } result = { -1, 0, 0 };
+                    (void)!read(children[c].pipe_fd, &result, sizeof(result));
+                    close(children[c].pipe_fd);
+                    int idx = children[c].idx;
+                    info[idx].speed_write = result.w;
+                    info[idx].speed_read = result.r;
+                    if (result.ret == 0)
+                        printf("  /dev/%s: Write %.0f MB/s  Read %.0f MB/s\n",
+                               info[idx].disk, result.w, result.r);
+                    else
+                        printf("  /dev/%s: FAILED\n", info[idx].disk);
+                    children[c].pid = 0;
+                    done++;
+                }
+            }
+            if (done < nchildren) usleep(100000);
         }
     }
 
@@ -345,6 +442,20 @@ static int cmd_bench(int argc, char *argv[]) {
     return 0;
 }
 
+static void cleanup_create(const char *name, disk_t *valid, int valid_disks) {
+    fprintf(stderr, "  Rolling back...\n");
+    run_sudo("umount /dev/mapper/tv_vg_%s-tv_lv_%s 2>/dev/null", name, name);
+    run_sudo("lvremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -f tv_vg_%s/tv_lv_%s 2>/dev/null", name, name);
+    run_sudo("vgremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -f tv_vg_%s 2>/dev/null", name);
+    for (int i = 0; i < valid_disks; i++) {
+        char target[64];
+        snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
+        run_sudo("pvremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -ff -y /dev/mapper/%s 2>/dev/null", target);
+        run_sudo("dmsetup remove %s 2>/dev/null", target);
+    }
+    fprintf(stderr, "  Rollback complete.\n");
+}
+
 static int cmd_create(int argc, char *argv[]) {
     char *name = NULL;
     char *disk_spec = NULL;
@@ -362,6 +473,11 @@ static int cmd_create(int argc, char *argv[]) {
 
     if (!name || !disk_spec) {
         fprintf(stderr, "Usage: tiered_setup --create --name NAME --disks sdb:300,sdc:200 [--fs ext4] [--mount /mnt/fast]\n");
+        return 1;
+    }
+
+    if (!is_valid_name(name)) {
+        fprintf(stderr, "Error: invalid name '%s' (only a-z, A-Z, 0-9, ., _, - allowed)\n", name);
         return 1;
     }
 
@@ -500,6 +616,7 @@ static int cmd_create(int argc, char *argv[]) {
         struct stat st;
         if (stat(devpath, &st) != 0) {
             fprintf(stderr, "Error: failed to create %s\n", target);
+            cleanup_create(name, valid, i);
             return 1;
         }
         printf("  Created %s (%lldGB)\n", target, valid[i].carve_gb);
@@ -509,7 +626,11 @@ static int cmd_create(int argc, char *argv[]) {
     for (int i = 0; i < valid_disks; i++) {
         char target[64];
         snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
-        run_sudo("pvcreate -f /dev/mapper/%s", target);
+        if (run_sudo("pvcreate -f /dev/mapper/%s", target) != 0) {
+            fprintf(stderr, "Error: pvcreate failed for %s\n", target);
+            cleanup_create(name, valid, valid_disks);
+            return 1;
+        }
         printf("  PV: /dev/mapper/%s\n", target);
     }
 
@@ -523,13 +644,21 @@ static int cmd_create(int argc, char *argv[]) {
         size_t len = strlen(vg_cmd);
         snprintf(vg_cmd + len, sizeof(vg_cmd) - len, " /dev/mapper/%s", target);
     }
-    run_sudo("%s", vg_cmd);
+    if (run_sudo("%s", vg_cmd) != 0) {
+        fprintf(stderr, "Error: vgcreate failed for tv_vg_%s\n", name);
+        cleanup_create(name, valid, valid_disks);
+        return 1;
+    }
     printf("  VG: tv_vg_%s\n", name);
 
     printf("Step 5: Creating striped logical volume...\n");
-    run_sudo("lvcreate --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' "
+    if (run_sudo("lvcreate --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' "
              "-l 100%%FREE -i %d -I %dk -n tv_lv_%s tv_vg_%s",
-             valid_disks, stripe_size_kb, name, name);
+             valid_disks, stripe_size_kb, name, name) != 0) {
+        fprintf(stderr, "Error: lvcreate failed\n");
+        cleanup_create(name, valid, valid_disks);
+        return 1;
+    }
     printf("  LV: /dev/mapper/tv_vg_%s-tv_lv_%s (%d stripes, %dKB stripesize)\n",
            name, name, valid_disks, stripe_size_kb);
 
@@ -538,7 +667,11 @@ static int cmd_create(int argc, char *argv[]) {
 
     if (strcmp(fs, "none") != 0) {
         printf("Step 6: Formatting as %s...\n", fs);
-        run_sudo("mkfs.%s %s", fs, lv_path);
+        if (run_sudo("mkfs.%s %s", fs, lv_path) != 0) {
+            fprintf(stderr, "Error: mkfs.%s failed\n", fs);
+            cleanup_create(name, valid, valid_disks);
+            return 1;
+        }
     } else {
         printf("Step 6: Skipped formatting (raw)\n");
     }
@@ -546,7 +679,11 @@ static int cmd_create(int argc, char *argv[]) {
     if (mount_point && strcmp(fs, "none") != 0) {
         printf("Step 7: Mounting...\n");
         run_sudo("mkdir -p %s", mount_point);
-        run_sudo("mount %s %s", lv_path, mount_point);
+        if (run_sudo("mount %s %s", lv_path, mount_point) != 0) {
+            fprintf(stderr, "Error: mount failed\n");
+            cleanup_create(name, valid, valid_disks);
+            return 1;
+        }
         printf("  Mounted at %s\n", mount_point);
     } else {
         printf("Step 7: Skipped mounting\n");
@@ -699,7 +836,7 @@ int main(int argc, char *argv[]) {
         printf("TieredVol — Tiered Storage Volume Manager v%s\n\n", VERSION);
         printf("Usage:\n");
         printf("  tiered_setup --list                              List all disks\n");
-        printf("  tiered_setup --bench --disks sda,sdb,sdc         Benchmark disks\n");
+        printf("  tiered_setup --bench --disks sda,sdb,sdc         Benchmark disks (parallel)\n");
         printf("  tiered_setup --create --name NAME --disks ...    Create tiered volume\n");
         printf("  tiered_setup --remove --name NAME                Remove tiered volume\n");
         printf("  tiered_setup --status                            Show status\n");
