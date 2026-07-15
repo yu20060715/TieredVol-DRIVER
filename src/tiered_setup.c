@@ -739,7 +739,7 @@ static int cmd_create(int argc, char *argv[]) {
         make_target(target, sizeof(target), valid[i].disk);
         char devpath[128];
         snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
-        char *const pvcreate_argv[] = {"pvcreate", "-f", devpath, NULL};
+        char *const pvcreate_argv[] = {"pvcreate", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", devpath, NULL};
         if (safe_execvp("pvcreate", pvcreate_argv) != 0) {
             fprintf(stderr, "Error: pvcreate failed for %s\n", target);
             cleanup_create(name, valid, valid_disks);
@@ -752,17 +752,13 @@ static int cmd_create(int argc, char *argv[]) {
     {
         char vg_name[128];
         snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
-        int argv_max = 3 + valid_disks + 1;
-        char *const *vg_argv = (char *const *)malloc(sizeof(char *) * argv_max);
-        if (!vg_argv) { cleanup_create(name, valid, valid_disks); return 1; }
-        char vg_cfg_arg[512];
-        snprintf(vg_cfg_arg, sizeof(vg_cfg_arg), "%s", LVM_CONF);
-        char *args[8];
-        args[0] = "vgcreate";
-        args[1] = vg_cfg_arg;
-        args[2] = "-f";
-        args[3] = vg_name;
-        int argc_vg = 4;
+        int argc_vg = 0;
+        char *args[16];
+        args[argc_vg++] = "vgcreate";
+        args[argc_vg++] = "--config";
+        args[argc_vg++] = "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}";
+        args[argc_vg++] = "-f";
+        args[argc_vg++] = vg_name;
         for (int i = 0; i < valid_disks; i++) {
             char target[64];
             make_target(target, sizeof(target), valid[i].disk);
@@ -772,8 +768,7 @@ static int cmd_create(int argc, char *argv[]) {
         }
         args[argc_vg] = NULL;
         int ret = safe_execvp("vgcreate", args);
-        for (int i = 4; i < argc_vg; i++) free(args[i]);
-        free((void *)vg_argv);
+        for (int i = 5; i < argc_vg; i++) free(args[i]);
         if (ret != 0) {
             fprintf(stderr, "Error: vgcreate failed for tv_vg_%s\n", name);
             cleanup_create(name, valid, valid_disks);
@@ -789,10 +784,8 @@ static int cmd_create(int argc, char *argv[]) {
         snprintf(lv_name, sizeof(lv_name), "tv_lv_%s", name);
         snprintf(stripes_str, sizeof(stripes_str), "%d", valid_disks);
         snprintf(stripe_str, sizeof(stripe_str), "%dk", stripe_size_kb);
-        char lv_cfg[512];
-        snprintf(lv_cfg, sizeof(lv_cfg), "%s", LVM_CONF);
         char free_arg[] = "100%FREE";
-        char *const lv_argv[] = {"lvcreate", lv_cfg, "-l", free_arg, "-i", stripes_str, "-I", stripe_str, "-n", lv_name, vg_name, NULL};
+        char *const lv_argv[] = {"lvcreate", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-l", free_arg, "-i", stripes_str, "-I", stripe_str, "-n", lv_name, vg_name, NULL};
         if (safe_execvp("lvcreate", lv_argv) != 0) {
             fprintf(stderr, "Error: lvcreate failed\n");
             cleanup_create(name, valid, valid_disks);
@@ -922,20 +915,18 @@ static int cmd_remove(int argc, char *argv[]) {
 
     printf("Removing LV...\n");
     {
-        char vg_name[128], lv_name[128], lv_cfg[512];
+        char vg_name[128], lv_name[128];
         snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
         snprintf(lv_name, sizeof(lv_name), "tv_lv_%s", name);
-        snprintf(lv_cfg, sizeof(lv_cfg), "%s", LVM_CONF);
-        char *const lv_argv[] = {"lvremove", lv_cfg, "-f", lv_name, vg_name, NULL};
+        char *const lv_argv[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", lv_name, vg_name, NULL};
         (void)safe_execvp("lvremove", lv_argv);
     }
 
     printf("Removing VG...\n");
     {
-        char vg_name[128], vg_cfg[512];
+        char vg_name[128];
         snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
-        snprintf(vg_cfg, sizeof(vg_cfg), "%s", LVM_CONF);
-        char *const vg_argv[] = {"vgremove", vg_cfg, "-f", vg_name, NULL};
+        char *const vg_argv[] = {"vgremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", vg_name, NULL};
         (void)safe_execvp("vgremove", vg_argv);
     }
 
@@ -944,9 +935,7 @@ static int cmd_remove(int argc, char *argv[]) {
         char devpath[128];
         snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", targets[i]);
         {
-            char pv_cfg[512];
-            snprintf(pv_cfg, sizeof(pv_cfg), "%s", LVM_CONF);
-            char *const pv_argv[] = {"pvremove", pv_cfg, "-ff", "-y", devpath, NULL};
+            char *const pv_argv[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", devpath, NULL};
             (void)safe_execvp("pvremove", pv_argv);
         }
         run_sudo("dmsetup remove %s 2>/dev/null", targets[i]);
