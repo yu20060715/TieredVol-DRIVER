@@ -9,11 +9,15 @@
 #include <limits.h>
 #include <fcntl.h>
 #include <time.h>
+#include "tiered_common.h"
 
+#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
-#define VERSION "1.1.0"
+#define VERSION "1.2.0"
 #define MAX_DISKS 8
+#define MIN_COLS 80
+#define MIN_ROWS 20
 
 typedef struct {
     char disk[32];
@@ -41,6 +45,8 @@ static char bench_buf[16384] = "";
 static int bench_buf_len = 0;
 static int bench_finished = 0;
 static time_t bench_start_time = 0;
+
+static double saved_speed_w[MAX_DISKS], saved_speed_r[MAX_DISKS];
 
 static void detect_tool_path() {
     char *base = getenv("TIERED_VOL_DIR");
@@ -212,6 +218,19 @@ static void parse_bench_output(const char *out, ui_disk_t *d) {
     }
 }
 
+static void drain_pipe_to_buf(void) {
+    char tmp[4096];
+    ssize_t n;
+    while ((n = read(bench_rd_fd, tmp, sizeof(tmp) - 1)) > 0) {
+        tmp[n] = 0;
+        if (bench_buf_len + (int)n < (int)sizeof(bench_buf) - 1) {
+            memcpy(bench_buf + bench_buf_len, tmp, n);
+            bench_buf_len += n;
+            bench_buf[bench_buf_len] = 0;
+        }
+    }
+}
+
 static void auto_bench_start() {
     char disklist[512] = "";
     for (int i = 0; i < ndisks; i++) {
@@ -251,27 +270,11 @@ static void auto_bench_start() {
 static void auto_bench_poll() {
     if (bench_finished || bench_rd_fd < 0) return;
 
-    char tmp[4096];
-    ssize_t n;
-    while ((n = read(bench_rd_fd, tmp, sizeof(tmp) - 1)) > 0) {
-        tmp[n] = 0;
-        if (bench_buf_len + (int)n < (int)sizeof(bench_buf) - 1) {
-            memcpy(bench_buf + bench_buf_len, tmp, n);
-            bench_buf_len += n;
-            bench_buf[bench_buf_len] = 0;
-        }
-    }
+    drain_pipe_to_buf();
 
     int status;
     if (bench_pid > 0 && waitpid(bench_pid, &status, WNOHANG) > 0) {
-        while ((n = read(bench_rd_fd, tmp, sizeof(tmp) - 1)) > 0) {
-            tmp[n] = 0;
-            if (bench_buf_len + (int)n < (int)sizeof(bench_buf) - 1) {
-                memcpy(bench_buf + bench_buf_len, tmp, n);
-                bench_buf_len += n;
-                bench_buf[bench_buf_len] = 0;
-            }
-        }
+        drain_pipe_to_buf();
         close(bench_rd_fd);
         bench_rd_fd = -1;
         bench_finished = 1;
@@ -289,6 +292,20 @@ static int bench_disk_done(const char *disk) {
     char needle[64];
     snprintf(needle, sizeof(needle), "  /dev/%s: Write", disk);
     return strstr(bench_buf, needle) != NULL;
+}
+
+static void save_speeds(void) {
+    for (int i = 0; i < ndisks; i++) {
+        saved_speed_w[i] = disks[i].speed_write;
+        saved_speed_r[i] = disks[i].speed_read;
+    }
+}
+
+static void restore_speeds(void) {
+    for (int i = 0; i < ndisks; i++) {
+        disks[i].speed_write = saved_speed_w[i];
+        disks[i].speed_read = saved_speed_r[i];
+    }
 }
 
 static void draw_box(int y, int x, int h, int w, const char *title) {
@@ -315,6 +332,20 @@ static void draw_status_bar(const char *msg, const char *hint) {
     if (msg) mvprintw(maxy - 1, 1, " %s", msg);
     if (hint) mvprintw(maxy - 1, maxx - (int)strlen(hint) - 3, " %s ", hint);
     attroff(A_REVERSE);
+}
+
+static int check_terminal_size(void) {
+    int maxy = getmaxy(stdscr);
+    int maxx = getmaxx(stdscr);
+    if (maxy < MIN_ROWS || maxx < MIN_COLS) {
+        clear();
+        mvprintw(maxy / 2 - 1, (maxx - 36) / 2, "Terminal too small (%dx%d)", maxx, maxy);
+        mvprintw(maxy / 2 + 1, (maxx - 36) / 2, "Minimum: %dx%d — please resize", MIN_COLS, MIN_ROWS);
+        draw_status_bar("Resize terminal or press Q to exit", NULL);
+        refresh();
+        return 0;
+    }
+    return 1;
 }
 
 typedef struct {
@@ -359,6 +390,7 @@ static int mb_to_dirty_ratio(long long total_kb, int mb) {
 }
 
 static void screen_ram_cache() {
+    if (!check_terminal_size()) return;
     read_meminfo(&ram_cache);
     ram_cache.original_dirty_ratio = read_sysctl_int("vm.dirty_ratio");
     ram_cache.original_dirty_bg_ratio = read_sysctl_int("vm.dirty_background_ratio");
@@ -497,6 +529,7 @@ static void screen_ram_cache() {
 }
 
 static int screen_main() {
+    if (!check_terminal_size()) return 6;
     const char *items[] = {
         "Disk List",
         "Benchmark",
@@ -543,11 +576,11 @@ static int screen_main() {
 }
 
 static void screen_disk_list() {
+    if (!check_terminal_size()) return;
     auto_bench_poll();
-    double saved_w[MAX_DISKS], saved_r[MAX_DISKS];
-    for (int i = 0; i < ndisks; i++) { saved_w[i] = disks[i].speed_write; saved_r[i] = disks[i].speed_read; }
+    save_speeds();
     parse_disk_list();
-    for (int i = 0; i < ndisks; i++) { disks[i].speed_write = saved_w[i]; disks[i].speed_read = saved_r[i]; }
+    restore_speeds();
     while (1) {
         clear();
         int maxx = getmaxx(stdscr);
@@ -614,6 +647,7 @@ static void screen_disk_list() {
 }
 
 static void screen_bench() {
+    if (!check_terminal_size()) return;
     if (ndisks == 0) { snprintf(status_msg, sizeof(status_msg), "No disks found!"); return; }
 
     auto_bench_poll();
@@ -647,9 +681,10 @@ static void screen_bench() {
                              d->speed_write, d->speed_read);
                     attroff(COLOR_PAIR(1));
                 } else {
-                    char pattern[64];
-                    snprintf(pattern, sizeof(pattern), "Testing /dev/%s", d->disk);
-                    if (strstr(bench_buf, pattern)) {
+                    char pat_test[64], pat_started[64];
+                    snprintf(pat_test, sizeof(pat_test), "Testing /dev/%s", d->disk);
+                    snprintf(pat_started, sizeof(pat_started), "Started benchmark for /dev/%s", d->disk);
+                    if (strstr(bench_buf, pat_test) || strstr(bench_buf, pat_started)) {
                         mvprintw(6 + row, 3, "%-10s %-26s %-6s %6lldG  Testing... %dm%02ds  %d/%d",
                                  d->disk, d->model, d->tran, d->size_gb,
                                  elapsed_all / 60, elapsed_all % 60, row + 1, nrow);
@@ -762,12 +797,205 @@ static int input_str(int y, int x, int w, const char *prompt, char *buf, int buf
     }
 }
 
+static int create_phase_select_disks(int *sel, int *carve, int *cursor, int *sel_count) {
+    if (!check_terminal_size()) return -1;
+    while (1) {
+        clear();
+        int maxx = getmaxx(stdscr);
+        attron(A_BOLD | COLOR_PAIR(2));
+        mvprintw(0, (maxx - 34) / 2, "=== Create Tiered Volume ===");
+        attroff(A_BOLD | COLOR_PAIR(2));
+        int bw = maxx - 4;
+        int bh = ndisks + 5;
+        draw_box(2, 1, bh, bw, "Step 1: Select Disks (Space=toggle, Enter=next)");
+        for (int i = 0; i < ndisks; i++) {
+            ui_disk_t *d = &disks[i];
+            if (d->is_root) {
+                attron(COLOR_PAIR(3));
+                mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [ROOT]", d->disk, d->model, d->size_gb);
+                attroff(COLOR_PAIR(3));
+            } else if (d->is_mounted) {
+                attron(COLOR_PAIR(4));
+                mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [MOUNTED]", d->disk, d->model, d->size_gb);
+                attroff(COLOR_PAIR(4));
+            } else if (!bench_finished && !bench_disk_done(d->disk)) {
+                attron(COLOR_PAIR(4));
+                mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [BENCH...]", d->disk, d->model, d->size_gb);
+                attroff(COLOR_PAIR(4));
+            } else {
+                if (i == *cursor) attron(A_BOLD);
+                mvprintw(4 + i, 3, "%c %-10s %-26s %6lldG  carve:%dG",
+                         sel[i] ? '*' : ' ', d->disk, d->model, d->size_gb, carve[i]);
+                if (i == *cursor) attroff(A_BOLD);
+            }
+        }
+        *sel_count = 0;
+        for (int i = 0; i < ndisks; i++) if (sel[i]) (*sel_count)++;
+        mvprintw(4 + ndisks + 1, 3, "Selected: %d disks", *sel_count);
+        draw_status_bar("Space:Toggle  Enter:Next  Q:Cancel", "Space/Enter/Q");
+        refresh();
+        int ch = getch();
+        if (ch == 'q' || ch == 'Q') return -1;
+        switch (ch) {
+            case KEY_UP:
+                if (*cursor > 0) {
+                    int nc = *cursor - 1;
+                    while (nc >= 0 && (disks[nc].is_root || disks[nc].is_mounted)) nc--;
+                    if (nc >= 0) *cursor = nc;
+                }
+                break;
+            case KEY_DOWN:
+                if (*cursor < ndisks - 1) {
+                    int nc = *cursor + 1;
+                    while (nc < ndisks && (disks[nc].is_root || disks[nc].is_mounted)) nc++;
+                    if (nc < ndisks) *cursor = nc;
+                }
+                break;
+            case ' ':
+                if (!disks[*cursor].is_root && !disks[*cursor].is_mounted) {
+                    if (!bench_finished && !bench_disk_done(disks[*cursor].disk)) {
+                        snprintf(status_msg, sizeof(status_msg), "%s is benchmarking, wait...", disks[*cursor].disk);
+                    } else {
+                        sel[*cursor] = !sel[*cursor];
+                    }
+                }
+                break;
+            case '\n': case KEY_ENTER:
+                if (*sel_count >= 2) {
+                    for (int i = 0; i < ndisks; i++) if (sel[i]) { *cursor = i; break; }
+                    return 0;
+                } else {
+                    snprintf(status_msg, sizeof(status_msg), "Select at least 2 disks!");
+                }
+                break;
+            case 27: return -1;
+        }
+    }
+}
+
+static int create_phase_set_carves(int *sel, int *carve, int *cursor) {
+    if (!check_terminal_size()) return -1;
+    while (1) {
+        clear();
+        int maxx = getmaxx(stdscr);
+        attron(A_BOLD | COLOR_PAIR(2));
+        mvprintw(0, (maxx - 34) / 2, "=== Create Tiered Volume ===");
+        attroff(A_BOLD | COLOR_PAIR(2));
+        int sel_count = 0;
+        for (int i = 0; i < ndisks; i++) if (sel[i]) sel_count++;
+        int bw = maxx - 4;
+        int bh = sel_count + 5;
+        draw_box(2, 1, bh, bw, "Step 2: Set Carve Sizes (Enter=next, Esc=back)");
+        int row = 0;
+        attron(A_BOLD);
+        mvprintw(4, 3, "%-10s %-20s %10s %10s", "DEVICE", "MODEL", "AVAIL", "CARVE");
+        mvhline(5, 2, ACS_HLINE, bw - 2);
+        attroff(A_BOLD);
+        for (int i = 0; i < ndisks; i++) {
+            if (!sel[i]) continue;
+            ui_disk_t *d = &disks[i];
+            int active = (i == *cursor);
+            if (active) attron(A_REVERSE);
+            mvprintw(6 + row, 3, "%-10s %-20s %8lldG %8dG",
+                     d->disk, d->model, d->size_gb, carve[i]);
+            if (active) attroff(A_REVERSE);
+            row++;
+        }
+        mvprintw(4 + row + 2, 3, "Left/Right:Adjust size  Up/Down:Select disk");
+        draw_status_bar("Left/Right:Adjust  Enter:Next  Esc:Back", "Arrow/Enter/Esc");
+        refresh();
+        int ch = getch();
+        switch (ch) {
+            case KEY_UP:
+                { int found = -1;
+                for (int i = *cursor - 1; i >= 0; i--) if (sel[i]) { found = i; break; }
+                if (found >= 0) *cursor = found; }
+                break;
+            case KEY_DOWN:
+                { int found = -1;
+                for (int i = *cursor + 1; i < ndisks; i++) if (sel[i]) { found = i; break; }
+                if (found >= 0) *cursor = found; }
+                break;
+            case KEY_LEFT:
+                if (carve[*cursor] > 50) carve[*cursor] -= 50;
+                break;
+            case KEY_RIGHT:
+                if (carve[*cursor] < (int)disks[*cursor].size_gb - 1) carve[*cursor] += 50;
+                if (carve[*cursor] > (int)disks[*cursor].size_gb - 1) carve[*cursor] = (int)disks[*cursor].size_gb - 1;
+                break;
+            case '\n': case KEY_ENTER:
+                return 0;
+            case 27:
+                return -1;
+        }
+    }
+}
+
+static int create_phase_input_settings(char *input_name, char *input_mount, char *input_fs) {
+    if (!check_terminal_size()) return -1;
+    clear();
+    int maxx = getmaxx(stdscr);
+    attron(A_BOLD | COLOR_PAIR(2));
+    mvprintw(0, (maxx - 34) / 2, "=== Create Tiered Volume ===");
+    attroff(A_BOLD | COLOR_PAIR(2));
+    int bw = 60;
+    int bh = 12;
+    int by = 3;
+    int bx = (maxx - bw) / 2;
+    draw_box(by, bx, bh, bw, "Step 3: Volume Settings (Tab=next field, Enter=create)");
+    int field = 0;
+    input_name[0] = 0;
+    input_mount[0] = 0;
+    input_fs[0] = 0;
+    while (1) {
+        int ry = by + 2 + field;
+        int r;
+        if (field == 0)
+            r = input_str(ry, bx + 2, 30, "Volume name:", input_name, sizeof(input_name), NULL);
+        else if (field == 1)
+            r = input_str(ry, bx + 2, 30, "Mount point:", input_mount, sizeof(input_mount), "/mnt/fast");
+        else
+            r = input_str(ry, bx + 2, 30, "Filesystem:", input_fs, sizeof(input_fs), "ext4");
+        if (r == -1) return -1;
+        if (r == 1) { field = (field + 1) % 3; continue; }
+        if (r == 0) {
+            if (field < 2) { field++; continue; }
+            break;
+        }
+    }
+    if (!input_name[0]) { snprintf(status_msg, sizeof(status_msg), "Error: name required"); return -1; }
+    if (!input_mount[0]) { snprintf(status_msg, sizeof(status_msg), "Error: mount point required"); return -1; }
+    if (!input_fs[0]) { snprintf(status_msg, sizeof(status_msg), "Error: filesystem required"); return -1; }
+    if (!tiered_is_valid_name(input_name)) {
+        snprintf(status_msg, sizeof(status_msg), "Error: name must be alphanumeric (a-z, 0-9, . _ -)");
+        return -1;
+    }
+    if (!tiered_is_valid_mount(input_mount)) {
+        snprintf(status_msg, sizeof(status_msg), "Error: mount must start with /");
+        return -1;
+    }
+    if (!tiered_is_valid_fs(input_fs)) {
+        snprintf(status_msg, sizeof(status_msg), "Error: invalid filesystem (ext4/ext3/xfs/btrfs/none)");
+        return -1;
+    }
+    mvprintw(by + 7, bx + 2, "Will create: %s", input_name);
+    mvprintw(by + 8, bx + 2, "Mount at: %s", input_mount);
+    mvprintw(by + 9, bx + 2, "Filesystem: %s", input_fs);
+    mvprintw(by + 10, bx + 2, "Press Enter to create...");
+    refresh();
+    int ch2 = getch();
+    if (ch2 == 27) return -1;
+    if (ch2 == '\n' || ch2 == KEY_ENTER) return 0;
+    return -1;
+}
+
 static int screen_create_select_disks() {
-    double saved_w[MAX_DISKS], saved_r[MAX_DISKS];
-    for (int i = 0; i < ndisks; i++) { saved_w[i] = disks[i].speed_write; saved_r[i] = disks[i].speed_read; }
-    parse_disk_list();
-    for (int i = 0; i < ndisks; i++) { disks[i].speed_write = saved_w[i]; disks[i].speed_read = saved_r[i]; }
     if (ndisks == 0) { snprintf(status_msg, sizeof(status_msg), "No disks found!"); return -1; }
+
+    save_speeds();
+    parse_disk_list();
+    restore_speeds();
+
     int sel[MAX_DISKS] = {0};
     int carve[MAX_DISKS] = {0};
     int sel_count = 0;
@@ -778,266 +1006,87 @@ static int screen_create_select_disks() {
             carve[i] = max_carve > 600 ? 600 : max_carve;
         }
     }
-    int phase = 0;
-    int ret = -1;
+
+    if (create_phase_select_disks(sel, carve, &cursor, &sel_count) < 0) return -1;
+    if (create_phase_set_carves(sel, carve, &cursor) < 0) return -1;
+
     char input_name[128] = "";
     char input_mount[256] = "";
     char input_fs[32] = "";
-    while (1) {
-        clear();
-        int maxx = getmaxx(stdscr);
-        attron(A_BOLD | COLOR_PAIR(2));
-        mvprintw(0, (maxx - 34) / 2, "=== Create Tiered Volume ===");
-        attroff(A_BOLD | COLOR_PAIR(2));
-        if (phase == 0) {
-            int bw = maxx - 4;
-            int bh = ndisks + 5;
-            draw_box(2, 1, bh, bw, "Step 1: Select Disks (Space=toggle, Enter=next)");
-            for (int i = 0; i < ndisks; i++) {
-                ui_disk_t *d = &disks[i];
-                if (d->is_root) {
-                    attron(COLOR_PAIR(3));
-                    mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [ROOT]", d->disk, d->model, d->size_gb);
-                    attroff(COLOR_PAIR(3));
-                } else if (d->is_mounted) {
-                    attron(COLOR_PAIR(4));
-                    mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [MOUNTED]", d->disk, d->model, d->size_gb);
-                    attroff(COLOR_PAIR(4));
-                } else if (!bench_finished && !bench_disk_done(d->disk)) {
-                    attron(COLOR_PAIR(4));
-                    mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [BENCH...]", d->disk, d->model, d->size_gb);
-                    attroff(COLOR_PAIR(4));
-                } else {
-                    if (i == cursor) attron(A_BOLD);
-                    mvprintw(4 + i, 3, "%c %-10s %-26s %6lldG  carve:%dG",
-                             sel[i] ? '*' : ' ', d->disk, d->model, d->size_gb, carve[i]);
-                    if (i == cursor) attroff(A_BOLD);
-                }
-            }
-            sel_count = 0;
-            for (int i = 0; i < ndisks; i++) if (sel[i]) sel_count++;
-            mvprintw(4 + ndisks + 1, 3, "Selected: %d disks", sel_count);
-        } else if (phase == 1) {
-            int bw = maxx - 4;
-            int bh = sel_count + 5;
-            draw_box(2, 1, bh, bw, "Step 2: Set Carve Sizes (Enter=next, Esc=back)");
-            int row = 0;
-            attron(A_BOLD);
-            mvprintw(4, 3, "%-10s %-20s %10s %10s", "DEVICE", "MODEL", "AVAIL", "CARVE");
-            mvhline(5, 2, ACS_HLINE, bw - 2);
-            attroff(A_BOLD);
-            for (int i = 0; i < ndisks; i++) {
-                if (!sel[i]) continue;
-                ui_disk_t *d = &disks[i];
-                int active = (i == cursor);
-                if (active) attron(A_REVERSE);
-                mvprintw(6 + row, 3, "%-10s %-20s %8lldG %8dG",
-                         d->disk, d->model, d->size_gb, carve[i]);
-                if (active) attroff(A_REVERSE);
-                row++;
-            }
-            mvprintw(4 + row + 2, 3, "Left/Right:Adjust size  Up/Down:Select disk");
-        } else if (phase == 2) {
-            int bw = 60;
-            int bh = 12;
-            int by = 3;
-            int bx = (maxx - bw) / 2;
-            draw_box(by, bx, bh, bw, "Step 3: Volume Settings (Tab=next field, Enter=create)");
-            int field = 0;
-            int escaped = 0;
-            while (1) {
-                int ry = by + 2 + field;
-                int r;
-                if (field == 0)
-                    r = input_str(ry, bx + 2, 30, "Volume name:", input_name, sizeof(input_name), NULL);
-                else if (field == 1)
-                    r = input_str(ry, bx + 2, 30, "Mount point:", input_mount, sizeof(input_mount), "/mnt/fast");
-                else
-                    r = input_str(ry, bx + 2, 30, "Filesystem:", input_fs, sizeof(input_fs), "ext4");
-                if (r == -1) { phase = 1; cursor = 0; escaped = 1; break; }
-                if (r == 1) { field = (field + 1) % 3; continue; }
-                if (r == 0) {
-                    if (field < 2) { field++; continue; }
-                    break;
-                }
-            }
-            if (escaped) continue;
-            if (!input_name[0]) { snprintf(status_msg, sizeof(status_msg), "Error: name required"); continue; }
-            if (!input_mount[0]) { snprintf(status_msg, sizeof(status_msg), "Error: mount point required"); continue; }
-            if (!input_fs[0]) { snprintf(status_msg, sizeof(status_msg), "Error: filesystem required"); continue; }
-            {
-                int valid = 1;
-                for (const char *p = input_name; *p; p++) {
-                    if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-                          (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
-                        { valid = 0; break; }
-                }
-                if (!valid) { snprintf(status_msg, sizeof(status_msg), "Error: name must be alphanumeric (a-z, 0-9, . _ -)"); continue; }
-            }
-            if (input_mount[0] != '/') { snprintf(status_msg, sizeof(status_msg), "Error: mount must start with /"); continue; }
-            {
-                const char *ok_fs[] = {"ext4","ext3","xfs","btrfs","none",NULL};
-                int valid = 0;
-                for (int fi = 0; ok_fs[fi]; fi++) if (strcmp(input_fs, ok_fs[fi]) == 0) valid = 1;
-                if (!valid) { snprintf(status_msg, sizeof(status_msg), "Error: invalid filesystem (ext4/ext3/xfs/btrfs/none)"); continue; }
-            }
-            mvprintw(by + 7, bx + 2, "Will create: %s", input_name);
-            mvprintw(by + 8, bx + 2, "Mount at: %s", input_mount);
-            mvprintw(by + 9, bx + 2, "Filesystem: %s", input_fs);
-            mvprintw(by + 10, bx + 2, "Press Enter to create...");
-            refresh();
-            int ch2 = getch();
-            if (ch2 == 27) { phase = 1; cursor = 0; continue; }
-            if (ch2 == '\n' || ch2 == KEY_ENTER) {
-                strncpy(vol_name, input_name, sizeof(vol_name) - 1);
-                vol_name[sizeof(vol_name) - 1] = 0;
-                strncpy(mount_point, input_mount, sizeof(mount_point) - 1);
-                mount_point[sizeof(mount_point) - 1] = 0;
-                ret = 0;
-                goto done;
-            }
-            continue;
-        }
-        draw_status_bar(phase == 0 ? "Space:Toggle  Enter:Next  Q:Cancel" :
-                        phase == 1 ? "Left/Right:Adjust  Enter:Next  Esc:Back" :
-                        "Enter:Create  Esc:Back",
-                        phase == 0 ? "Space/Enter/Q" : phase == 1 ? "Arrow/Enter/Esc" : "Enter/Esc");
-        refresh();
-        int ch = getch();
-        if (ch == 'q' || ch == 'Q') { ret = -1; break; }
-        if (phase == 0) {
-            switch (ch) {
-                case KEY_UP:
-                    if (cursor > 0) {
-                        int nc = cursor - 1;
-                        while (nc >= 0 && (disks[nc].is_root || disks[nc].is_mounted)) nc--;
-                        if (nc >= 0) cursor = nc;
-                    }
-                    break;
-                case KEY_DOWN:
-                    if (cursor < ndisks - 1) {
-                        int nc = cursor + 1;
-                        while (nc < ndisks && (disks[nc].is_root || disks[nc].is_mounted)) nc++;
-                        if (nc < ndisks) cursor = nc;
-                    }
-                    break;
-                case ' ':
-                    if (!disks[cursor].is_root && !disks[cursor].is_mounted) {
-                        if (!bench_finished && !bench_disk_done(disks[cursor].disk)) {
-                            snprintf(status_msg, sizeof(status_msg), "%s is benchmarking, wait...", disks[cursor].disk);
-                        } else {
-                            sel[cursor] = !sel[cursor];
-                        }
-                    }
-                    break;
-                case '\n': case KEY_ENTER:
-                    if (sel_count >= 2) {
-                        phase = 1;
-                        for (int i = 0; i < ndisks; i++) if (sel[i]) { cursor = i; break; }
-                    } else {
-                        snprintf(status_msg, sizeof(status_msg), "Select at least 2 disks!");
-                    }
-                    break;
-                case 27: ret = -1; goto done;
-            }
-        } else if (phase == 1) {
-            switch (ch) {
-                case KEY_UP:
-                    { int found = -1;
-                    for (int i = cursor - 1; i >= 0; i--) if (sel[i]) { found = i; break; }
-                    if (found >= 0) cursor = found; }
-                    break;
-                case KEY_DOWN:
-                    { int found = -1;
-                    for (int i = cursor + 1; i < ndisks; i++) if (sel[i]) { found = i; break; }
-                    if (found >= 0) cursor = found; }
-                    break;
-                case KEY_LEFT:
-                    if (carve[cursor] > 50) carve[cursor] -= 50;
-                    break;
-                case KEY_RIGHT:
-                    if (carve[cursor] < (int)disks[cursor].size_gb - 1) carve[cursor] += 50;
-                    if (carve[cursor] > (int)disks[cursor].size_gb - 1) carve[cursor] = (int)disks[cursor].size_gb - 1;
-                    break;
-                case '\n': case KEY_ENTER:
-                    phase = 2;
-                    break;
-                case 27:
-                    phase = 0;
-                    cursor = 0;
-                    break;
+    if (create_phase_input_settings(input_name, input_mount, input_fs) < 0) return -1;
+
+    strncpy(vol_name, input_name, sizeof(vol_name) - 1);
+    vol_name[sizeof(vol_name) - 1] = 0;
+    strncpy(mount_point, input_mount, sizeof(mount_point) - 1);
+    mount_point[sizeof(mount_point) - 1] = 0;
+
+    char disk_spec[1024] = "";
+    int offset = 0;
+    for (int i = 0; i < ndisks; i++) {
+        if (sel[i]) {
+            char tmp[64];
+            int n = snprintf(tmp, sizeof(tmp), "%s:%d", disks[i].disk, carve[i]);
+            if (offset + n + 1 < (int)sizeof(disk_spec)) {
+                if (offset > 0) disk_spec[offset++] = ',';
+                memcpy(disk_spec + offset, tmp, n);
+                offset += n;
+                disk_spec[offset] = 0;
             }
         }
     }
-done:;
-    if (ret == 0 && sel_count >= 2) {
-        char disk_spec[1024] = "";
-        int offset = 0;
-        for (int i = 0; i < ndisks; i++) {
-            if (sel[i]) {
-                char tmp[64];
-                int n = snprintf(tmp, sizeof(tmp), "%s:%d", disks[i].disk, carve[i]);
-                if (offset + n + 1 < (int)sizeof(disk_spec)) {
-                    if (offset > 0) disk_spec[offset++] = ',';
-                    memcpy(disk_spec + offset, tmp, n);
-                    offset += n;
-                    disk_spec[offset] = 0;
-                }
-            }
+    char cmd[PATH_MAX + 2048];
+    snprintf(cmd, sizeof(cmd),
+        "%s --create --name %s --disks %s --fs %s --mount %s 2>&1",
+        tool_path, vol_name, disk_spec, input_fs, mount_point);
+    clear();
+    int maxy = getmaxy(stdscr);
+    int maxx = getmaxx(stdscr);
+    attron(A_BOLD | COLOR_PAIR(2));
+    mvprintw(2, (maxx - 30) / 2, "=== Creating Volume... ===");
+    attroff(A_BOLD | COLOR_PAIR(2));
+    mvprintw(4, 3, "Name: %s", vol_name);
+    mvprintw(5, 3, "Disks: %s", disk_spec);
+    mvprintw(6, 3, "Mount: %s", mount_point);
+    mvprintw(7, 3, "Filesystem: %s", input_fs);
+    mvprintw(8, 3, "Please wait, this may take a minute...");
+    refresh();
+    char out[16384] = "";
+    run_cmd(cmd, out, sizeof(out));
+    clear();
+    if (strstr(out, "Complete!")) {
+        attron(A_BOLD | COLOR_PAIR(1));
+        mvprintw(2, (maxx - 30) / 2, "=== Volume Created! ===");
+        attroff(A_BOLD | COLOR_PAIR(1));
+        int sy = 4;
+        char *p = strstr(out, "Device:");
+        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        p = strstr(out, "Size:");
+        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        p = strstr(out, "Stripes:");
+        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        p = strstr(out, "Mount:");
+        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        snprintf(status_msg, sizeof(status_msg), "Volume '%s' created!", vol_name);
+    } else {
+        attron(A_BOLD | COLOR_PAIR(3));
+        mvprintw(2, (maxx - 30) / 2, "=== Create Failed ===");
+        attroff(A_BOLD | COLOR_PAIR(3));
+        int ey = 4;
+        char *errline = strtok(out, "\n");
+        while (errline && ey < maxy - 3) {
+            mvprintw(ey++, 3, "%.70s", errline);
+            errline = strtok(NULL, "\n");
         }
-        char cmd[PATH_MAX + 2048];
-        snprintf(cmd, sizeof(cmd),
-            "%s --create --name %s --disks %s --fs %s --mount %s 2>&1",
-            tool_path, vol_name, disk_spec, input_fs, mount_point);
-        clear();
-        int maxy = getmaxy(stdscr);
-        int maxx = getmaxx(stdscr);
-        attron(A_BOLD | COLOR_PAIR(2));
-        mvprintw(2, (maxx - 30) / 2, "=== Creating Volume... ===");
-        attroff(A_BOLD | COLOR_PAIR(2));
-        mvprintw(4, 3, "Name: %s", vol_name);
-        mvprintw(5, 3, "Disks: %s", disk_spec);
-        mvprintw(6, 3, "Mount: %s", mount_point);
-        mvprintw(7, 3, "Filesystem: %s", input_fs);
-        mvprintw(8, 3, "Please wait, this may take a minute...");
-        refresh();
-        char out[16384] = "";
-        run_cmd(cmd, out, sizeof(out));
-        clear();
-        if (strstr(out, "Complete!")) {
-            attron(A_BOLD | COLOR_PAIR(1));
-            mvprintw(2, (maxx - 30) / 2, "=== Volume Created! ===");
-            attroff(A_BOLD | COLOR_PAIR(1));
-            int sy = 4;
-            char *p = strstr(out, "Device:");
-            if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
-            p = strstr(out, "Size:");
-            if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
-            p = strstr(out, "Stripes:");
-            if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
-            p = strstr(out, "Mount:");
-            if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
-            snprintf(status_msg, sizeof(status_msg), "Volume '%s' created!", vol_name);
-        } else {
-            attron(A_BOLD | COLOR_PAIR(3));
-            mvprintw(2, (maxx - 30) / 2, "=== Create Failed ===");
-            attroff(A_BOLD | COLOR_PAIR(3));
-            int ey = 4;
-            char *errline = strtok(out, "\n");
-            while (errline && ey < maxy - 3) {
-                mvprintw(ey++, 3, "%.70s", errline);
-                errline = strtok(NULL, "\n");
-            }
-            snprintf(status_msg, sizeof(status_msg), "Volume creation failed!");
-        }
-        draw_status_bar("Press any key to continue", "Any key:Continue");
-        refresh();
-        getch();
+        snprintf(status_msg, sizeof(status_msg), "Volume creation failed!");
     }
-    return ret;
+    draw_status_bar("Press any key to continue", "Any key:Continue");
+    refresh();
+    getch();
+    return 0;
 }
 
 static void screen_status() {
+    if (!check_terminal_size()) return;
     clear();
     int maxy = getmaxy(stdscr);
     int maxx = getmaxx(stdscr);
@@ -1128,6 +1177,7 @@ static void screen_status() {
 }
 
 static void screen_destroy() {
+    if (!check_terminal_size()) return;
     clear();
     int maxy = getmaxy(stdscr);
     int maxx = getmaxx(stdscr);
@@ -1226,6 +1276,15 @@ int main(int argc, char *argv[]) {
         init_pair(3, COLOR_RED, COLOR_BLACK);
         init_pair(4, COLOR_YELLOW, COLOR_BLACK);
     }
+
+    int maxy = getmaxy(stdscr);
+    int maxx = getmaxx(stdscr);
+    if (maxy < MIN_ROWS || maxx < MIN_COLS) {
+        endwin();
+        fprintf(stderr, "Error: terminal too small (%dx%d). Minimum: %dx%d\n", maxx, maxy, MIN_COLS, MIN_ROWS);
+        return 1;
+    }
+
     parse_disk_list();
     detect_existing_volume();
     auto_bench_start();

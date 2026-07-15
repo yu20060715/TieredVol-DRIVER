@@ -2,6 +2,7 @@
 tiered_setup
 tiered_ui
 tests/test_tui
+tests/test_common
 
 # Object files
 *.o

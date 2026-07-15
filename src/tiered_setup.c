@@ -9,30 +9,21 @@
 #include <fcntl.h>
 #include <time.h>
 #include <signal.h>
+#include <dirent.h>
+#include "tiered_common.h"
 
+#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
 
-#define VERSION "1.1.0"
+#define VERSION "1.2.0"
 #define MAX_DISKS 8
-#define MAX_NAME 64
-#define MAX_PATH 512
 
 static volatile sig_atomic_t bench_interrupted = 0;
 
 static void bench_signal_handler(int sig) {
     (void)sig;
     bench_interrupted = 1;
-}
-
-static int is_valid_name(const char *name) {
-    if (!name || !*name) return 0;
-    for (const char *p = name; *p; p++) {
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
-            return 0;
-    }
-    return 1;
 }
 
 static int run(const char *fmt, ...) {
@@ -63,7 +54,20 @@ static int run_sudo(const char *fmt, ...) {
     return ret;
 }
 
-#define LVM_CFG " --config 'devices{scan=[\\\"/dev/mapper\\\"] obtain_device_list_from_udev=0 filter=[\\\"a|.*\\\"]}'"
+static int safe_execvp(const char *path, char *const argv[]) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        execvp(path, argv);
+        _exit(127);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static const char *LVM_CONF =
+    " --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}'";
 
 typedef struct {
     char disk[32];
@@ -76,9 +80,20 @@ typedef struct {
     int is_root;
 } disk_t;
 
+typedef struct {
+    char name[32];
+    char tran[16];
+    int is_root;
+} disk_info_t;
+
+static void make_target(char *out, size_t sz, const char *disk) {
+    snprintf(out, sz, "tv_%s_carve", disk);
+}
+
 static long long sysfs_size_gb(const char *disk) {
     char path[256];
-    snprintf(path, sizeof(path), "/sys/block/%s/size", disk);
+    int n = snprintf(path, sizeof(path), "/sys/block/%s/size", disk);
+    if (n < 0 || n >= (int)sizeof(path)) return 0;
     FILE *f = fopen(path, "r");
     if (!f) return 0;
     long long sec = 0;
@@ -89,7 +104,8 @@ static long long sysfs_size_gb(const char *disk) {
 
 static void sysfs_model(const char *disk, char *out, size_t len) {
     char path[256];
-    snprintf(path, sizeof(path), "/sys/block/%s/device/model", disk);
+    int n = snprintf(path, sizeof(path), "/sys/block/%s/device/model", disk);
+    if (n < 0 || n >= (int)sizeof(path)) { strncpy(out, disk, len - 1); out[len - 1] = 0; return; }
     FILE *f = fopen(path, "r");
     if (f) {
         if (fgets(out, len, f)) {
@@ -104,22 +120,45 @@ static void sysfs_model(const char *disk, char *out, size_t len) {
     }
 }
 
-static void sysfs_tran(const char *disk, char *out, size_t len) {
-    out[0] = 0;
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "lsblk -d -o NAME,TRAN 2>/dev/null | awk '$1==\"%s\"{print $2}'", disk);
-    FILE *p = popen(cmd, "r");
+static int load_all_disk_info(disk_info_t *out, int max) {
+    int n = 0;
+    FILE *p = popen("lsblk -d -o NAME,TRAN 2>/dev/null", "r");
     if (p) {
-        if (fgets(out, len, p)) out[strcspn(out, "\n")] = 0;
+        char line[256];
+        if (!fgets(line, sizeof(line), p)) { pclose(p); return n; }
+        while (fgets(line, sizeof(line), p) && n < max) {
+            line[strcspn(line, "\n")] = 0;
+            char *tok = strtok(line, " ");
+            if (!tok) continue;
+            if (strncmp(tok, "loop", 4) == 0 || strncmp(tok, "ram", 3) == 0 ||
+                strncmp(tok, "dm-", 3) == 0) continue;
+            strncpy(out[n].name, tok, sizeof(out[n].name) - 1);
+            out[n].name[sizeof(out[n].name) - 1] = 0;
+            tok = strtok(NULL, " ");
+            strncpy(out[n].tran, tok ? tok : "unknown", sizeof(out[n].tran) - 1);
+            out[n].tran[sizeof(out[n].tran) - 1] = 0;
+            out[n].is_root = 0;
+            n++;
+        }
         pclose(p);
     }
-}
-
-static int is_root_disk(const char *disk) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-        "lsblk -n -o MOUNTPOINT /dev/%s 2>/dev/null | grep -qE '^/$|/home|/swap'", disk);
-    return system(cmd) == 0;
+    p = popen("lsblk -n -o NAME,MOUNTPOINT 2>/dev/null", "r");
+    if (p) {
+        char line[256];
+        while (fgets(line, sizeof(line), p)) {
+            line[strcspn(line, "\n")] = 0;
+            char *name = strtok(line, " ");
+            char *mnt = strtok(NULL, " ");
+            if (!name || !mnt) continue;
+            if (strcmp(mnt, "/") == 0 || strncmp(mnt, "/home", 5) == 0 || strcmp(mnt, "[swap]") == 0) {
+                for (int i = 0; i < n; i++) {
+                    if (strcmp(out[i].name, name) == 0) { out[i].is_root = 1; break; }
+                }
+            }
+        }
+        pclose(p);
+    }
+    return n;
 }
 
 static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
@@ -223,7 +262,9 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
         double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
         ws[iter] = (double)written / (1024.0 * 1024.0) / elapsed;
 
-        (void)!system("sync && sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null");
+        sync();
+        int dcfd = open("/proc/sys/vm/drop_caches", O_WRONLY);
+        if (dcfd >= 0) { (void)!write(dcfd, "3", 1); close(dcfd); }
 
         lseek(fd, 0, SEEK_SET);
         clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -276,35 +317,30 @@ static int cmp_speed(const void *a, const void *b) {
     return (sb > sa) - (sb < sa);
 }
 
+typedef struct { pid_t pid; int pipe_fd; int idx; } bench_child_t;
+
 static int cmd_list(void) {
     printf("%-12s %-8s %-28s %-12s %-8s %-8s\n",
            "DEVICE", "TYPE", "MODEL", "TRAN", "SIZE", "SPEED");
     printf("%-12s %-8s %-28s %-12s %-8s %-8s\n",
            "------------", "--------", "----------------------------", "------------", "--------", "--------");
 
-    FILE *p = popen("lsblk -d -o NAME,TYPE 2>/dev/null | awk '$2==\"disk\"{print $1}'", "r");
-    if (!p) return 1;
+    disk_info_t info[MAX_DISKS];
+    int ninfo = load_all_disk_info(info, MAX_DISKS);
 
-    char ln[64];
-    while (fgets(ln, sizeof(ln), p)) {
-        ln[strcspn(ln, "\n")] = 0;
-        if (!strncmp(ln, "loop", 4) || !strncmp(ln, "ram", 3)) continue;
-
-        char model[128], tran[16];
-        sysfs_model(ln, model, sizeof(model));
-        sysfs_tran(ln, tran, sizeof(tran));
-        long long gb = sysfs_size_gb(ln);
+    for (int i = 0; i < ninfo; i++) {
+        char model[128];
+        sysfs_model(info[i].name, model, sizeof(model));
+        long long gb = sysfs_size_gb(info[i].name);
 
         char size_str[32];
         if (gb >= 1024) snprintf(size_str, sizeof(size_str), "%.1fT", gb / 1024.0);
         else snprintf(size_str, sizeof(size_str), "%lldG", gb);
 
-        int root = is_root_disk(ln);
         printf("%-12s %-8s %-28s %-12s %-8s %-8s%s\n",
-               ln, "disk", model, tran, size_str, "-",
-               root ? " [ROOT]" : "");
+               info[i].name, "disk", model, info[i].tran, size_str, "-",
+               info[i].is_root ? " [ROOT]" : "");
     }
-    pclose(p);
     printf("\n[ROOT] = System disk, cannot be carved with dm-linear\n");
     return 0;
 }
@@ -332,7 +368,7 @@ static int cmd_bench(int argc, char *argv[]) {
     buf[sizeof(buf) - 1] = 0;
     char *tok = strtok(buf, ",");
     while (tok && nd < MAX_DISKS) {
-        if (!is_valid_name(tok)) {
+        if (!tiered_is_valid_name(tok)) {
             fprintf(stderr, "Error: invalid disk name '%s'\n", tok);
             return 1;
         }
@@ -347,8 +383,18 @@ static int cmd_bench(int argc, char *argv[]) {
         memset(&info[i], 0, sizeof(disk_t));
         strncpy(info[i].disk, disks[i], 31);
         sysfs_model(disks[i], info[i].model, sizeof(info[i].model));
-        sysfs_tran(disks[i], info[i].tran, sizeof(info[i].tran));
         info[i].size_gb = sysfs_size_gb(disks[i]);
+    }
+
+    disk_info_t dinfo[MAX_DISKS];
+    int ninfo = load_all_disk_info(dinfo, MAX_DISKS);
+    for (int i = 0; i < nd; i++) {
+        for (int j = 0; j < ninfo; j++) {
+            if (strcmp(disks[i], dinfo[j].name) == 0) {
+                strncpy(info[i].tran, dinfo[j].tran, sizeof(info[i].tran) - 1);
+                break;
+            }
+        }
     }
 
     if (sequential || nd <= 1) {
@@ -365,7 +411,6 @@ static int cmd_bench(int argc, char *argv[]) {
     } else {
         printf("Benchmarking %d disks in parallel...\n", nd);
 
-        typedef struct { pid_t pid; int pipe_fd; int idx; } bench_child_t;
         bench_child_t children[MAX_DISKS];
         int nchildren = 0;
 
@@ -445,12 +490,12 @@ static int cmd_bench(int argc, char *argv[]) {
 static void cleanup_create(const char *name, disk_t *valid, int valid_disks) {
     fprintf(stderr, "  Rolling back...\n");
     run_sudo("umount /dev/mapper/tv_vg_%s-tv_lv_%s 2>/dev/null", name, name);
-    run_sudo("lvremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -f tv_vg_%s/tv_lv_%s 2>/dev/null", name, name);
-    run_sudo("vgremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -f tv_vg_%s 2>/dev/null", name);
+    run_sudo("lvremove %s -f tv_vg_%s/tv_lv_%s 2>/dev/null", LVM_CONF, name, name);
+    run_sudo("vgremove %s -f tv_vg_%s 2>/dev/null", LVM_CONF, name);
     for (int i = 0; i < valid_disks; i++) {
         char target[64];
-        snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
-        run_sudo("pvremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -ff -y /dev/mapper/%s 2>/dev/null", target);
+        make_target(target, sizeof(target), valid[i].disk);
+        run_sudo("pvremove %s -ff -y /dev/mapper/%s 2>/dev/null", LVM_CONF, target);
         run_sudo("dmsetup remove %s 2>/dev/null", target);
     }
     fprintf(stderr, "  Rollback complete.\n");
@@ -476,22 +521,17 @@ static int cmd_create(int argc, char *argv[]) {
         return 1;
     }
 
-    if (!is_valid_name(name)) {
+    if (!tiered_is_valid_name(name)) {
         fprintf(stderr, "Error: invalid name '%s' (only a-z, A-Z, 0-9, ., _, - allowed)\n", name);
         return 1;
     }
 
-    {
-        const char *ok_fs[] = {"ext4","ext3","xfs","btrfs","none",NULL};
-        int valid = 0;
-        for (int fi = 0; ok_fs[fi]; fi++) if (strcmp(fs, ok_fs[fi]) == 0) valid = 1;
-        if (!valid) {
-            fprintf(stderr, "Error: invalid filesystem '%s' (ext4/ext3/xfs/btrfs/none)\n", fs);
-            return 1;
-        }
+    if (!tiered_is_valid_fs(fs)) {
+        fprintf(stderr, "Error: invalid filesystem '%s' (ext4/ext3/xfs/btrfs/none)\n", fs);
+        return 1;
     }
 
-    if (mount_point && mount_point[0] && mount_point[0] != '/') {
+    if (mount_point && !tiered_is_valid_mount(mount_point)) {
         fprintf(stderr, "Error: mount point must start with /\n");
         return 1;
     }
@@ -526,14 +566,24 @@ static int cmd_create(int argc, char *argv[]) {
 
     printf("=== TieredVol: Creating '%s' ===\n", name);
 
+    disk_info_t dinfo[MAX_DISKS];
+    int ninfo = load_all_disk_info(dinfo, MAX_DISKS);
+
     int valid_disks = 0;
     disk_t valid[MAX_DISKS];
 
     for (int i = 0; i < nd; i++) {
         sysfs_model(disks_arr[i].disk, disks_arr[i].model, sizeof(disks_arr[i].model));
-        sysfs_tran(disks_arr[i].disk, disks_arr[i].tran, sizeof(disks_arr[i].tran));
         disks_arr[i].size_gb = sysfs_size_gb(disks_arr[i].disk);
-        disks_arr[i].is_root = is_root_disk(disks_arr[i].disk);
+
+        disks_arr[i].is_root = 0;
+        for (int j = 0; j < ninfo; j++) {
+            if (strcmp(disks_arr[i].disk, dinfo[j].name) == 0) {
+                strncpy(disks_arr[i].tran, dinfo[j].tran, sizeof(disks_arr[i].tran) - 1);
+                disks_arr[i].is_root = dinfo[j].is_root;
+                break;
+            }
+        }
 
         if (disks_arr[i].is_root) {
             printf("  WARNING: /dev/%s is system disk, skipping (cannot carve)\n", disks_arr[i].disk);
@@ -549,17 +599,63 @@ static int cmd_create(int argc, char *argv[]) {
             return 1;
         }
 
-        printf("  Benchmarking /dev/%s ... ", disks_arr[i].disk);
-        fflush(stdout);
-        bench_disk(disks_arr[i].disk, &disks_arr[i].speed_write, &disks_arr[i].speed_read);
-        printf("Write: %.0f MB/s\n", disks_arr[i].speed_write);
-
         valid[valid_disks++] = disks_arr[i];
     }
 
     if (valid_disks == 0) {
         fprintf(stderr, "Error: no usable disks (all are system disks)\n");
         return 1;
+    }
+
+    printf("  Benchmarking %d disks in parallel...\n", valid_disks);
+    bench_child_t children[MAX_DISKS];
+    int nchildren = 0;
+    for (int i = 0; i < valid_disks; i++) {
+        int pipefd[2];
+        if (pipe(pipefd) < 0) { fprintf(stderr, "pipe failed\n"); continue; }
+        pid_t pid = fork();
+        if (pid < 0) { close(pipefd[0]); close(pipefd[1]); continue; }
+        if (pid == 0) {
+            close(pipefd[0]);
+            double w = 0, r = 0;
+            int ret = bench_disk(valid[i].disk, &w, &r);
+            struct { int ret; double w; double r; } result = { ret, w, r };
+            (void)!write(pipefd[1], &result, sizeof(result));
+            close(pipefd[1]);
+            _exit(0);
+        }
+        close(pipefd[1]);
+        children[nchildren].pid = pid;
+        children[nchildren].pipe_fd = pipefd[0];
+        children[nchildren].idx = i;
+        nchildren++;
+        printf("  Started benchmark for /dev/%s\n", valid[i].disk);
+    }
+    {
+        int done = 0;
+        while (done < nchildren) {
+            int status;
+            for (int c = 0; c < nchildren; c++) {
+                if (children[c].pid <= 0) continue;
+                pid_t ret = waitpid(children[c].pid, &status, WNOHANG);
+                if (ret > 0) {
+                    struct { int ret; double w; double r; } result = { -1, 0, 0 };
+                    (void)!read(children[c].pipe_fd, &result, sizeof(result));
+                    close(children[c].pipe_fd);
+                    int idx = children[c].idx;
+                    valid[idx].speed_write = result.w;
+                    valid[idx].speed_read = result.r;
+                    if (result.ret == 0)
+                        printf("  /dev/%s: Write %.0f MB/s  Read %.0f MB/s\n",
+                               valid[idx].disk, result.w, result.r);
+                    else
+                        printf("  /dev/%s: FAILED\n", valid[idx].disk);
+                    children[c].pid = 0;
+                    done++;
+                }
+            }
+            if (done < nchildren) usleep(100000);
+        }
     }
 
     qsort(valid, valid_disks, sizeof(disk_t), cmp_speed);
@@ -605,14 +701,14 @@ static int cmd_create(int argc, char *argv[]) {
             pclose(fp);
         }
         char target[64];
-        snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
+        make_target(target, sizeof(target), valid[i].disk);
         run_sudo("dmsetup remove %s 2>/dev/null", target);
     }
     run_sudo("lvremove -f tv_vg_%s/tv_lv_%s 2>/dev/null", name, name);
     run_sudo("vgremove -f tv_vg_%s 2>/dev/null", name);
     for (int i = 0; i < valid_disks; i++) {
         char target[64];
-        snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
+        make_target(target, sizeof(target), valid[i].disk);
         run_sudo("pvremove -ff -y /dev/mapper/%s 2>/dev/null", target);
     }
 
@@ -620,7 +716,7 @@ static int cmd_create(int argc, char *argv[]) {
     for (int i = 0; i < valid_disks; i++) {
         long long sectors = valid[i].carve_gb * 1024LL * 1024 * 1024 / 512;
         char target[64];
-        snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
+        make_target(target, sizeof(target), valid[i].disk);
 
         run_sudo("printf '0 %lld linear /dev/%s 0\\n' > /tmp/.tv_dmtable && "
                  "dmsetup create %s < /tmp/.tv_dmtable",
@@ -640,39 +736,68 @@ static int cmd_create(int argc, char *argv[]) {
     printf("Step 3: Creating LVM physical volumes...\n");
     for (int i = 0; i < valid_disks; i++) {
         char target[64];
-        snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
-        if (run_sudo("pvcreate -f /dev/mapper/%s", target) != 0) {
+        make_target(target, sizeof(target), valid[i].disk);
+        char devpath[128];
+        snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
+        char *const pvcreate_argv[] = {"pvcreate", "-f", devpath, NULL};
+        if (safe_execvp("pvcreate", pvcreate_argv) != 0) {
             fprintf(stderr, "Error: pvcreate failed for %s\n", target);
             cleanup_create(name, valid, valid_disks);
             return 1;
         }
-        printf("  PV: /dev/mapper/%s\n", target);
+        printf("  PV: %s\n", devpath);
     }
 
     printf("Step 4: Creating volume group...\n");
-    char vg_cmd[4096];
-    snprintf(vg_cmd, sizeof(vg_cmd),
-        "vgcreate --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' tv_vg_%s", name);
-    for (int i = 0; i < valid_disks; i++) {
-        char target[64];
-        snprintf(target, sizeof(target), "tv_%s_carve", valid[i].disk);
-        size_t len = strlen(vg_cmd);
-        snprintf(vg_cmd + len, sizeof(vg_cmd) - len, " /dev/mapper/%s", target);
-    }
-    if (run_sudo("%s", vg_cmd) != 0) {
-        fprintf(stderr, "Error: vgcreate failed for tv_vg_%s\n", name);
-        cleanup_create(name, valid, valid_disks);
-        return 1;
+    {
+        char vg_name[128];
+        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
+        int argv_max = 3 + valid_disks + 1;
+        char *const *vg_argv = (char *const *)malloc(sizeof(char *) * argv_max);
+        if (!vg_argv) { cleanup_create(name, valid, valid_disks); return 1; }
+        char vg_cfg_arg[512];
+        snprintf(vg_cfg_arg, sizeof(vg_cfg_arg), "%s", LVM_CONF);
+        char *args[8];
+        args[0] = "vgcreate";
+        args[1] = vg_cfg_arg;
+        args[2] = "-f";
+        args[3] = vg_name;
+        int argc_vg = 4;
+        for (int i = 0; i < valid_disks; i++) {
+            char target[64];
+            make_target(target, sizeof(target), valid[i].disk);
+            char devpath[128];
+            snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
+            args[argc_vg++] = strdup(devpath);
+        }
+        args[argc_vg] = NULL;
+        int ret = safe_execvp("vgcreate", args);
+        for (int i = 4; i < argc_vg; i++) free(args[i]);
+        free((void *)vg_argv);
+        if (ret != 0) {
+            fprintf(stderr, "Error: vgcreate failed for tv_vg_%s\n", name);
+            cleanup_create(name, valid, valid_disks);
+            return 1;
+        }
     }
     printf("  VG: tv_vg_%s\n", name);
 
     printf("Step 5: Creating striped logical volume...\n");
-    if (run_sudo("lvcreate --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' "
-             "-l 100%%FREE -i %d -I %dk -n tv_lv_%s tv_vg_%s",
-             valid_disks, stripe_size_kb, name, name) != 0) {
-        fprintf(stderr, "Error: lvcreate failed\n");
-        cleanup_create(name, valid, valid_disks);
-        return 1;
+    {
+        char vg_name[128], lv_name[128], stripes_str[16], stripe_str[16];
+        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
+        snprintf(lv_name, sizeof(lv_name), "tv_lv_%s", name);
+        snprintf(stripes_str, sizeof(stripes_str), "%d", valid_disks);
+        snprintf(stripe_str, sizeof(stripe_str), "%dk", stripe_size_kb);
+        char lv_cfg[512];
+        snprintf(lv_cfg, sizeof(lv_cfg), "%s", LVM_CONF);
+        char free_arg[] = "100%FREE";
+        char *const lv_argv[] = {"lvcreate", lv_cfg, "-l", free_arg, "-i", stripes_str, "-I", stripe_str, "-n", lv_name, vg_name, NULL};
+        if (safe_execvp("lvcreate", lv_argv) != 0) {
+            fprintf(stderr, "Error: lvcreate failed\n");
+            cleanup_create(name, valid, valid_disks);
+            return 1;
+        }
     }
     printf("  LV: /dev/mapper/tv_vg_%s-tv_lv_%s (%d stripes, %dKB stripesize)\n",
            name, name, valid_disks, stripe_size_kb);
@@ -682,7 +807,10 @@ static int cmd_create(int argc, char *argv[]) {
 
     if (strcmp(fs, "none") != 0) {
         printf("Step 6: Formatting as %s...\n", fs);
-        if (run_sudo("mkfs.%s %s", fs, lv_path) != 0) {
+        char mkfs_name[64];
+        snprintf(mkfs_name, sizeof(mkfs_name), "mkfs.%s", fs);
+        char *const mkfs_argv[] = {mkfs_name, lv_path, NULL};
+        if (safe_execvp(mkfs_name, mkfs_argv) != 0) {
             fprintf(stderr, "Error: mkfs.%s failed\n", fs);
             cleanup_create(name, valid, valid_disks);
             return 1;
@@ -759,7 +887,7 @@ static int cmd_remove(int argc, char *argv[]) {
             if (strncmp(line, "device=", 7) == 0) {
                 char disk[32];
                 sscanf(line + 7, "%31s", disk);
-                snprintf(targets[ntargets], sizeof(targets[0]), "tv_%s_carve", disk);
+                make_target(targets[ntargets], sizeof(targets[0]), disk);
                 ntargets++;
             }
         }
@@ -771,14 +899,21 @@ static int cmd_remove(int argc, char *argv[]) {
         FILE *p = popen("sudo dmsetup ls 2>/dev/null", "r");
         if (p) {
             char line[256];
+            int orphan_count = 0;
             while (fgets(line, sizeof(line), p) && ntargets < MAX_DISKS) {
                 line[strcspn(line, "\n")] = 0;
                 if (strncmp(line, "tv_", 3) == 0 && strstr(line, "_carve")) {
                     snprintf(targets[ntargets], sizeof(targets[0]), "%s", line);
                     ntargets++;
+                    orphan_count++;
                 }
             }
             pclose(p);
+            if (orphan_count > 0) {
+                fprintf(stderr, "  WARNING: Found %d orphan dm targets matching 'tv_*_carve'.\n", orphan_count);
+                fprintf(stderr, "  These will ALL be removed. Press Ctrl+C within 3 seconds to abort.\n");
+                sleep(3);
+            }
         }
     }
 
@@ -786,14 +921,34 @@ static int cmd_remove(int argc, char *argv[]) {
     run_sudo("umount /dev/mapper/tv_vg_%s-tv_lv_%s 2>/dev/null", name, name);
 
     printf("Removing LV...\n");
-    run_sudo("lvremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -f tv_vg_%s/tv_lv_%s 2>/dev/null", name, name);
+    {
+        char vg_name[128], lv_name[128], lv_cfg[512];
+        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
+        snprintf(lv_name, sizeof(lv_name), "tv_lv_%s", name);
+        snprintf(lv_cfg, sizeof(lv_cfg), "%s", LVM_CONF);
+        char *const lv_argv[] = {"lvremove", lv_cfg, "-f", lv_name, vg_name, NULL};
+        (void)safe_execvp("lvremove", lv_argv);
+    }
 
     printf("Removing VG...\n");
-    run_sudo("vgremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -f tv_vg_%s 2>/dev/null", name);
+    {
+        char vg_name[128], vg_cfg[512];
+        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
+        snprintf(vg_cfg, sizeof(vg_cfg), "%s", LVM_CONF);
+        char *const vg_argv[] = {"vgremove", vg_cfg, "-f", vg_name, NULL};
+        (void)safe_execvp("vgremove", vg_argv);
+    }
 
     printf("Removing PV and dm targets...\n");
     for (int i = 0; i < ntargets; i++) {
-        run_sudo("pvremove --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}' -ff -y /dev/mapper/%s 2>/dev/null", targets[i]);
+        char devpath[128];
+        snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", targets[i]);
+        {
+            char pv_cfg[512];
+            snprintf(pv_cfg, sizeof(pv_cfg), "%s", LVM_CONF);
+            char *const pv_argv[] = {"pvremove", pv_cfg, "-ff", "-y", devpath, NULL};
+            (void)safe_execvp("pvremove", pv_argv);
+        }
         run_sudo("dmsetup remove %s 2>/dev/null", targets[i]);
         printf("  Removed %s\n", targets[i]);
     }
@@ -810,31 +965,39 @@ static int cmd_status(void) {
     printf("=== TieredVol Status ===\n\n");
 
     printf("DM Targets:\n");
-    FILE *p = popen("ls /dev/mapper/tv_* 2>/dev/null", "r");
-    if (p) {
-        char line[256];
-        int found = 0;
-        while (fgets(line, sizeof(line), p)) {
-            found = 1;
-            line[strcspn(line, "\n")] = 0;
-            printf("  %s\n", line);
+    {
+        DIR *d = opendir("/dev/mapper");
+        if (d) {
+            struct dirent *ent;
+            int found = 0;
+            while ((ent = readdir(d))) {
+                if (strncmp(ent->d_name, "tv_", 3) == 0) {
+                    printf("  /dev/mapper/%s\n", ent->d_name);
+                    found = 1;
+                }
+            }
+            closedir(d);
+            if (!found) printf("  None\n");
         }
-        pclose(p);
-        if (!found) printf("  None\n");
     }
 
     printf("\nSaved Configs:\n");
-    p = popen("ls /etc/tieredvol/*.conf 2>/dev/null", "r");
-    if (p) {
-        char line[256];
-        int found = 0;
-        while (fgets(line, sizeof(line), p)) {
-            found = 1;
-            line[strcspn(line, "\n")] = 0;
-            printf("  %s\n", line);
+    {
+        DIR *d = opendir("/etc/tieredvol");
+        if (d) {
+            struct dirent *ent;
+            int found = 0;
+            while ((ent = readdir(d))) {
+                if (strstr(ent->d_name, ".conf")) {
+                    printf("  /etc/tieredvol/%s\n", ent->d_name);
+                    found = 1;
+                }
+            }
+            closedir(d);
+            if (!found) printf("  None\n");
+        } else {
+            printf("  None\n");
         }
-        pclose(p);
-        if (!found) printf("  None\n");
     }
 
     return 0;
@@ -876,3 +1039,5 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Unknown command: %s\n", argv[1]);
     return 1;
 }
+
+#pragma GCC diagnostic pop

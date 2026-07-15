@@ -4,11 +4,20 @@ PREFIX=/usr/local
 
 all: tiered_setup tiered_ui
 
-tiered_setup: src/tiered_setup.c
+tiered_setup: src/tiered_setup.c src/tiered_common.h
 	$(CC) $(CFLAGS) -o $@ $<
 
-tiered_ui: src/tiered_ui.c
+tiered_ui: src/tiered_ui.c src/tiered_common.h
 	$(CC) $(CFLAGS) -o $@ $< -lncurses
+
+test_common: tests/test_common.c src/tiered_common.h
+	$(CC) $(CFLAGS) -o $@ $<
+
+test_tui: tests/test_tui.c
+	$(CC) $(CFLAGS) -o $@ $< -lm
+
+test: test_tui test_common
+	./test_tui && ./test_common
 
 install: all
 	install -m 755 tiered_setup $(DESTDIR)$(PREFIX)/bin/tiered_setup
@@ -20,6 +29,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_ui
 
 clean:
-	rm -f tiered_setup tiered_ui
+	rm -f tiered_setup tiered_ui test_tui test_common
 
-.PHONY: all install uninstall clean
+.PHONY: all install uninstall clean test
