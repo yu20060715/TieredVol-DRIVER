@@ -99,9 +99,6 @@ static int run_sudo_argv(char *const argv[]) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-static const char *LVM_CONF =
-    " --config 'devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}'";
-
 typedef struct {
     char disk[32];
     char model[128];
@@ -143,6 +140,7 @@ static void sysfs_model(const char *disk, char *out, size_t len) {
     if (f) {
         if (fgets(out, len, f)) {
             out[strcspn(out, "\n")] = 0;
+            if (out[0] == 0) { strncpy(out, disk, len - 1); out[len - 1] = 0; fclose(f); return; }
             char *p = out + strlen(out) - 1;
             while (p > out && *p == ' ') *p-- = 0;
         }
@@ -185,7 +183,6 @@ static int load_all_disk_info(disk_info_t *out, int max) {
 }
 
 static void find_mount_for_disk(const char *disk, char *mp, size_t mp_size) {
-    (void)mp_size;
     mp[0] = 0;
     char dev_pattern[64];
     snprintf(dev_pattern, sizeof(dev_pattern), "/dev/%s ", disk);
@@ -194,7 +191,9 @@ static void find_mount_for_disk(const char *disk, char *mp, size_t mp_size) {
         char mnt_line[512];
         while (fgets(mnt_line, sizeof(mnt_line), fp)) {
             if (strncmp(mnt_line, dev_pattern, strlen(dev_pattern)) == 0) {
-                sscanf(mnt_line, "%*s %511s", mp);
+                char fmt[32];
+                snprintf(fmt, sizeof(fmt), "%%*s %%%zus", mp_size - 1);
+                sscanf(mnt_line, fmt, mp);
                 break;
             }
         }
@@ -231,7 +230,7 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
         int mret = system(mcmd);
         if (mret == 0) {
             char chcmd[512];
-            snprintf(chcmd, sizeof(chcmd), "sudo chmod 1777 %s 2>/dev/null", mp);
+            snprintf(chcmd, sizeof(chcmd), "sudo chmod 0755 %s 2>/dev/null", mp);
             (void)!system(chcmd);
         }
         if (mret != 0) {
@@ -300,11 +299,14 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
             }
             fdatasync(fd);
 
-            int fd_disk = open(disk, O_RDONLY);
+            char devpath[64];
+            snprintf(devpath, sizeof(devpath), "/dev/%s", disk);
+            int fd_disk = open(devpath, O_RDONLY);
             if (fd_disk >= 0) { ioctl(fd_disk, BLKFLSBUF, NULL); close(fd_disk); }
 
             clock_gettime(CLOCK_MONOTONIC, &t1);
             double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+            if (elapsed <= 0.0) elapsed = 0.001;
             ws[completed] = (double)written / (1024.0 * 1024.0) / elapsed;
 
             sync();
@@ -321,6 +323,7 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
             }
             clock_gettime(CLOCK_MONOTONIC, &t1);
             elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+            if (elapsed <= 0.0) elapsed = 0.001;
             rs[completed] = (double)readtotal / (1024.0 * 1024.0) / elapsed;
             completed++;
 
@@ -328,6 +331,11 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
             close(fd);
             unlink(testpath);
             cleanup_path[0] = 0;
+        }
+
+        for (int i = 0; i < completed; i++) {
+            if (ws[i] != ws[i]) ws[i] = 0;
+            if (rs[i] != rs[i]) rs[i] = 0;
         }
 
         if (completed >= 3) {
@@ -378,6 +386,7 @@ static double cmp_score(const disk_t *d) {
 static int cmp_speed(const void *a, const void *b) {
     double sa = cmp_score((const disk_t *)a);
     double sb = cmp_score((const disk_t *)b);
+    if (sa != sa && sb != sb) return 0;
     if (sa != sa) return 1;
     if (sb != sb) return -1;
     return (sb > sa) - (sb < sa);
@@ -442,6 +451,11 @@ static int cmd_bench(int argc, char *argv[]) {
         disks[nd][31] = 0;
         nd++;
         tok = strtok(NULL, ",");
+    }
+
+    if (nd == 0) {
+        fprintf(stderr, "Error: no valid disks\n");
+        return 1;
     }
 
     disk_t info[MAX_DISKS];
@@ -561,13 +575,31 @@ static int cmd_bench(int argc, char *argv[]) {
 static void cleanup_create(const char *name, disk_t *valid, int valid_disks) {
     fprintf(stderr, "  Rolling back...\n");
     run_sudo("umount /dev/mapper/tv_vg_%s-tv_lv_%s 2>/dev/null", name, name);
-    run_sudo("lvremove %s -f tv_vg_%s/tv_lv_%s 2>/dev/null", LVM_CONF, name, name);
-    run_sudo("vgremove %s -f tv_vg_%s 2>/dev/null", LVM_CONF, name);
+    {
+        char full_lv[256];
+        snprintf(full_lv, sizeof(full_lv), "tv_vg_%s/tv_lv_%s", name, name);
+        char *const lv_argv[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", full_lv, NULL};
+        (void)safe_execvp("lvremove", lv_argv);
+    }
+    {
+        char vg_name[128];
+        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
+        char *const vg_argv2[] = {"vgremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", vg_name, NULL};
+        (void)safe_execvp("vgremove", vg_argv2);
+    }
     for (int i = 0; i < valid_disks; i++) {
         char target[64];
         make_target(target, sizeof(target), valid[i].disk);
-        run_sudo("pvremove %s -ff -y /dev/mapper/%s 2>/dev/null", LVM_CONF, target);
-        run_sudo("dmsetup remove %s 2>/dev/null", target);
+        {
+            char devpath[128];
+            snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
+            char *const pv_argv[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", devpath, NULL};
+            (void)safe_execvp("pvremove", pv_argv);
+        }
+        {
+            char *const dm_argv[] = {"sudo", "dmsetup", "remove", target, NULL};
+            (void)run_sudo_argv(dm_argv);
+        }
     }
     fprintf(stderr, "  Rollback complete.\n");
 }
@@ -578,6 +610,7 @@ static int cmd_create(int argc, char *argv[]) {
     char *fs = "ext4";
     char *mount_point = NULL;
     int stripe_size_kb = 512;
+    int user_stripesize = 0;
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) name = argv[++i];
@@ -592,6 +625,7 @@ static int cmd_create(int argc, char *argv[]) {
                 return 1;
             }
             stripe_size_kb = (int)val;
+            user_stripesize = 1;
         }
     }
 
@@ -611,7 +645,7 @@ static int cmd_create(int argc, char *argv[]) {
     }
 
     if (mount_point && !tiered_is_valid_mount(mount_point)) {
-        fprintf(stderr, "Error: mount point must start with /\n");
+        fprintf(stderr, "Error: mount point invalid (only / a-z 0-9 . _ - allowed)\n");
         return 1;
     }
 
@@ -673,6 +707,11 @@ static int cmd_create(int argc, char *argv[]) {
         if (disks_arr[i].is_root) {
             printf("  WARNING: /dev/%s is system disk, skipping (cannot carve)\n", disks_arr[i].disk);
             continue;
+        }
+
+        if (disks_arr[i].size_gb <= 1) {
+            fprintf(stderr, "Error: /dev/%s size not detected or too small\n", disks_arr[i].disk);
+            return 1;
         }
 
         if (disks_arr[i].carve_gb <= 0) {
@@ -753,12 +792,13 @@ static int cmd_create(int argc, char *argv[]) {
     long long total_gb = 0;
     for (int i = 0; i < valid_disks; i++) total_gb += valid[i].carve_gb;
 
-    int default_stripesize = 512;
-    for (int i = 0; i < valid_disks; i++) {
-        if (strcmp(valid[i].tran, "nvme") == 0) { default_stripesize = 64; break; }
-        if (strcmp(valid[i].tran, "sata") == 0 || strcmp(valid[i].tran, "sas") == 0) { default_stripesize = 512; break; }
+    if (!user_stripesize) {
+        int has_sata = 0;
+        for (int i = 0; i < valid_disks; i++) {
+            if (strcmp(valid[i].tran, "sata") == 0 || strcmp(valid[i].tran, "sas") == 0) { has_sata = 1; break; }
+        }
+        stripe_size_kb = has_sata ? 512 : 64;
     }
-    if (stripe_size_kb == 512) stripe_size_kb = default_stripesize;
 
     printf("\nConfiguration:\n");
     printf("  Name: %s\n", name);
@@ -794,14 +834,30 @@ static int cmd_create(int argc, char *argv[]) {
         }
         char target[64];
         make_target(target, sizeof(target), valid[i].disk);
-        run_sudo("dmsetup remove %s 2>/dev/null", target);
+        {
+            char *const dm_argv[] = {"sudo", "dmsetup", "remove", target, NULL};
+            (void)run_sudo_argv(dm_argv);
+        }
     }
-    run_sudo("lvremove -f tv_vg_%s/tv_lv_%s 2>/dev/null", name, name);
-    run_sudo("vgremove -f tv_vg_%s 2>/dev/null", name);
+    {
+        char full_lv[256];
+        snprintf(full_lv, sizeof(full_lv), "tv_vg_%s/tv_lv_%s", name, name);
+        char *const lv_argv[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", full_lv, NULL};
+        (void)safe_execvp("lvremove", lv_argv);
+    }
+    {
+        char vg_name[128];
+        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
+        char *const vg_argv[] = {"vgremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", vg_name, NULL};
+        (void)safe_execvp("vgremove", vg_argv);
+    }
     for (int i = 0; i < valid_disks; i++) {
         char target[64];
         make_target(target, sizeof(target), valid[i].disk);
-        run_sudo("pvremove -ff -y /dev/mapper/%s 2>/dev/null", target);
+        char devpath[128];
+        snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
+        char *const pv_argv[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", devpath, NULL};
+        (void)safe_execvp("pvremove", pv_argv);
     }
 
     printf("Step 2: Creating carved targets...\n");
@@ -812,9 +868,20 @@ static int cmd_create(int argc, char *argv[]) {
 
         char table[128];
         int tlen = snprintf(table, sizeof(table), "0 %lld linear /dev/%s 0\n", sectors, valid[i].disk);
+        if (tlen < 0 || tlen >= (int)sizeof(table)) {
+            fprintf(stderr, "Error: dm table too long for %s\n", valid[i].disk);
+            cleanup_create(name, valid, i);
+            return 1;
+        }
         int pfd[2];
         if (pipe(pfd) < 0) { fprintf(stderr, "Error: pipe failed\n"); cleanup_create(name, valid, i); return 1; }
         pid_t pid = fork();
+        if (pid < 0) {
+            close(pfd[0]); close(pfd[1]);
+            fprintf(stderr, "Error: fork failed\n");
+            cleanup_create(name, valid, i);
+            return 1;
+        }
         if (pid == 0) {
             close(pfd[1]);
             dup2(pfd[0], STDIN_FILENO);
@@ -949,12 +1016,14 @@ static int cmd_create(int argc, char *argv[]) {
                             i, valid[i].disk, valid[i].carve_gb, valid[i].speed_write);
                 }
                 fclose(cf);
-                char *cp_argv[] = {"sudo", "mkdir", "-p", "/etc/tieredvol", NULL};
-                (void)run_sudo_argv(cp_argv);
+                char *mkdir_argv[] = {"sudo", "mkdir", "-p", "/etc/tieredvol", NULL};
+                (void)run_sudo_argv(mkdir_argv);
                 char cp_cmd[512];
                 snprintf(cp_cmd, sizeof(cp_cmd), "sudo cp %s /etc/tieredvol/%s.conf", conf_path, name);
                 int cp_ret = system(cp_cmd);
-                (void)cp_ret;
+                if (cp_ret != 0) fprintf(stderr, "Warning: failed to save config\n");
+            } else {
+                close(conf_fd);
             }
             unlink(conf_path);
         }
@@ -981,6 +1050,11 @@ static int cmd_remove(int argc, char *argv[]) {
 
     if (!name) {
         fprintf(stderr, "Usage: tiered_setup --remove --name NAME\n");
+        return 1;
+    }
+
+    if (!tiered_is_valid_name(name)) {
+        fprintf(stderr, "Error: invalid name '%s'\n", name);
         return 1;
     }
 
@@ -1024,6 +1098,8 @@ static int cmd_remove(int argc, char *argv[]) {
             pclose(p);
             if (orphan_count > 0) {
                 fprintf(stderr, "  WARNING: Found %d orphan dm targets matching 'tv_*_carve'.\n", orphan_count);
+                for (int i = 0; i < ntargets; i++)
+                    fprintf(stderr, "    - %s\n", targets[i]);
                 fprintf(stderr, "  These will ALL be removed. Press Ctrl+C within 3 seconds to abort.\n");
                 struct sigaction sa_new, sa_old;
                 memset(&sa_new, 0, sizeof(sa_new));
@@ -1051,10 +1127,9 @@ static int cmd_remove(int argc, char *argv[]) {
 
     printf("Removing LV...\n");
     {
-        char vg_name[128], lv_name[128];
-        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
-        snprintf(lv_name, sizeof(lv_name), "tv_lv_%s", name);
-        char *const lv_argv[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", lv_name, vg_name, NULL};
+        char full_lv[256];
+        snprintf(full_lv, sizeof(full_lv), "tv_vg_%s/tv_lv_%s", name, name);
+        char *const lv_argv[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", full_lv, NULL};
         (void)safe_execvp("lvremove", lv_argv);
     }
 
@@ -1074,8 +1149,10 @@ static int cmd_remove(int argc, char *argv[]) {
             char *const pv_argv[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", devpath, NULL};
             (void)safe_execvp("pvremove", pv_argv);
         }
-        char *dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
-        (void)run_sudo_argv(dm_argv);
+        {
+            char *const dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
+            (void)run_sudo_argv(dm_argv);
+        }
         printf("  Removed %s\n", targets[i]);
     }
 

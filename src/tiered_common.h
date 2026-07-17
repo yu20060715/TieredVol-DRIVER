@@ -21,7 +21,14 @@ static inline int tiered_is_valid_fs(const char *fs) {
 }
 
 static inline int tiered_is_valid_mount(const char *mp) {
-    return mp && mp[0] == '/';
+    if (!mp || mp[0] != '/' || strlen(mp) >= 4096) return 0;
+    for (const char *p = mp; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '/' || *p == '.' ||
+              *p == '_' || *p == '-'))
+            return 0;
+    }
+    return 1;
 }
 
 #endif

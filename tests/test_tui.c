@@ -2,53 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-
-#define MAX_DISKS 8
-
-typedef struct {
-    char disk[32];
-    char model[128];
-    char tran[16];
-    long long size_gb;
-    double speed_write;
-    double speed_read;
-    int is_root;
-    int is_mounted;
-    int selected;
-    int carve_gb;
-} ui_disk_t;
+#include "../src/tiered_ui_helpers.h"
 
 static char bench_buf[16384] = "";
 static int bench_buf_len = 0;
-
-static void parse_bench_output(const char *out, ui_disk_t *d) {
-    d->speed_write = 0;
-    d->speed_read = 0;
-    char needle[64];
-    snprintf(needle, sizeof(needle), "  /dev/%s:", d->disk);
-    char *line = strstr(out, needle);
-    if (!line) return;
-    char *eol = strchr(line, '\n');
-    int line_len = eol ? (int)(eol - line) : (int)strlen(line);
-    char *w = strstr(line, "Write");
-    if (w && (int)(w - line) < line_len) {
-        w += 5;
-        while (*w == ' ' || *w == ':') w++;
-        d->speed_write = atof(w);
-    }
-    char *r = strstr(line, "Read");
-    if (r && (int)(r - line) < line_len) {
-        r += 4;
-        while (*r == ' ' || *r == ':') r++;
-        d->speed_read = atof(r);
-    }
-}
-
-static int bench_disk_done(const char *disk) {
-    char needle[64];
-    snprintf(needle, sizeof(needle), "  /dev/%s: Write", disk);
-    return strstr(bench_buf, needle) != NULL;
-}
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -152,9 +109,9 @@ static void test_bench_done_parallel(void) {
     strcpy(bench_buf, chunk);
     bench_buf_len = strlen(bench_buf);
 
-    check(bench_disk_done("sdb") == 1, "sdb done");
-    check(bench_disk_done("sdc") == 1, "sdc done");
-    check(bench_disk_done("nvme0n1") == 0, "nvme0n1 not done");
+    check(bench_disk_done("sdb", bench_buf) == 1, "sdb done");
+    check(bench_disk_done("sdc", bench_buf) == 1, "sdc done");
+    check(bench_disk_done("nvme0n1", bench_buf) == 0, "nvme0n1 not done");
 }
 
 static void test_bench_done_old_format_rejected(void) {
@@ -166,7 +123,7 @@ static void test_bench_done_old_format_rejected(void) {
     strcpy(bench_buf, chunk);
     bench_buf_len = strlen(bench_buf);
 
-    check(bench_disk_done("sdb") == 0, "old format 'Testing /dev/sdb ... Write:' not matched");
+    check(bench_disk_done("sdb", bench_buf) == 0, "old format 'Testing /dev/sdb ... Write:' not matched");
 }
 
 static void test_bench_done_not_started(void) {
@@ -174,7 +131,7 @@ static void test_bench_done_not_started(void) {
     bench_buf_len = 0;
     bench_buf[0] = 0;
 
-    check(bench_disk_done("sdb") == 0, "empty buffer = not done");
+    check(bench_disk_done("sdb", bench_buf) == 0, "empty buffer = not done");
 }
 
 static void test_lvs_command(void) {

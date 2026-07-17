@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include "tiered_common.h"
+#include "tiered_ui_helpers.h"
 #include "version.h"
 
 #pragma GCC diagnostic push
@@ -19,19 +20,6 @@
 #define MAX_DISKS 8
 #define MIN_COLS 80
 #define MIN_ROWS 20
-
-typedef struct {
-    char disk[32];
-    char model[128];
-    char tran[16];
-    long long size_gb;
-    double speed_write;
-    double speed_read;
-    int is_root;
-    int is_mounted;
-    int selected;
-    int carve_gb;
-} ui_disk_t;
 
 static ui_disk_t disks[MAX_DISKS];
 static int ndisks = 0;
@@ -168,29 +156,6 @@ static void parse_disk_list() {
     }
 }
 
-static void parse_bench_output(const char *out, ui_disk_t *d) {
-    d->speed_write = 0;
-    d->speed_read = 0;
-    char needle[64];
-    snprintf(needle, sizeof(needle), "  /dev/%s:", d->disk);
-    char *line = strstr(out, needle);
-    if (!line) return;
-    char *eol = strchr(line, '\n');
-    int line_len = eol ? (int)(eol - line) : (int)strlen(line);
-    char *w = strstr(line, "Write");
-    if (w && (int)(w - line) < line_len) {
-        w += 5;
-        while (*w == ' ' || *w == ':') w++;
-        d->speed_write = atof(w);
-    }
-    char *r = strstr(line, "Read");
-    if (r && (int)(r - line) < line_len) {
-        r += 4;
-        while (*r == ' ' || *r == ':') r++;
-        d->speed_read = atof(r);
-    }
-}
-
 static void drain_pipe_to_buf(void) {
     char tmp[4096];
     ssize_t n;
@@ -263,12 +228,6 @@ static void auto_bench_poll() {
     }
 }
 
-static int bench_disk_done(const char *disk) {
-    char needle[64];
-    snprintf(needle, sizeof(needle), "  /dev/%s: Write", disk);
-    return strstr(bench_buf, needle) != NULL;
-}
-
 static void save_speeds(void) {
     for (int i = 0; i < ndisks; i++) {
         saved_speed_w[i] = disks[i].speed_write;
@@ -294,7 +253,9 @@ static void draw_box(int y, int x, int h, int w, const char *title) {
     mvaddch(y + h - 1, x, ACS_LLCORNER);
     mvaddch(y + h - 1, x + w - 1, ACS_LRCORNER);
     if (title) {
-        mvprintw(y, x + 2, " %s ", title);
+        char tbuf[256];
+        snprintf(tbuf, sizeof(tbuf), "%.*s", w - 4, title);
+        mvprintw(y, x + 2, " %s ", tbuf);
     }
     attroff(A_BOLD);
 }
@@ -318,8 +279,10 @@ static int check_terminal_size(void) {
     int maxx = getmaxx(stdscr);
     if (maxy < MIN_ROWS || maxx < MIN_COLS) {
         clear();
-        mvprintw(maxy / 2 - 1, (maxx - 36) / 2, "Terminal too small (%dx%d)", maxx, maxy);
-        mvprintw(maxy / 2 + 1, (maxx - 36) / 2, "Minimum: %dx%d — please resize", MIN_COLS, MIN_ROWS);
+        int col = (maxx - 36) / 2;
+        if (col < 0) col = 0;
+        mvprintw(maxy / 2 - 1, col, "Terminal too small (%dx%d)", maxx, maxy);
+        mvprintw(maxy / 2 + 1, col, "Minimum: %dx%d — please resize", MIN_COLS, MIN_ROWS);
         draw_status_bar("Resize terminal or press Q to exit", NULL);
         refresh();
         return 0;
@@ -389,6 +352,7 @@ static void screen_ram_cache() {
     while (1) {
         if (need_refresh) {
             clear();
+            int maxy = getmaxy(stdscr);
             int maxx = getmaxx(stdscr);
             attron(A_BOLD | COLOR_PAIR(4));
             mvprintw(0, (maxx - 22) / 2, "=== RAM Cache ===");
@@ -396,6 +360,7 @@ static void screen_ram_cache() {
             int bw = 56;
             int bh = 18;
             int by = 2;
+            if (by + bh > maxy - 1) bh = maxy - by - 1;
             int bx = (maxx - bw) / 2;
             draw_box(by, bx, bh, bw, "RAM Cache (128MB steps)");
             int y = by + 2;
@@ -505,6 +470,9 @@ static void screen_ram_cache() {
                 break;
             case 'q': case 'Q': case 27:
                 return;
+            case KEY_RESIZE:
+                need_refresh = 1;
+                break;
         }
     }
 }
@@ -552,12 +520,14 @@ static int screen_main() {
             case KEY_DOWN: sel = (sel + 1) % nitems; break;
             case '\n': case KEY_ENTER: return sel;
             case 'q': case 'Q': case 27: return 6;
+            case KEY_RESIZE: break;
         }
     }
 }
 
 static void screen_disk_list() {
     if (!check_terminal_size()) return;
+    if (ndisks == 0) { snprintf(status_msg, sizeof(status_msg), "No disks found!"); return; }
     auto_bench_poll();
     save_speeds();
     parse_disk_list();
@@ -608,11 +578,21 @@ static void screen_disk_list() {
             else
                 mvprintw(tipy, 3, "[ROOT] = System disk, cannot be carved with dm-linear");
         }
-        draw_status_bar("Q:Back  B:Re-benchmark", "Q/B:Back");
+        draw_status_bar("Q:Back  B:Re-benchmark", "Q:Back B:Bench");
         refresh();
         int ch = getch();
         if (ch == 'q' || ch == 'Q' || ch == 27) return;
+        if (ch == KEY_RESIZE) continue;
         if (ch == 'b' || ch == 'B') {
+            if (bench_pid > 0) {
+                kill(bench_pid, SIGTERM);
+                waitpid(bench_pid, NULL, 0);
+                bench_pid = -1;
+            }
+            if (bench_rd_fd >= 0) {
+                close(bench_rd_fd);
+                bench_rd_fd = -1;
+            }
             bench_finished = 0;
             bench_buf[0] = 0;
             bench_buf_len = 0;
@@ -636,8 +616,8 @@ static void screen_bench() {
     if (!bench_finished) {
         while (!bench_finished) {
             auto_bench_poll();
-            clear();
-            int maxx = getmaxx(stdscr);
+    clear();
+    int maxx = getmaxx(stdscr);
             attron(A_BOLD | COLOR_PAIR(2));
             mvprintw(0, (maxx - 28) / 2, "=== Benchmark (Auto) ===");
             attroff(A_BOLD | COLOR_PAIR(2));
@@ -655,7 +635,7 @@ static void screen_bench() {
             for (int i = 0; i < ndisks; i++) {
                 ui_disk_t *d = &disks[i];
                 if (d->is_root) continue;
-                if (bench_disk_done(d->disk)) {
+                if (bench_disk_done(d->disk, bench_buf)) {
                     attron(COLOR_PAIR(1));
                     mvprintw(6 + row, 3, "%-10s %-26s %-6s %6lldG  Write %6.0f  Read %6.0f MB/s",
                              d->disk, d->model, d->tran, d->size_gb,
@@ -683,10 +663,12 @@ static void screen_bench() {
             napms(200);
             int ch = getch();
             if (ch == 'q' || ch == 'Q' || ch == 27) return;
+            if (ch == KEY_RESIZE) continue;
         }
     }
 
     clear();
+    int maxy = getmaxy(stdscr);
     int maxx = getmaxx(stdscr);
     attron(A_BOLD | COLOR_PAIR(1));
     mvprintw(0, (maxx - 22) / 2, "=== Benchmark Results ===");
@@ -696,6 +678,8 @@ static void screen_bench() {
     int rbw = 72;
     int rbh = nrow + 6;
     int rby = 2;
+    if (rby + rbh > maxy - 1) rbh = maxy - rby - 1;
+    if (rbh < 3) rbh = 3;
     int rbx = (maxx - rbw) / 2;
     draw_box(rby, rbx, rbh, rbw, "Results");
     attron(A_BOLD);
@@ -773,6 +757,7 @@ static int input_str(int y, int x, int w, const char *prompt, char *buf, int buf
             len++;
             mvprintw(cy, x + 20, "%-*.*s", w, w, buf);
             cx = x + 20 + pos;
+            if (cx > x + 20 + w - 1) cx = x + 20 + w - 1;
             move(cy, cx);
         }
     }
@@ -799,7 +784,7 @@ static int create_phase_select_disks(int *sel, int *carve, int *cursor, int *sel
                 attron(COLOR_PAIR(4));
                 mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [MOUNTED]", d->disk, d->model, d->size_gb);
                 attroff(COLOR_PAIR(4));
-            } else if (!bench_finished && !bench_disk_done(d->disk)) {
+            } else if (!bench_finished && !bench_disk_done(d->disk, bench_buf)) {
                 attron(COLOR_PAIR(4));
                 mvprintw(4 + i, 3, "  %-10s %-26s %6lldG  [BENCH...]", d->disk, d->model, d->size_gb);
                 attroff(COLOR_PAIR(4));
@@ -834,7 +819,7 @@ static int create_phase_select_disks(int *sel, int *carve, int *cursor, int *sel
                 break;
             case ' ':
                 if (!disks[*cursor].is_root && !disks[*cursor].is_mounted) {
-                    if (!bench_finished && !bench_disk_done(disks[*cursor].disk)) {
+                    if (!bench_finished && !bench_disk_done(disks[*cursor].disk, bench_buf)) {
                         snprintf(status_msg, sizeof(status_msg), "%s is benchmarking, wait...", disks[*cursor].disk);
                     } else {
                         sel[*cursor] = !sel[*cursor];
@@ -850,6 +835,7 @@ static int create_phase_select_disks(int *sel, int *carve, int *cursor, int *sel
                 }
                 break;
             case 27: return -1;
+            case KEY_RESIZE: continue;
         }
     }
 }
@@ -899,15 +885,20 @@ static int create_phase_set_carves(int *sel, int *carve, int *cursor) {
                 break;
             case KEY_LEFT:
                 if (carve[*cursor] > 50) carve[*cursor] -= 50;
+                else carve[*cursor] = 0;
                 break;
             case KEY_RIGHT:
-                if (carve[*cursor] < (int)disks[*cursor].size_gb - 1) carve[*cursor] += 50;
-                if (carve[*cursor] > (int)disks[*cursor].size_gb - 1) carve[*cursor] = (int)disks[*cursor].size_gb - 1;
+                { int maxc = (int)disks[*cursor].size_gb - 1;
+                if (maxc < 0) maxc = 0;
+                if (carve[*cursor] < maxc) carve[*cursor] += 50;
+                if (carve[*cursor] > maxc) carve[*cursor] = maxc; }
                 break;
             case '\n': case KEY_ENTER:
                 return 0;
             case 27:
                 return -1;
+            case KEY_RESIZE:
+                break;
         }
     }
 }
@@ -982,8 +973,14 @@ static int screen_create_select_disks() {
     int sel_count = 0;
     int cursor = 0;
     for (int i = 0; i < ndisks; i++) {
+        if (!disks[i].is_root && !disks[i].is_mounted) {
+            cursor = i;
+            break;
+        }
+    }
+    for (int i = 0; i < ndisks; i++) {
         if (!disks[i].is_root) {
-            int max_carve = disks[i].size_gb > 1 ? (int)disks[i].size_gb - 1 : (int)disks[i].size_gb;
+            int max_carve = disks[i].size_gb > 50 ? (int)disks[i].size_gb - 1 : 0;
             carve[i] = max_carve > 600 ? 600 : max_carve;
         }
     }
@@ -1000,6 +997,13 @@ static int screen_create_select_disks() {
     vol_name[sizeof(vol_name) - 1] = 0;
     strncpy(mount_point, input_mount, sizeof(mount_point) - 1);
     mount_point[sizeof(mount_point) - 1] = 0;
+
+    for (int i = 0; i < ndisks; i++) {
+        if (sel[i] && carve[i] <= 0) {
+            snprintf(status_msg, sizeof(status_msg), "Error: carve size for %s must be > 0", disks[i].disk);
+            return -1;
+        }
+    }
 
     char disk_spec[1024] = "";
     int offset = 0;
@@ -1039,14 +1043,15 @@ static int screen_create_select_disks() {
         mvprintw(2, (maxx - 30) / 2, "=== Volume Created! ===");
         attroff(A_BOLD | COLOR_PAIR(1));
         int sy = 4;
+        char line_buf[256];
         char *p = strstr(out, "Device:");
-        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        if (p) { char *nl = strchr(p, '\n'); int len = nl ? (int)(nl - p) : (int)strlen(p); snprintf(line_buf, sizeof(line_buf), "%.*s", len, p); mvprintw(sy++, 3, "%s", line_buf); }
         p = strstr(out, "Size:");
-        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        if (p) { char *nl = strchr(p, '\n'); int len = nl ? (int)(nl - p) : (int)strlen(p); snprintf(line_buf, sizeof(line_buf), "%.*s", len, p); mvprintw(sy++, 3, "%s", line_buf); }
         p = strstr(out, "Stripes:");
-        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        if (p) { char *nl = strchr(p, '\n'); int len = nl ? (int)(nl - p) : (int)strlen(p); snprintf(line_buf, sizeof(line_buf), "%.*s", len, p); mvprintw(sy++, 3, "%s", line_buf); }
         p = strstr(out, "Mount:");
-        if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; mvprintw(sy++, 3, "%s", p); }
+        if (p) { char *nl = strchr(p, '\n'); int len = nl ? (int)(nl - p) : (int)strlen(p); snprintf(line_buf, sizeof(line_buf), "%.*s", len, p); mvprintw(sy++, 3, "%s", line_buf); }
         snprintf(status_msg, sizeof(status_msg), "Volume '%s' created!", vol_name);
     } else {
         attron(A_BOLD | COLOR_PAIR(3));
@@ -1286,14 +1291,14 @@ int main(int argc, char *argv[]) {
     }
 exit:
     if (bench_pid > 0) {
-        kill(bench_pid, SIGTERM);
+        kill(-bench_pid, SIGTERM);
         for (int i = 0; i < 20; i++) {
-            pid_t ret = waitpid(bench_pid, NULL, WNOHANG);
+            pid_t ret = waitpid(-1, NULL, WNOHANG);
             if (ret > 0) break;
             usleep(100000);
         }
-        kill(bench_pid, SIGKILL);
-        waitpid(bench_pid, NULL, 0);
+        kill(-bench_pid, SIGKILL);
+        waitpid(-1, NULL, 0);
     }
     if (bench_rd_fd >= 0) close(bench_rd_fd);
     endwin();
