@@ -13,7 +13,9 @@
 #include <linux/fs.h>
 #include <math.h>
 #include <limits.h>
+#include <errno.h>
 #include "tiered_common.h"
+#include "tiered_sched.h"
 #include "version.h"
 
 #define MAX_DISKS 8
@@ -31,6 +33,7 @@ static void print_usage(const char *prog) {
     printf("  %s --list                              List all disks\n", prog);
     printf("  %s --bench --disks sda,sdb,sdc         Benchmark disks (parallel)\n", prog);
     printf("  %s --create --name NAME --disks ...    Create tiered volume\n", prog);
+    printf("  %s --create --name NAME --disks ... --scheduler  Create with weighted I/O scheduler\n", prog);
     printf("  %s --remove --name NAME                Remove tiered volume\n", prog);
     printf("  %s --destroy --name NAME               Remove tiered volume\n", prog);
     printf("  %s --status                            Show status\n", prog);
@@ -655,12 +658,14 @@ static int cmd_create(int argc, char *argv[]) {
     char *mount_point = NULL;
     int stripe_size_kb = 512;
     int user_stripesize = 0;
+    int use_scheduler = 0;
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) name = argv[++i];
         else if (strcmp(argv[i], "--disks") == 0 && i + 1 < argc) disk_spec = argv[++i];
         else if (strcmp(argv[i], "--fs") == 0 && i + 1 < argc) fs = argv[++i];
         else if (strcmp(argv[i], "--mount") == 0 && i + 1 < argc) mount_point = argv[++i];
+        else if (strcmp(argv[i], "--scheduler") == 0) use_scheduler = 1;
         else if (strcmp(argv[i], "--stripesize") == 0 && i + 1 < argc) {
             char *endptr;
             long val = strtol(argv[++i], &endptr, 10);
@@ -1027,6 +1032,82 @@ static int cmd_create(int argc, char *argv[]) {
             return 1;
         }
         printf("  Created %s (%lldGB)\n", target, valid[i].carve_gb);
+    }
+
+    if (use_scheduler) {
+        printf("Step 3: Building weighted segments...\n");
+
+        TV_DISK tv_disks[TV_MAX_DISKS];
+        int n_tv_disks = valid_disks;
+        for (int i = 0; i < valid_disks; i++) {
+            memset(&tv_disks[i], 0, sizeof(TV_DISK));
+            tv_disks[i].id = i;
+            strncpy(tv_disks[i].name, valid[i].disk, 63);
+            tv_disks[i].free_size = (uint64_t)valid[i].carve_gb * 1024LL * 1024 * 1024;
+            tv_disks[i].speed = (uint64_t)valid[i].speed_write;
+            tv_disks[i].weight = 0;
+            tv_disks[i].physical_offset = 0;
+
+            char devpath[128];
+            snprintf(devpath, sizeof(devpath), "/dev/mapper/tv_%s_carve", valid[i].disk);
+            tv_disks[i].fd = open(devpath, O_RDWR);
+            if (tv_disks[i].fd < 0) {
+                fprintf(stderr, "Error: cannot open %s: %s\n", devpath, strerror(errno));
+                cleanup_create(name, valid, valid_disks);
+                return 1;
+            }
+        }
+
+        TV_METADATA meta;
+        memset(&meta, 0, sizeof(meta));
+        meta.version = 1;
+        meta.chunk_size = TV_CHUNK_SIZE;
+        meta.disk_count = (uint32_t)n_tv_disks;
+        for (int i = 0; i < n_tv_disks; i++) {
+            strncpy(meta.disk_names[i], tv_disks[i].name, 63);
+        }
+
+        TV_SEGMENT segs[TV_MAX_SEGS];
+        int nsegs = 0;
+        if (tv_build_segments(tv_disks, n_tv_disks, segs, &nsegs) < 0) {
+            fprintf(stderr, "Error: failed to build segments\n");
+            for (int i = 0; i < n_tv_disks; i++) close(tv_disks[i].fd);
+            cleanup_create(name, valid, valid_disks);
+            return 1;
+        }
+
+        meta.segment_count = (uint32_t)nsegs;
+        memcpy(meta.segments, segs, sizeof(TV_SEGMENT) * nsegs);
+
+        printf("  Segments: %d\n", nsegs);
+        for (int i = 0; i < nsegs; i++) {
+            printf("  Segment %d: %lu - %lu (%u disks, stripe=%luKB)\n",
+                   i, (unsigned long)segs[i].logical_begin,
+                   (unsigned long)segs[i].logical_end,
+                   segs[i].disk_count,
+                   (unsigned long)(segs[i].stripe_size / 1024));
+        }
+
+        char config_dir[] = "/etc/tieredvol";
+        mkdir(config_dir, 0755);
+
+        char config_path[256];
+        snprintf(config_path, sizeof(config_path), "/etc/tieredvol/%s.scheduler", name);
+
+        if (tv_metadata_save(&meta, config_path) < 0) {
+            fprintf(stderr, "Error: failed to save metadata to %s\n", config_path);
+            for (int i = 0; i < n_tv_disks; i++) close(tv_disks[i].fd);
+            cleanup_create(name, valid, valid_disks);
+            return 1;
+        }
+        printf("  Metadata saved to %s\n", config_path);
+
+        for (int i = 0; i < n_tv_disks; i++) close(tv_disks[i].fd);
+
+        printf("\n=== Weighted I/O Scheduler volume '%s' created ===\n", name);
+        printf("  Use tiered_ui to manage this volume.\n");
+        printf("  NOTE: This volume uses the weighted I/O scheduler, not LVM striping.\n");
+        return 0;
     }
 
     printf("Step 3: Creating LVM physical volumes...\n");

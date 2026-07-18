@@ -11,6 +11,7 @@
 #include <time.h>
 #include "tiered_common.h"
 #include "tiered_ui_helpers.h"
+#include "tiered_sched.h"
 #include "version.h"
 
 #define MAX_DISKS 8
@@ -1217,6 +1218,36 @@ static void screen_status(void) {
             mvprintw(sy, 3, "%d dm-linear target(s) active", dm_count);
         }
         sy += 2;
+    }
+
+    /* Check for scheduler config */
+    {
+        char sched_path[256];
+        snprintf(sched_path, sizeof(sched_path), "/etc/tieredvol/%s.scheduler", vol_name);
+        FILE *sf = fopen(sched_path, "r");
+        if (sf) {
+            fclose(sf);
+            TV_METADATA sched_meta;
+            if (tv_metadata_load(&sched_meta, sched_path) == 0 && sched_meta.segment_count > 0) {
+                int sched_h = (int)sched_meta.segment_count + 6;
+                if (sy + sched_h < maxy) {
+                    int sched_end = sy + sched_h - 1;
+                    draw_box(sy, 1, sched_h, bw, "Weighted I/O Scheduler");
+                    sy += 2;
+                    if (sy < sched_end) { mvprintw(sy, 3, "Segments: %u", sched_meta.segment_count); sy++; }
+                    for (uint32_t i = 0; i < sched_meta.segment_count && sy < sched_end; i++) {
+                        TV_SEGMENT *seg = &sched_meta.segments[i];
+                        mvprintw(sy, 3, "  Seg %u: %lu-%lu (%u disks, stripe=%luKB)",
+                                 i, (unsigned long)seg->logical_begin,
+                                 (unsigned long)seg->logical_end,
+                                 seg->disk_count,
+                                 (unsigned long)(seg->stripe_size / 1024));
+                        sy++;
+                    }
+                    sy = sched_end + 1;
+                }
+            }
+        }
     }
 
     if (sy + 3 < maxy) {

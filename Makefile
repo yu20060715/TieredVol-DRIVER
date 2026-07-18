@@ -2,13 +2,38 @@ CC=gcc
 CFLAGS=-Wall -Wextra -Wpedantic -std=gnu11 -O2
 PREFIX=/usr/local
 
+SCHED_OBJS=src/tiered_sched.o src/tiered_partition.o src/tiered_mapper.o \
+           src/tiered_stripe_buf.o src/tiered_io_uring.o src/tiered_metadata.o \
+           src/tiered_benchmark.o
+
 all: tiered_setup tiered_ui
 
-tiered_setup: src/tiered_setup.c src/tiered_common.h src/version.h
-	$(CC) $(CFLAGS) -o $@ $< -lm
+tiered_setup: src/tiered_setup.c src/tiered_common.h src/tiered_sched.h src/version.h $(SCHED_OBJS)
+	$(CC) $(CFLAGS) -o $@ src/tiered_setup.c $(SCHED_OBJS) -lm -luring
 
-tiered_ui: src/tiered_ui.c src/tiered_common.h src/tiered_ui_helpers.h src/version.h
-	$(CC) $(CFLAGS) -o $@ $< -lncurses
+tiered_ui: src/tiered_ui.c src/tiered_common.h src/tiered_ui_helpers.h src/tiered_sched.h src/version.h $(SCHED_OBJS)
+	$(CC) $(CFLAGS) -o $@ src/tiered_ui.c $(SCHED_OBJS) -lncurses -lm -luring
+
+src/tiered_sched.o: src/tiered_sched.c src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/tiered_partition.o: src/tiered_partition.c src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/tiered_mapper.o: src/tiered_mapper.c src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/tiered_stripe_buf.o: src/tiered_stripe_buf.c src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/tiered_io_uring.o: src/tiered_io_uring.c src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/tiered_metadata.o: src/tiered_metadata.c src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/tiered_benchmark.o: src/tiered_benchmark.c src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 test_common: tests/test_common.c src/tiered_common.h
 	$(CC) $(CFLAGS) -o $@ $<
@@ -45,5 +70,6 @@ uninstall:
 
 clean:
 	rm -f tiered_setup tiered_ui test_tui test_common
+	rm -f src/*.o
 
 .PHONY: all install uninstall clean test
