@@ -1,114 +1,114 @@
-# TieredVol — 分層儲存卷管理器
+# TieredVol — Tiered Storage Volume Manager
 
-Linux 分層儲存解決方案。將多顆硬碟合併成高效能條紋化磁碟區（striped volume），支援 **自選容量 carve** + dm-linear 分割 + LVM striped + RAM Cache 即時調優。
+Linux tiered storage solution. Merge multiple disks into a high-performance striped volume with **custom carve capacity** + dm-linear + LVM striped + real-time RAM Cache tuning.
 
 ```
 Disk A (NVMe, 2000 MB/s) ──dm-linear──┐
 Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV ── filesystem ── mount
                                        │
                                        ▼
-                                  接近 3000 MB/s
+                                  ~3000 MB/s
 ```
 
-## 核心概念：Carve 自選容量
+## Core Concept: Carve Custom Capacity
 
-TieredVol 的核心功能是 **carve**——從每顆硬碟中切出指定大小的空間，組合成一顆虛擬的 striped volume。你可以自由決定每顆碟貢獻多少容量，而速度接近所有貢獻碟的速度總和。
+TieredVol's core feature is **carve** — slice a specified amount from each disk and combine them into one striped virtual volume. You choose exactly how much capacity each disk contributes, and the resulting speed is approximately the **sum of all contributing disks' speeds**.
 
-### 範例：從兩顆碟組出高速 volume
+### Example: Two Disks into One Fast Volume
 
-假設你有兩顆硬碟：
+Suppose you have two disks:
 
-| 碟 | 型號 | 容量 | 循序讀寫 |
-|----|------|------|----------|
+| Disk | Model | Capacity | Sequential R/W |
+|------|-------|----------|----------------|
 | sda | NVMe SSD | 1 TB | 2000 MB/s |
 | sdb | SATA SSD | 1 TB | 1000 MB/s |
 
-使用 carve 從 sda 取 1000G、從 sdb 取 500G：
+Carve 1000G from sda and 500G from sdb:
 
 ```bash
 sudo tiered_setup --create --name fastpool --disks sda:1000,sdb:500 --fs ext4 --mount /mnt/fast
 ```
 
-結果：
+Result:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  striped volume: 1500 GB                                │
-│  循序寫入：~2820 MB/s（理論 3000 × 94%）                  │
-│  結構：1000G @ 2000 MB/s + 500G @ 1000 MB/s             │
+│  Sequential write: ~2820 MB/s (theoretical 3000 × 94%)  │
+│  Layout: 1000G @ 2000 MB/s + 500G @ 1000 MB/s          │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 為什麼速度接近總和？
+### Why Speed Is Close to the Sum
 
-LVM striped volume 在寫入時會將資料分散到所有底層磁碟（parallel I/O），所以：
+LVM striped volumes distribute writes across all underlying disks (parallel I/O):
 
-- **理論速度** = 各碟速度相加 = 2000 + 1000 = **3000 MB/s**
-- **實際速度** ≈ 理論 × 94% ≈ **2820 MB/s**（扣除 LVM overhead、kernel 調度開銷）
-- **大檔案循序讀寫**最接近理論值；隨機 I/O 會有差距
+- **Theoretical speed** = sum of all disks = 2000 + 1000 = **3000 MB/s**
+- **Actual speed** ≈ theoretical × 94% ≈ **2820 MB/s** (LVM overhead + kernel scheduling)
+- **Large sequential reads/writes** get closest to theoretical; random I/O varies
 
-### 範例：三碟組合
+### Example: Three-Disk Combo
 
 ```bash
-# 從三顆碟各取 500G，組成 1.5T volume
+# Carve 500G from each of 3 disks → 1.5T volume
 sudo tiered_setup --create --name tripool --disks nvme0n1:500,sdb:500,sdc:500 --fs ext4 --mount /mnt/tri
 
-# 結果：~4500 MB/s（理論 5000 × 90%）
+# Result: ~4500 MB/s (theoretical 5000 × 90%)
 # nvme0n1: 2000 MB/s + sdb: 1500 MB/s + sdc: 1500 MB/s
 ```
 
-### 不指定 carve 時
+### When No Carve Size Is Specified
 
-如果沒寫容量，預設取整顆碟的全部空間（扣 1GB 留給系統）：
+If you omit the capacity, it defaults to the full disk (minus 1GB reserved):
 
 ```bash
-# sda 取全碟 1000G，sdb 取全碟 500G
+# sda takes full 1000G, sdb takes full 500G
 sudo tiered_setup --create --name pool --disks sda,sdb --fs ext4 --mount /mnt/pool
 ```
 
-## 功能
+## Features
 
-### 硬碟偵測
-自動掃描系統所有硬碟，顯示型號、傳輸介面（SATA/NVMe/USB）、容量。系統碟自動標記為 `[ROOT]` 並鎖定，防止誤選。已掛載的硬碟標記 `[MOUNTED]`，不可操作。
+### Disk Detection
+Automatically scans all system disks, displays model, interface (SATA/NVMe/USB), and capacity. System disk is auto-tagged `[ROOT]` and locked to prevent accidental selection. Mounted disks are tagged `[MOUNTED]` and cannot be modified.
 
-### 自動測速
-啟動時背景自動跑 parallel benchmark，同時測多顆硬碟的循序讀寫速度。測速過程不阻塞 UI，可同時瀏覽其他畫面。測速中顯示 `TESTING...` 狀態，完成後立即更新速度。按 `B` 隨時重新測速。
+### Auto Benchmark
+Starts a parallel benchmark in the background on launch, simultaneously testing sequential read/write speeds of all disks. Non-blocking — you can browse other screens while testing. Shows `TESTING...` status during the test, updates speeds when complete. Press `B` to re-benchmark at any time.
 
-### 建立 Volume
-互動式 3 階段精靈，一步步引導建立 striped LVM volume：
+### Create Volume
+Interactive 3-phase wizard for creating striped LVM volumes:
 
-1. **選碟** — 勾選要合併的硬碟，至少 2 顆。用 `↑↓` 移動游標、`Space` 勾選
-2. **設容量** — 為每顆碟設定要切割多少 GB 給 volume（用 `← →` 調整，步進 50GB）
-3. **設定** — 輸入 volume 名稱、掛載點、檔案系統（ext4/xfs/btrfs）
+1. **Select Disks** — Pick disks to combine (minimum 2). Use `↑↓` to move cursor, `Space` to toggle
+2. **Set Carve Sizes** — Choose how many GB to carve from each disk (`← →` to adjust, 50GB steps)
+3. **Configure** — Enter volume name, mount point, filesystem (ext4/xfs/btrfs)
 
-建立過程中自動執行：dm-linear 分割 → pvcreate → vgcreate → lvcreate → mkfs → mount。任何步驟失敗自動回滾，清理所有殘留。
+Auto-executes: dm-linear carve → pvcreate → vgcreate → lvcreate → mkfs → mount. Any failure triggers automatic rollback, cleaning up all residues.
 
-### Volume 管理
-- **查看狀態** — 顯示 volume 名稱、大小、掛載點、使用率、各硬碟讀寫速度
-- **刪除 Volume** — 一鍵拆除 striped LV → VG → PV → dm-linear 裝置，確認後才執行
+### Volume Management
+- **View Status** — Shows volume name, size, mount point, usage, per-disk read/write speeds
+- **Destroy Volume** — One-click teardown of striped LV → VG → PV → dm-linear devices, with confirmation
 
-### RAM Cache 調優
-透過調整 Linux kernel 的 `vm.dirty_ratio` 參數，將部分系統 RAM 用作磁碟寫入快取。128MB 步進調整，Apply 套用 / Reset 還原原始值。退出程式時自動還原，不影響系統。
+### RAM Cache Tuning
+Adjust Linux kernel's `vm.dirty_ratio` to borrow system RAM as write cache. 128MB step increments. Apply to use / Reset to restore originals. Auto-restores on exit, no system impact.
 
-適用場景：有多顆 HDD 組成 striped volume 時，借用 RAM 作為寫入緩衝，加速小檔案寫入。
+Use case: When multiple HDDs form a striped volume, borrow RAM as a write buffer to accelerate small file writes.
 
-### 安全防護
-- **名稱驗證** — 白名單 `[a-zA-Z0-9._-]`，阻擋分號、 pipe、$、反引號等注入字元
-- **檔案系統驗證** — 只允許 ext4、ext3、xfs、btrfs、none
-- **掛載點驗證** — 必須是絕對路徑，拒絕 `..` 路徑穿越
-- **LVM 命令安全** — 使用 `fork+execvp` 取代 `system()`，避免 shell 注入
-- **暫存檔安全** — `fchmod` 即時設定權限，消除 TOCTOU 競爭窗口
+### Security
+- **Name validation** — Whitelist `[a-zA-Z0-9._-]`, blocks semicolons, pipes, $, backticks
+- **Filesystem validation** — Only ext4, ext3, xfs, btrfs, none allowed
+- **Mount point validation** — Must be absolute path, rejects `..` path traversal
+- **LVM command safety** — Uses `fork+execvp` instead of `system()`, preventing shell injection
+- **Temp file safety** — `fchmod` sets permissions immediately, eliminating TOCTOU race windows
 
-### 錯誤回滾
-建立 volume 時任何步驟失敗（dmsetup / pvcreate / vgcreate / lvcreate / mkfs / mount），自動清理所有已完成的裝置和 LVM 設定，不留殘留。基準測試中斷時自動 kill 所有子程序。
+### Error Rollback
+Any step failure during volume creation (dmsetup / pvcreate / vgcreate / lvcreate / mkfs / mount) automatically cleans up all created devices and LVM config. Benchmark interruption auto-kills all child processes.
 
-## 系統需求
+## Requirements
 
-- Linux（已測試 Ubuntu 24.04, kernel 6.14）
+- Linux (tested on Ubuntu 24.04, kernel 6.14)
 - `lvm2` `dmsetup` `libncurses-dev` `gcc` `make`
-- Root 權限（sudo）
+- Root privileges (sudo)
 
-### 安裝依賴
+### Install Dependencies
 
 ```bash
 # Debian / Ubuntu
@@ -121,7 +121,7 @@ sudo dnf install lvm2 ncurses-devel gcc make
 sudo pacman -S lvm2 ncurses gcc make
 ```
 
-## 快速開始
+## Quick Start
 
 ```bash
 git clone https://github.com/yu20060715/TieredVol.git
@@ -130,57 +130,57 @@ make
 sudo ./tiered_ui
 ```
 
-### 安裝到系統
+### Install System-Wide
 
 ```bash
 sudo make install
 sudo tiered_ui
 ```
 
-## 建置指令
+## Build Commands
 
 ```bash
-make              # 編譯 tiered_setup + tiered_ui
-make test         # 編譯並執行所有測試（53 個 test case）
-make clean        # 刪除所有編譯产物
-sudo make install # 安裝到 /usr/local/bin/
+make              # Build tiered_setup + tiered_ui
+make test         # Build and run all tests (53 test cases)
+make clean        # Remove all build artifacts
+sudo make install # Install to /usr/local/bin/
 sudo make uninstall
 ```
 
-## CLI 使用
+## CLI Usage
 
 ```bash
-# 列出所有硬碟
+# List all disks
 sudo tiered_setup --list
 
-# 測速（3 顆硬碟）
+# Benchmark (3 disks)
 sudo tiered_setup --bench --disks sdb,sdc,nvme0n1
 
-# 建立 striped volume（從 sdb 取 300G、sdc 取 200G）
+# Create striped volume (carve 300G from sdb, 200G from sdc)
 sudo tiered_setup --create --name fastpool --disks sdb:300,sdc:200 --fs ext4 --mount /mnt/fast
 
-# 建立 striped volume（從 sda 取全碟、sdb 取 500G）
+# Create striped volume (full sda + 500G from sdb)
 sudo tiered_setup --create --name pool --disks sda,sdb:500 --fs xfs --mnt /mnt/pool
 
-# 查看狀態
+# View status
 sudo tiered_setup --status
 
-# 刪除 volume
+# Destroy volume
 sudo tiered_setup --destroy --name fastpool
 ```
 
-### Carve 語法
+### Carve Syntax
 
-`--disks` 參數支援 `碟名:大小G` 格式：
+The `--disks` parameter supports `diskname:sizeG` format:
 
-| 範例 | 說明 |
-|------|------|
-| `sda:1000,sdb:500` | sda 取 1000GB、sdb 取 500GB |
-| `sda,sdb` | 兩顆都取全碟（各扣 1GB） |
-| `nvme0n1:2000,sda:1000,sdb:1000` | 三碟：2T + 1T + 1T = 4T volume |
-| `sda:500,sdb:500,sdc:500` | 三碟各 500G，組成 1.5T volume |
+| Example | Description |
+|---------|-------------|
+| `sda:1000,sdb:500` | Carve 1000GB from sda, 500GB from sdb |
+| `sda,sdb` | Take full disk from both (minus 1GB each) |
+| `nvme0n1:2000,sda:1000,sdb:1000` | Three disks: 2T + 1T + 1T = 4T volume |
+| `sda:500,sdb:500,sdc:500` | 500G each from 3 disks → 1.5T volume |
 
-## TUI 介面
+## TUI Interface
 
 ```bash
 sudo tiered_ui
@@ -198,66 +198,68 @@ sudo tiered_ui
 └─────────────────────────────────┘
 ```
 
-### 快速鍵
+### Keyboard Shortcuts
 
-| 畫面 | 按鍵 | 動作 |
-|------|------|------|
-| 主選單 | ↑↓ Enter Q/ESC | 選擇/確認/離開 |
-| Disk List | B | 重新測速 |
-| Disk List | Q/ESC | 返回 |
-| Benchmark | Q/ESC | 返回（測速繼續背景跑）|
-| Create Phase 1 | Space Enter | 選碟 / 下一步 |
-| Create Phase 2 | ←→ ↑↓ | 調整 carve 容量 / 選碟 |
-| RAM Cache | ←→ ↑↓ Enter | 調整 / 選擇 Apply/Reset |
-| Destroy | Y | 確認刪除 |
+| Screen | Key | Action |
+|--------|-----|--------|
+| Main Menu | ↑↓ Enter Q/ESC | Select / Confirm / Exit |
+| Disk List | B | Re-benchmark |
+| Disk List | Q/ESC | Back |
+| Benchmark | Q/ESC | Back (benchmark continues in background) |
+| Create Phase 1 | Space Enter | Toggle disk / Next |
+| Create Phase 2 | ←→ ↑↓ | Adjust carve size / Select disk |
+| RAM Cache | ←→ ↑↓ Enter | Adjust / Select Apply/Reset |
+| Destroy | Y | Confirm destruction |
 
-## RAM Cache 調優
+## RAM Cache Tuning
 
-透過調整 kernel 的 `vm.dirty_ratio` 將部分 RAM 用作寫入快取：
+Adjust kernel's `vm.dirty_ratio` to use RAM as write cache:
 
-- **← →**：調整借用量（128MB 步進）
-- **↑ ↓**：選擇 Apply / Reset / Back
-- **Apply**：套用新設定
-- **Reset**：恢復原始值
+- **← →**: Adjust borrow amount (128MB steps)
+- **↑ ↓**: Select Apply / Reset / Back
+- **Apply**: Apply new settings
+- **Reset**: Restore original values
 
-例：16GB RAM 借用 2GB → dirty_ratio 從 20% 提升到 33%。
+Example: 16GB RAM borrowing 2GB → dirty_ratio increases from 20% to 33%.
 
-## 專案結構
+## Project Structure
 
 ```
 TieredVol/
-├── Makefile                    # 建置系統
-├── README.md                   # 說明文件（中文）
-├── README_EN.md                # 說明文件（英文）
-├── USAGE.md                    # 使用指南
+├── README.md                   # This file (English)
+├── docs/
+│   ├── README_CN.md            # Documentation (Chinese)
+│   ├── USAGE.md                # Detailed usage guide
+│   └── PLAN.md                 # Improvement roadmap
+├── Makefile                    # Build system
 ├── .gitignore
 ├── src/
-│   ├── tiered_setup.c          # CLI 後端（1326 行）
-│   ├── tiered_ui.c             # ncurses TUI 前端（1379 行）
-│   ├── tiered_common.h         # 共用驗證函式（名稱/FS/掛載點白名單）
-│   ├── tiered_ui_helpers.h     # TUI 共用輔助（ui_disk_t、解析函式）
-│   └── version.h               # 版本常數
+│   ├── tiered_setup.c          # CLI backend (1326 lines)
+│   ├── tiered_ui.c             # ncurses TUI frontend (1379 lines)
+│   ├── tiered_common.h         # Shared validation (name/FS/mount whitelist)
+│   ├── tiered_ui_helpers.h     # TUI helpers (ui_disk_t, parse functions)
+│   └── version.h               # Version constant
 └── tests/
-    ├── test_common.c           # 驗證函式測試（31 cases）
-    └── test_tui.c              # TUI 解析測試（22 cases）
+    ├── test_common.c           # Validation tests (31 cases)
+    └── test_tui.c              # TUI parsing tests (22 cases)
 ```
 
-### 程式碼架構
+### Code Architecture
 
-| 模組 | 職責 |
-|------|------|
-| `tiered_setup.c` | CLI 核心：磁碟發現、parallel benchmark、dm-linear/LVM 建立刪除、rollback、config 持久化 |
-| `tiered_ui.c` | TUI 前端：7 個畫面、3 階段建立精靈、背景測速、RAM cache 調整、終端防禦 |
-| `tiered_common.h` | 輸入驗證：`tiered_is_valid_name()`、`tiered_is_valid_fs()`、`tiered_is_valid_mount()` |
-| `tiered_ui_helpers.h` | `ui_disk_t` 結構、`parse_bench_output()`、`bench_disk_done()` |
+| Module | Responsibility |
+|--------|---------------|
+| `tiered_setup.c` | CLI core: disk discovery, parallel benchmark, dm-linear/LVM create/destroy, rollback, config persistence |
+| `tiered_ui.c` | TUI frontend: 7 screens, 3-phase create wizard, background benchmarking, RAM cache tuning, terminal defense |
+| `tiered_common.h` | Input validation: `tiered_is_valid_name()`, `tiered_is_valid_fs()`, `tiered_is_valid_mount()` |
+| `tiered_ui_helpers.h` | `ui_disk_t` struct, `parse_bench_output()`, `bench_disk_done()` |
 
-## 注意事項
+## Notes
 
-- **系統碟無法使用** — dm-linear 在已掛載的根分区上會回傳 EBUSY
-- 選擇的硬碟資料會被**完全清除**
-- 需要 root 權限執行所有操作
-- RAM Cache 設定在退出時自動還原
-- Carve 大小不能超過碟本身容量（例如 1T 碟最多 carve 999G）
+- **System disk cannot be used** — dm-linear returns EBUSY on mounted root partition
+- Selected disks will be **completely wiped**
+- Requires root privileges for all operations
+- RAM Cache settings auto-restore on exit
+- Carve size cannot exceed disk capacity (e.g., 1TB disk max carve = 999GB)
 
 ## License
 
