@@ -39,13 +39,42 @@ Result:
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Why Speed Is Close to the Sum
+### How Striping Works (Implementation)
 
-LVM striped volumes distribute writes across all underlying disks (parallel I/O):
+LVM striped volumes write to all disks **simultaneously** at the block level, not sequentially. Data is split into chunks (stripe units, default 64KB) and distributed across disks in round-robin fashion:
 
-- **Theoretical speed** = sum of all disks = 2000 + 1000 = **3000 MB/s**
-- **Actual speed** ≈ theoretical × 94% ≈ **2820 MB/s** (LVM overhead + kernel scheduling)
-- **Large sequential reads/writes** get closest to theoretical; random I/O varies
+```
+Write stream: [chunk0][chunk1][chunk2][chunk3][chunk4][chunk5]...
+              ↓       ↓       ↓       ↓       ↓       ↓
+sda (fast):  [chunk0]         [chunk2]         [chunk4]...
+sdb (slow):          [chunk1]         [chunk3]         [chunk5]...
+```
+
+Both disks are active at the same time. The kernel sends I/O requests to all disks in parallel, so total throughput approaches the **sum** of individual disk speeds.
+
+**Performance characteristics:**
+
+| Scenario | Result |
+|----------|--------|
+| Theoretical speed | sum of all disks = 2000 + 1000 = **3000 MB/s** |
+| Actual speed | theoretical × 94% ≈ **2820 MB/s** (LVM overhead + kernel scheduling) |
+| Large sequential I/O (≥1GB) | Closest to theoretical |
+| Small random I/O | Much lower — striping doesn't help much |
+| Single thread vs multi-thread | Multi-thread (fio --numjobs=4) saturates better |
+
+**Why 94% and not 100%?**
+
+- LVM metadata read/write overhead
+- Kernel I/O scheduler scheduling delay
+- CPU and memory bandwidth limits
+- Stripe alignment between disks
+
+**How to get closest to theoretical speed:**
+
+```bash
+# Using fio to saturate the striped volume
+sudo fio --name=test --filename=/mnt/fast/test --rw=write --bs=1M --size=2G --numjobs=4 --iodepth=32 --direct=1
+```
 
 ### Example: Three-Disk Combo
 
@@ -88,9 +117,9 @@ Auto-executes: dm-linear carve → pvcreate → vgcreate → lvcreate → mkfs �
 - **Destroy Volume** — One-click teardown of striped LV → VG → PV → dm-linear devices, with confirmation
 
 ### RAM Cache Tuning
-Adjust Linux kernel's `vm.dirty_ratio` to borrow system RAM as write cache. 128MB step increments. Apply to use / Reset to restore originals. Auto-restores on exit, no system impact.
+Adjust Linux kernel's `vm.dirty_ratio` to borrow system RAM as write cache. 128MB step increments, Apply to use / Reset to restore originals. Auto-restores on exit, no system impact.
 
-Use case: When multiple HDDs form a striped volume, borrow RAM as a write buffer to accelerate small file writes.
+Use case: Multiple HDDs in a striped volume — borrow RAM as write buffer to accelerate small file writes. TUI lets you adjust borrow amount, preview new dirty_ratio, and apply/reset in real time.
 
 ### Security
 - **Name validation** — Whitelist `[a-zA-Z0-9._-]`, blocks semicolons, pipes, $, backticks
@@ -210,17 +239,6 @@ sudo tiered_ui
 | Create Phase 2 | ←→ ↑↓ | Adjust carve size / Select disk |
 | RAM Cache | ←→ ↑↓ Enter | Adjust / Select Apply/Reset |
 | Destroy | Y | Confirm destruction |
-
-## RAM Cache Tuning
-
-Adjust kernel's `vm.dirty_ratio` to use RAM as write cache:
-
-- **← →**: Adjust borrow amount (128MB steps)
-- **↑ ↓**: Select Apply / Reset / Back
-- **Apply**: Apply new settings
-- **Reset**: Restore original values
-
-Example: 16GB RAM borrowing 2GB → dirty_ratio increases from 20% to 33%.
 
 ## Project Structure
 

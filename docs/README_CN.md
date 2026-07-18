@@ -39,13 +39,42 @@ sudo tiered_setup --create --name fastpool --disks sda:1000,sdb:500 --fs ext4 --
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 為什麼速度接近總和？
+### Striping 實作原理
 
-LVM striped volume 在寫入時會將資料分散到所有底層磁碟（parallel I/O），所以：
+LVM striped volume 在 **block level** 同時對所有硬碟進行讀寫，不是依序寫。資料被切成 chunks（stripe unit，預設 64KB），以 round-robin 方式分配到各碟：
 
-- **理論速度** = 各碟速度相加 = 2000 + 1000 = **3000 MB/s**
-- **實際速度** ≈ 理論 × 94% ≈ **2820 MB/s**（扣除 LVM overhead、kernel 調度開銷）
-- **大檔案循序讀寫**最接近理論值；隨機 I/O 會有差距
+```
+寫入資料流：[chunk0][chunk1][chunk2][chunk3][chunk4][chunk5]...
+              ↓       ↓       ↓       ↓       ↓       ↓
+sda (快):   [chunk0]         [chunk2]         [chunk4]...
+sdb (慢):           [chunk1]         [chunk3]         [chunk5]...
+```
+
+兩顆碟同時在動。kernel 同時對所有碟下 I/O 請求，所以總吞吐量接近各碟速度的**總和**。
+
+**效能特性：**
+
+| 場景 | 結果 |
+|------|------|
+| 理論速度 | 各碟速度相加 = 2000 + 1000 = **3000 MB/s** |
+| 實際速度 | 理論 × 94% ≈ **2820 MB/s**（LVM overhead + kernel 調度） |
+| 大檔案循序 I/O（≥1GB） | 最接近理論值 |
+| 小檔案隨機 I/O | 差很多 — striping 對隨機 I/O 幫助不大 |
+| 單執行緒 vs 多執行緒 | 多執行緒（fio --numjobs=4）更容易打滿 |
+
+**為什麼是 94% 而不是 100%？**
+
+- LVM metadata 讀寫開銷
+- Kernel I/O scheduler 調度延遲
+- CPU 和記憶體頻寬限制
+- Stripe 對齊（各碟之間的 stripe 位置對齊）
+
+**如何接近理論速度：**
+
+```bash
+# 用 fio 打滿 striped volume
+sudo fio --name=test --filename=/mnt/fast/test --rw=write --bs=1M --size=2G --numjobs=4 --iodepth=32 --direct=1
+```
 
 ### 範例：三碟組合
 
@@ -90,7 +119,7 @@ sudo tiered_setup --create --name pool --disks sda,sdb --fs ext4 --mount /mnt/po
 ### RAM Cache 調優
 透過調整 Linux kernel 的 `vm.dirty_ratio` 參數，將部分系統 RAM 用作磁碟寫入快取。128MB 步進調整，Apply 套用 / Reset 還原原始值。退出程式時自動還原，不影響系統。
 
-適用場景：有多顆 HDD 組成 striped volume 時，借用 RAM 作為寫入緩衝，加速小檔案寫入。
+適用場景：多顆 HDD 組成 striped volume 時，借用 RAM 作為寫入緩衝，加速小檔案寫入。TUI 可即時調整借用量、預覽新的 dirty_ratio、套用/還原。
 
 ### 安全防護
 - **名稱驗證** — 白名單 `[a-zA-Z0-9._-]`，阻擋分號、 pipe、$、反引號等注入字元
@@ -210,17 +239,6 @@ sudo tiered_ui
 | Create Phase 2 | ←→ ↑↓ | 調整 carve 容量 / 選碟 |
 | RAM Cache | ←→ ↑↓ Enter | 調整 / 選擇 Apply/Reset |
 | Destroy | Y | 確認刪除 |
-
-## RAM Cache 調優
-
-透過調整 kernel 的 `vm.dirty_ratio` 將部分 RAM 用作寫入快取：
-
-- **← →**：調整借用量（128MB 步進）
-- **↑ ↓**：選擇 Apply / Reset / Back
-- **Apply**：套用新設定
-- **Reset**：恢復原始值
-
-例：16GB RAM 借用 2GB → dirty_ratio 從 20% 提升到 33%。
 
 ## 專案結構
 
