@@ -131,7 +131,6 @@ TieredVol 內部維護 ring buffer：
 ```
 
 使用 `TV_BUFFER` struct（定義在 `src/tiered_sched.h`）。實作細節見 `AGENTS.md` 的 `tiered_stripe_buf.c` section。
-}
 ```
 
 ### flush_stripe：真正 dispatch

@@ -226,7 +226,7 @@ After enabling, TieredVol volumes are automatically rebuilt from saved configs a
 
 ```bash
 make              # Build tiered_setup + tiered_ui
-make test         # Build and run all tests (53 test cases)
+make test         # Build and run all tests (56 test cases)
 make clean        # Remove all build artifacts
 sudo make install # Install to /usr/local/bin/
 sudo make uninstall

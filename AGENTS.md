@@ -26,20 +26,20 @@ TieredVol/
 │   └── version.h           # 版本 1.2.0
 ├── tests/
 │   ├── test_common.c       # 驗證函式測試
-│   ├── test_tui.c          # TUI 解析測試
-│   └── test_runner.h       # 測試框架 header
+│   └── test_tui.c          # TUI 解析測試
 ├── scripts/
 │   ├── tieredvol-restore.sh      # 開機還原腳本
 │   └── tieredvol-restore.service # systemd unit
 ├── docs/
-│   ├── README_CN.md             # 中文說明
 │   ├── USAGE.md                 # 詳細使用指南
 │   ├── PLAN.md                  # 改進路線圖
 │   ├── PARTITION_SPLITTING.md   # 切塊演算法（Weight 計算、容量分段、Offset Mapping）
 │   └── WEIGHTED_IO_SCHEDULER.md # I/O Scheduler 實作（io_uring、stripe buffer、三層架構）
+├── README.md
+├── README_CN.md             # 中文說明
+├── AGENTS.md
 ├── Makefile
-├── LICENSE
-└── README.md
+└── LICENSE
 ```
 
 ---
@@ -172,6 +172,7 @@ typedef struct {
 typedef struct {
     uint8_t *data;
     uint64_t used;
+    uint64_t capacity;
     uint64_t logical_begin;
 } TV_BUFFER;
 
@@ -341,24 +342,25 @@ TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta) {
 int tv_buf_init(TV_BUFFER *buf, uint64_t stripe_size) {
     buf->data = aligned_alloc(512, stripe_size);
     buf->used = 0;
+    buf->capacity = stripe_size;
     buf->logical_begin = 0;
     return 0;
 }
 
 // 寫入（copy to buffer）
 // 回傳：0 = 正常, 1 = buffer 滿了需要 flush
-int tv_buf_write(TV_BUFFER *buf, const void *data, uint64_t len, uint64_t capacity) {
-    uint64_t space = capacity - buf->used;
+int tv_buf_write(TV_BUFFER *buf, const void *data, uint64_t len) {
+    uint64_t space = buf->capacity - buf->used;
     if (len > space) len = space;
     memcpy(buf->data + buf->used, data, len);
     buf->used += len;
-    return (buf->used == capacity) ? 1 : 0;
+    return (buf->used == buf->capacity) ? 1 : 0;
 }
 
 // 重置
-void tv_buf_reset(TV_BUFFER *buf, uint64_t capacity) {
+void tv_buf_reset(TV_BUFFER *buf) {
     buf->used = 0;
-    buf->logical_begin += capacity;
+    buf->logical_begin += buf->capacity;
 }
 ```
 
@@ -500,7 +502,7 @@ int tv_flush(TV_SCHED *sched) {
     }
 
     // 重置 buffer
-    tv_buf_reset(&sched->buf, sched->meta->segments[0].stripe_size);
+    tv_buf_reset(&sched->buf);
     return 0;
 }
 

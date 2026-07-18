@@ -83,7 +83,7 @@ sdb (慢):           [chunk1]         [chunk3]         [chunk5]...
 
 **重要：混合速度碟（NVMe + SATA）**
 
-當組合不同速度的硬碟時，實際吞吐量受限於最慢的碟。LVM 對所有碟使用相同的 stripe size，所以較快的碟會空等較慢的碟。例如 NVMe（2000 MB/s）+ SATA（500 MB/s）實際只有 ~1000 MB/s，不是 2500 MB/s。詳見 [PARTITION_SPLITTING.md](PARTITION_SPLITTING.md) 了解加權切塊演算法，[WEIGHTED_IO_SCHEDULER.md](WEIGHTED_IO_SCHEDULER.md) 了解 I/O dispatch 實作。
+當組合不同速度的硬碟時，實際吞吐量受限於最慢的碟。LVM 對所有碟使用相同的 stripe size，所以較快的碟會空等較慢的碟。例如 NVMe（2000 MB/s）+ SATA（500 MB/s）實際只有 ~1000 MB/s，不是 2500 MB/s。詳見 [PARTITION_SPLITTING.md](docs/PARTITION_SPLITTING.md) 了解加權切塊演算法，[WEIGHTED_IO_SCHEDULER.md](docs/WEIGHTED_IO_SCHEDULER.md) 了解 I/O dispatch 實作。
 
 **如何接近理論速度：**
 
@@ -189,13 +189,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable tieredvol-restore
 ```
 
-啟用後，TieredVol volume 會在開機時自動從 saved config 重建。詳見 [USAGE.md](USAGE.md#重開機保留)。
+啟用後，TieredVol volume 會在開機時自動從 saved config 重建。詳見 [USAGE.md](docs/USAGE.md#重開機保留)。
 
 ## 建置指令
 
 ```bash
 make              # 編譯 tiered_setup + tiered_ui
-make test         # 編譯並執行所有測試（53 個 test case）
+make test         # 編譯並執行所有測試（56 個 test case）
 make clean        # 刪除所有編譯产物
 sudo make install # 安裝到 /usr/local/bin/
 sudo make uninstall
@@ -270,9 +270,9 @@ sudo tiered_ui
 ```
 TieredVol/
 ├── README.md                   # 說明文件（英文，根目錄）
+├── README_CN.md                # 說明文件（中文，本檔案）
 ├── LICENSE                     # MIT 授權條款
 ├── docs/
-│   ├── README_CN.md            # 說明文件（中文，本檔案）
 │   ├── USAGE.md                # 詳細使用教學
 │   ├── PLAN.md                 # 改善計畫
 │   ├── PARTITION_SPLITTING.md  # 加權切塊演算法
