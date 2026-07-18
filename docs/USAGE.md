@@ -10,13 +10,13 @@
 
 ```bash
 # Debian / Ubuntu
-sudo apt install lvm2 libncurses-dev gcc make
+sudo apt install lvm2 libncurses-dev liburing-dev gcc make
 
 # Fedora / RHEL
-sudo dnf install lvm2 ncurses-devel gcc make
+sudo dnf install lvm2 ncurses-devel liburing-devel gcc make
 
 # Arch
-sudo pacman -S lvm2 ncurses gcc make
+sudo pacman -S lvm2 ncurses liburing gcc make
 ```
 
 ### 編譯

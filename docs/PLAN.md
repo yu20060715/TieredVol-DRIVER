@@ -109,6 +109,6 @@
 - [ ] P2-7: USB 斷線處理
 - [ ] P2-8: NVMe namespace 支援
 - [ ] P2-9: Config 路徑可配置
-- [ ] P3-10: Partition splitting 按速度比例
+- [x] P3-10: Partition splitting 按速度比例（Phase 2）
 - [ ] P3-11: Stripe size 智慧選擇
 - [x] P3-12: README 速度限制說明

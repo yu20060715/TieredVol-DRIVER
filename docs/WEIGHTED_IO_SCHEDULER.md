@@ -136,13 +136,13 @@ TieredVol 內部維護 ring buffer：
 寫入 468KB → buffer: [768KB / 768KB] → flush → dispatch
 ```
 
-使用 `TV_BUFFER` struct（定義在 `src/tiered_sched.h`）。實作細節見 `AGENTS.md` 的 `tiered_stripe_buf.c` section。
+使用 `TV_BUFFER` struct（定義在 `src/tiered_sched.h`）。實作見 `src/tiered_stripe_buf.c`。
 
 ### flush_stripe：真正 dispatch
 
 根據 weight table，把 buffer 切成各碟的 chunk，建 io_uring SQE，一次 submit。
 
-完整實作見 `AGENTS.md` 的 `tv_flush()` section。
+完整實作見 `src/tiered_sched.c` 的 `tv_flush()`。
 
 ---
 
@@ -205,15 +205,37 @@ stripe_size:    768KB  (= sum(weight) × chunk_size)
 ```
 # /etc/tieredvol/fastpool.scheduler
 [weighted_striping]
+version=1
 chunk_size=65536
-weight=6,3,2,1
-disks=nvme0n1,sda,sdb,sdc
-stripe_size=786432
+segment_count=3
+disk_count=4
+disk0_name=nvme0n1
+disk1_name=sda
+disk2_name=sdb
+disk3_name=sdc
+seg0_begin=0
+seg0_end=1073741824
+seg0_count=4
+seg0_disks=0,1,2,3
+seg0_weight=7,4,2,1
+seg0_stripe=917504
+seg1_begin=1073741824
+seg1_end=2147483648
+seg1_count=3
+seg1_disks=0,1,2
+seg1_weight=7,4,2
+seg1_stripe=8388608
+seg2_begin=2147483648
+seg2_end=3221225472
+seg2_count=1
+seg2_disks=0
+seg2_weight=7
+seg2_stripe=45088768
 ```
 
 ### Restore
 
-重開機後，tieredvol-restore.sh 讀取這個檔案，重建 scheduler state。
+重開機後，需手動重新建立 scheduler volume。`tieredvol-restore.sh` 目前僅處理 `.conf` 檔案（LVM striping volumes），不處理 `.scheduler` 檔案。
 
 ---
 
@@ -492,7 +514,7 @@ void tv_sched_destroy(TV_SCHED *sched);
 TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta);
 ```
 
-完整實作見 `AGENTS.md`。
+完整實作見 `src/tiered_sched.h` 與 `src/tiered_sched.c`。
 
 ### 為什麼用 io_uring？
 
@@ -512,7 +534,6 @@ TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta);
 sudo tiered_setup --create --name fastpool \
     --disks nvme0n1:500,sda:500 \
     --scheduler \
-    --chunk-size 64 \
     --fs ext4 --mount /mnt/fast
 ```
 
@@ -549,4 +570,4 @@ tieredvol-restore.sh 讀取 `/etc/tieredvol/*.scheduler` 檔案，重建 schedul
 - io_uring: `io_uring_setup`, `io_uring_enter`, liburing
 - Linux block layer: `drivers/block/`
 - 切塊演算法：[PARTITION_SPLITTING.md](PARTITION_SPLITTING.md)
-- Weighted striping 概念：本文件原創（TieredVol project）
+- Weighted striping 概念：參考儲存領域已有的 weighted allocation 概念（如 ZFS metadata allocation）

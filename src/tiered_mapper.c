@@ -21,7 +21,7 @@ TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta) {
 
     TV_SEGMENT *seg = &meta->segments[seg_idx];
 
-    uint64_t stripe_no = logical / seg->stripe_size;
+    uint64_t stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
     uint64_t offset_in = logical % seg->stripe_size;
 
     /* Build prefix sum boundary */

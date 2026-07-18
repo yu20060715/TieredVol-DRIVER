@@ -55,7 +55,6 @@ int tv_flush(TV_SCHED *sched) {
     if (!sched || sched->buf.used == 0) return 0;
 
     uint64_t logical = sched->buf.logical_begin;
-    TV_MAP map = tv_map_logical(logical, sched->meta);
     TV_SEGMENT *seg = &sched->meta->segments[0];
 
     /* Find the segment that contains this logical offset */
@@ -67,7 +66,7 @@ int tv_flush(TV_SCHED *sched) {
         }
     }
 
-    uint64_t stripe_no = logical / seg->stripe_size;
+    uint64_t stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
 
     /* Build prefix sum boundary */
     uint64_t boundary[TV_MAX_DISKS + 1];
@@ -129,8 +128,7 @@ int tv_read(TV_SCHED *sched, void *buf, uint64_t len, uint64_t offset) {
     for (int i = 0; i < pending; i++) {
         int res = tv_uring_wait(&sched->ring);
         if (res < 0) {
-            fprintf(stderr, "tv_read: I/O error at offset %lu\n",
-                    (unsigned long)(offset + pos));
+            fprintf(stderr, "tv_read: I/O error on request %d\n", i);
         }
     }
 

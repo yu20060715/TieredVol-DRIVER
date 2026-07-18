@@ -30,13 +30,22 @@ int tv_benchmark(const char *disk_path, uint64_t *speed_out) {
 
     memset(buf, 0xAB, BENCH_SIZE);
 
+    /* Write near the end of the device to avoid overwriting data at offset 0 */
+    off_t dev_size = lseek(fd, 0, SEEK_END);
+    off_t bench_offset = 0;
+    if (dev_size > (off_t)BENCH_SIZE * BENCH_RUNS + 1024 * 1024) {
+        bench_offset = dev_size - (off_t)BENCH_SIZE * BENCH_RUNS - 1024 * 1024;
+        /* Align to 512 bytes */
+        bench_offset = bench_offset & ~((off_t)BENCH_BLOCK - 1);
+    }
+
     struct timespec ts_start, ts_end;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
     for (int run = 0; run < BENCH_RUNS; run++) {
         uint64_t written = 0;
         while (written < BENCH_SIZE) {
-            ssize_t n = pwrite(fd, (char *)buf + written, BENCH_SIZE - written, written);
+            ssize_t n = pwrite(fd, (char *)buf + written, BENCH_SIZE - written, bench_offset + written);
             if (n < 0) {
                 if (errno == EINTR) continue;
                 fprintf(stderr, "benchmark: write error on '%s': %s\n", disk_path, strerror(errno));

@@ -109,39 +109,26 @@ SATA:   480 MB/s
 
 不可能存 2.5708333... 一定需要近似整數。
 
-### 方法：搜尋最小誤差的整數比
+### 方法：四捨五入 + 上限
 
-限制最大 weight（例如 8），搜尋所有可能的整數比：
-
-| 比例 | 近似值 | 誤差 |
-|------|--------|------|
-| 2:1 | 2.0 | 22% |
-| 3:1 | 3.0 | 16% |
-| 5:2 | 2.5 | **2.8%** |
-| 8:3 | 2.667 | 3.7% |
-
-選誤差最小的 → **5:2**。
-
-### 搜尋演算法
+目前實作（`tv_compute_weight()` in `tiered_partition.c`）採用簡單的四捨五入：
 
 ```c
-int best_a = 1, best_b = 1;
-double best_err = fabs(target - 1.0);
-
-for (int a = 1; a <= max_weight; a++) {
-    for (int b = 1; b <= max_weight; b++) {
-        double approx = (double)a / b;
-        double err = fabs(target - approx) / target;
-        if (err < best_err) {
-            best_err = err;
-            best_a = a;
-            best_b = b;
-        }
-    }
-}
-
-// target = 2.5708 → best_a=5, best_b=2 → 5:2 (2.5, 誤差 2.8%)
+double w = speed / slowest;
+uint32_t result = (uint32_t)(w + 0.5);   // 四捨五入
+if (result > 16) result = 16;            // 上限 16
+if (result < 1)  result = 1;
 ```
+
+以 1234:480 為例：
+
+| 項目 | 值 |
+|------|------|
+| 比例 | 1234 / 480 = 2.5708 |
+| 四捨五入 | 3 |
+| 實際 weight | 3:1（誤差 16%） |
+
+如果需要更精確的整數近似（如 5:2），需要額外實作搜尋演算法（brute-force search with max_weight constraint），目前尚未實作。
 
 ### 三顆碟的情況
 
@@ -151,8 +138,7 @@ for (int a = 1; a <= max_weight; a++) {
 除以最慢：
   4.86, 1.45, 1.0
 
-搜尋整數近似 → 可能得到 [10, 3, 2] 或 [5, 2, 1]
-都可以。
+四捨五入 → [5, 1, 1]
 ```
 
 ---
@@ -311,7 +297,7 @@ Mapping 流程：
     ↓
 先找 Segment（binary search）
     ↓
-stripe_no = logical / stripe_size
+stripe_no = (logical - segment_begin) / stripe_size
 offset_in = logical % stripe_size
     ↓
 binary search boundary → 找到 disk id
@@ -343,7 +329,7 @@ sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 -
 | 問題 | 解法 |
 |------|------|
 | 快碟等慢碟 | 加權 chunk：快碟拿多、慢碟拿少 |
-| 奇怪的速度比例 | 搜尋最小誤差的整數比（限制 max_weight） |
+| 奇怪的速度比例 | 四捨五入 + 上限 16（tv_compute_weight） |
 | 碟容量不同 | 依容量排序，分段處理（TV_SEGMENT） |
 | 動態速度變化 | 每輪動態計算比例（第二版 DRR） |
 | 資料結構 | TV_DISK（碟資訊）、TV_SEGMENT（分段）、TV_METADATA（持久化） |
@@ -353,6 +339,6 @@ sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 -
 
 ## 參考
 
-- Weighted striping 概念：本文件原創（TieredVol project）
-- Ratio 近似演算法：brute-force search with max_weight constraint
+- Weighted striping 概念：參考儲存領域已有的 weighted allocation 概念
+- Ratio 近似演算法：四捨五入 + 上限（tv_compute_weight in tiered_partition.c）
 - 相關文件：[WEIGHTED_IO_SCHEDULER.md](WEIGHTED_IO_SCHEDULER.md)（I/O dispatch 實作）
