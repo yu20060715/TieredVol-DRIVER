@@ -38,8 +38,7 @@ int tv_write(TV_SCHED *sched, const void *buf, uint64_t len) {
         uint64_t space = sched->buf.capacity - sched->buf.used;
         uint64_t chunk = (len - pos < space) ? (len - pos) : space;
 
-        memcpy(sched->buf.data + sched->buf.used, src + pos, (size_t)chunk);
-        sched->buf.used += chunk;
+        tv_buf_write(&sched->buf, src + pos, chunk);
         pos += chunk;
 
         if (sched->buf.used == sched->buf.capacity) {

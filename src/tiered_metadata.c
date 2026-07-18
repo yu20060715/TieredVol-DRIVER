@@ -116,7 +116,14 @@ int tv_metadata_load(TV_METADATA *meta, const char *path) {
                 char *t = strtok(val, ",");
                 int j = 0;
                 while (t && j < TV_MAX_DISKS) {
-                    seg->disk_index[j++] = (uint32_t)strtoul(t, NULL, 10);
+                    uint32_t d = (uint32_t)strtoul(t, NULL, 10);
+                    if (d >= meta->disk_count) {
+                        fprintf(stderr, "metadata: seg%lu disk index %u >= disk_count %u\n",
+                                idx, d, meta->disk_count);
+                        fclose(f);
+                        return -1;
+                    }
+                    seg->disk_index[j++] = d;
                     t = strtok(NULL, ",");
                 }
             } else if (strcmp(endp, "_weight") == 0) {
