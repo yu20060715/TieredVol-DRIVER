@@ -74,7 +74,7 @@ static void detect_existing_volume() {
     run_cmd("sudo dmsetup ls 2>/dev/null", dm_out, sizeof(dm_out));
     char *line = strtok(dm_out, "\n");
     while (line) {
-        if (strstr(line, "tv_")) {
+        if (strstr(line, "tv_vg_") && strstr(line, "-tv_lv_")) {
             char vg[128] = "";
             if (sscanf(line, "%127s", vg) == 1) {
                 char *lv_sep = strstr(vg, "-tv_lv_");
@@ -654,6 +654,7 @@ static void screen_bench() {
     auto_bench_poll();
 
     if (!bench_finished) {
+        timeout(200);
         while (!bench_finished) {
             auto_bench_poll();
             clear();
@@ -700,55 +701,55 @@ static void screen_bench() {
             mvprintw(6 + nrow + 2, 3, "Elapsed: %dm %ds", elapsed / 60, elapsed % 60);
             draw_status_bar("Auto-benchmarking... Q:Back", "Q:Back");
             refresh();
-            napms(200);
             int ch = getch();
-            if (ch == 'q' || ch == 'Q' || ch == 27) return;
+            if (ch == 'q' || ch == 'Q' || ch == 27) { timeout(-1); return; }
             if (ch == KEY_RESIZE) continue;
         }
+        timeout(-1);
     }
 
     while (1) {
-    clear();
-    int maxy = getmaxy(stdscr);
-    int maxx = getmaxx(stdscr);
-    attron(A_BOLD | COLOR_PAIR(1));
-    mvprintw(0, (maxx - 22) / 2, "=== Benchmark Results ===");
-    attroff(A_BOLD | COLOR_PAIR(1));
-    int nrow = 0;
-    for (int i = 0; i < ndisks; i++) if (!disks[i].is_root) nrow++;
-    int rbw = 72;
-    int rbh = nrow + 6;
-    int rby = 2;
-    if (rby + rbh > maxy - 1) rbh = maxy - rby - 1;
-    if (rbh < 3) rbh = 3;
-    int rbx = (maxx - rbw) / 2;
-    draw_box(rby, rbx, rbh, rbw, "Results");
-    attron(A_BOLD);
-    mvprintw(rby + 2, rbx + 2, "%-10s %-26s %-6s %10s %10s",
-             "DEVICE", "MODEL", "TRAN", "Write", "Read");
-    mvhline(rby + 3, rbx + 1, ACS_HLINE, rbw - 2);
-    attroff(A_BOLD);
-    int row = 0;
-    double tw = 0, tr = 0;
-    for (int i = 0; i < ndisks; i++) {
-        ui_disk_t *d = &disks[i];
-        if (d->is_root) continue;
-        mvprintw(rby + 4 + row, rbx + 2, "%-10s %-26s %-6s %7.0f %7.0f MB/s",
-                 d->disk, d->model, d->tran, d->speed_write, d->speed_read);
-        tw += d->speed_write;
-        tr += d->speed_read;
-        row++;
-    }
-    mvhline(rby + 4 + row, rbx + 1, ACS_HLINE, rbw - 2);
-    attron(A_BOLD);
-    mvprintw(rby + 5 + row, rbx + 2, "%-43s %7.0f %7.0f MB/s",
-             "TOTAL:", tw, tr);
-    attroff(A_BOLD);
-    draw_status_bar("Press any key to continue", "Any key:Continue");
-    refresh();
-    int ch = getch();
-    if (ch == KEY_RESIZE) continue;
-    break;
+        clear();
+        int maxy = getmaxy(stdscr);
+        int maxx = getmaxx(stdscr);
+        attron(A_BOLD | COLOR_PAIR(1));
+        mvprintw(0, (maxx - 22) / 2, "=== Benchmark Results ===");
+        attroff(A_BOLD | COLOR_PAIR(1));
+        int nrow = 0;
+        for (int i = 0; i < ndisks; i++) if (!disks[i].is_root) nrow++;
+        int rbw = 72;
+        int rbh = nrow + 6;
+        int rby = 2;
+        if (rby + rbh > maxy - 1) rbh = maxy - rby - 1;
+        if (rbh < 3) rbh = 3;
+        int rbx = (maxx - rbw) / 2;
+        draw_box(rby, rbx, rbh, rbw, "Results");
+        attron(A_BOLD);
+        mvprintw(rby + 2, rbx + 2, "%-10s %-26s %-6s %10s %10s",
+                 "DEVICE", "MODEL", "TRAN", "Write", "Read");
+        mvhline(rby + 3, rbx + 1, ACS_HLINE, rbw - 2);
+        attroff(A_BOLD);
+        int row = 0;
+        double tw = 0, tr = 0;
+        for (int i = 0; i < ndisks; i++) {
+            ui_disk_t *d = &disks[i];
+            if (d->is_root) continue;
+            mvprintw(rby + 4 + row, rbx + 2, "%-10s %-26s %-6s %7.0f %7.0f MB/s",
+                     d->disk, d->model, d->tran, d->speed_write, d->speed_read);
+            tw += d->speed_write;
+            tr += d->speed_read;
+            row++;
+        }
+        mvhline(rby + 4 + row, rbx + 1, ACS_HLINE, rbw - 2);
+        attron(A_BOLD);
+        mvprintw(rby + 5 + row, rbx + 2, "%-43s %7.0f %7.0f MB/s",
+                 "TOTAL:", tw, tr);
+        attroff(A_BOLD);
+        draw_status_bar("Press any key to continue", "Any key:Continue");
+        refresh();
+        int ch = getch();
+        if (ch == KEY_RESIZE) continue;
+        break;
     }
 }
 
@@ -1065,7 +1066,7 @@ static int screen_create_select_disks() {
     }
     char cmd[PATH_MAX + 2048];
     snprintf(cmd, sizeof(cmd),
-        "%s --create --name %s --disks %s --fs %s --mount %s 2>&1",
+        "%s --create --name \"%s\" --disks \"%s\" --fs \"%s\" --mount \"%s\" 2>&1",
         tool_path, vol_name, disk_spec, input_fs, mount_point);
     clear();
     int maxy = getmaxy(stdscr);

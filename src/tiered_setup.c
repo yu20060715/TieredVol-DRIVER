@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdarg.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -45,25 +44,6 @@ static void print_usage(const char *prog) {
     printf("  sudo %s --remove --name fastpool\n", prog);
 }
 
-static int run_sudo(const char *fmt, ...) {
-    char cmd[4096];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(cmd, sizeof(cmd), fmt, ap);
-    va_end(ap);
-    char tmpf[] = "/tmp/.tv_cmd_XXXXXX";
-    int tf = mkstemp(tmpf);
-    if (tf < 0) return -1;
-    fchmod(tf, 0700);
-    dprintf(tf, "%s\n", cmd);
-    close(tf);
-    char full[4300];
-    snprintf(full, sizeof(full), "sudo bash %s 2>&1", tmpf);
-    int ret = system(full);
-    unlink(tmpf);
-    return ret;
-}
-
 static int safe_execvp(const char *path, char *const argv[]) {
     pid_t pid = fork();
     if (pid < 0) return -1;
@@ -71,6 +51,43 @@ static int safe_execvp(const char *path, char *const argv[]) {
         execvp(path, argv);
         _exit(127);
     }
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int run_quiet(const char *path, char *const argv[]) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        execvp(path, argv);
+        _exit(127);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int run_capture(const char *path, char *const argv[], char *out, size_t outsize) {
+    int pfd[2];
+    if (pipe(pfd) < 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); return -1; }
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        int dn = open("/dev/null", O_WRONLY);
+        if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
+        close(pfd[1]);
+        execvp(path, argv);
+        _exit(127);
+    }
+    close(pfd[1]);
+    ssize_t n = read(pfd[0], out, outsize - 1);
+    close(pfd[0]);
+    out[n > 0 ? n : 0] = 0;
     int status;
     waitpid(pid, &status, 0);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -111,6 +128,8 @@ typedef struct {
     int is_root;
     int is_mounted;
 } disk_info_t;
+
+typedef struct { int ret; double w; double r; } bench_result_t;
 
 static void make_target(char *out, size_t sz, const char *disk) {
     snprintf(out, sz, "tv_%s_carve", disk);
@@ -224,29 +243,25 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
         fprintf(stderr, "    /dev/%s is not mounted, attempting to mount...\n", disk);
         snprintf(mp, sizeof(mp), "/tmp/db_%s", disk);
         mkdir(mp, 0755);
-        char mcmd[512];
-        snprintf(mcmd, sizeof(mcmd), "sudo mount /dev/%s %s 2>/dev/null", disk, mp);
-        int mret = system(mcmd);
+        char devpath_b[64];
+        snprintf(devpath_b, sizeof(devpath_b), "/dev/%s", disk);
+        char *mount_argv[] = {"sudo", "mount", devpath_b, mp, NULL};
+        int mret = run_quiet("sudo", mount_argv);
         if (mret == 0) {
-            char chcmd[512];
-            snprintf(chcmd, sizeof(chcmd), "sudo chmod 0755 %s 2>/dev/null", mp);
-            (void)!system(chcmd);
+            char *chmod_argv[] = {"sudo", "chmod", "0755", mp, NULL};
+            (void)run_quiet("sudo", chmod_argv);
         }
         if (mret != 0) {
             fprintf(stderr, "    mount failed (exit=%d), trying udisksctl...\n", mret);
-            snprintf(mcmd, sizeof(mcmd), "udisksctl mount -b /dev/%s 2>/dev/null", disk);
-            FILE *fp = popen(mcmd, "r");
-            if (fp) {
-                char line[512];
-                while (fgets(line, sizeof(line), fp)) {
-                    if (strstr(line, "at ")) {
-                        char *at = strstr(line, "at ") + 3;
-                        at[strcspn(at, "\n")] = 0;
-                        strncpy(mp, at, sizeof(mp) - 1);
-                        mp[sizeof(mp) - 1] = 0;
-                    }
-                }
-                pclose(fp);
+            char *udisks_argv[] = {"udisksctl", "mount", "-b", devpath_b, NULL};
+            char uout[512] = "";
+            run_capture("udisksctl", udisks_argv, uout, sizeof(uout));
+            char *at = strstr(uout, "at ");
+            if (at) {
+                at += 3;
+                at[strcspn(at, "\n")] = 0;
+                strncpy(mp, at, sizeof(mp) - 1);
+                mp[sizeof(mp) - 1] = 0;
             }
         }
         if (mret != 0 && strncmp(mp, "/tmp/db_", 8) == 0) {
@@ -514,7 +529,7 @@ static int cmd_bench(int argc, char *argv[]) {
                 close(pipefd[0]);
                 double w = 0, r = 0;
                 int ret = bench_disk(info[i].disk, &w, &r);
-                struct { int ret; double w; double r; } result = { ret, w, r };
+                bench_result_t result = { ret, w, r };
                 const char *wp = (const char *)&result;
                 size_t remaining = sizeof(result);
                 while (remaining > 0) {
@@ -555,7 +570,7 @@ static int cmd_bench(int argc, char *argv[]) {
                 if (children[c].pid <= 0) continue;
                 pid_t ret = waitpid(children[c].pid, &status, WNOHANG);
                 if (ret > 0) {
-                    struct { int ret; double w; double r; } result = { -1, 0, 0 };
+                    bench_result_t result = { -1, 0, 0 };
                     ssize_t nread = read(children[c].pipe_fd, &result, sizeof(result));
                     close(children[c].pipe_fd);
                     int idx = children[c].idx;
@@ -602,7 +617,12 @@ static int cmd_bench(int argc, char *argv[]) {
 
 static void cleanup_create(const char *name, disk_t *valid, int valid_disks) {
     fprintf(stderr, "  Rolling back...\n");
-    run_sudo("umount /dev/mapper/tv_vg_%s-tv_lv_%s 2>/dev/null", name, name);
+    {
+        char umount_lv[256];
+        snprintf(umount_lv, sizeof(umount_lv), "/dev/mapper/tv_vg_%s-tv_lv_%s", name, name);
+        char *umount_argv[] = {"sudo", "umount", umount_lv, NULL};
+        (void)run_quiet("sudo", umount_argv);
+    }
     {
         char full_lv[256];
         snprintf(full_lv, sizeof(full_lv), "tv_vg_%s/tv_lv_%s", name, name);
@@ -819,7 +839,7 @@ static int cmd_create(int argc, char *argv[]) {
                 if (children[c].pid <= 0) continue;
                 pid_t ret = waitpid(children[c].pid, &status, WNOHANG);
                 if (ret > 0) {
-                    struct { int ret; double w; double r; } result = { -1, 0, 0 };
+                    bench_result_t result = { -1, 0, 0 };
                     ssize_t nread = read(children[c].pipe_fd, &result, sizeof(result));
                     close(children[c].pipe_fd);
                     int idx = children[c].idx;
