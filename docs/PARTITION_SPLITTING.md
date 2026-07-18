@@ -4,6 +4,41 @@
 
 ---
 
+## 資料結構
+
+### TV_DISK
+
+```c
+typedef struct {
+    int      id;
+    int      fd;
+
+    uint64_t total_size;    // 碟總容量（bytes）
+    uint64_t free_size;     // 碟可用容量（bytes）
+
+    uint64_t speed;         // 測速結果（MB/s）
+
+    uint32_t weight;        // 加權值
+
+    uint64_t physical_offset;  // 在 partition 內的物理起始位置
+} TV_DISK;
+```
+
+初始化流程：
+```
+掃描所有磁碟
+    ↓
+取得容量
+    ↓
+取得可用容量
+    ↓
+Benchmark 一次
+    ↓
+存 speed
+```
+
+---
+
 ## 問題
 
 標準 LVM striping / md RAID0 使用統一 stripe size，每顆碟每 cycle 拿**相同數量的 chunk**。快碟被迫等慢碟：
@@ -177,7 +212,34 @@ C 只有 512GB，A 和 B 有 1TB。當 C 用完後，剩下三顆碟的比例就
 只剩 D → 直接線性寫入
 ```
 
-### 實作
+### TV_SEGMENT
+
+```c
+typedef struct {
+    uint64_t logical_begin;    // 此段的邏輯起始 offset
+    uint64_t logical_end;      // 此段的邏輯結束 offset
+
+    uint32_t disk_count;       // 此段內有幾顆碟
+    uint32_t disk_index[16];   // 碟的 index
+    uint32_t weight[16];       // 每顆碟的權重
+
+    uint64_t stripe_size;      // 此段的 stripe size
+} TV_SEGMENT;
+```
+
+#### 範例
+
+四顆碟容量：Disk0 4TB, Disk1 2TB, Disk2 2TB, Disk3 1TB
+
+```
+Segment0: 0~1TB     → disk [0,1,2,3]  weight [7,4,2,1]
+Segment1: 1~2TB     → disk [0,1,2]    weight [7,4,2]
+Segment2: 2~4TB     → disk [0]        weight [7]
+```
+
+建立完成後，Runtime 不再修改。
+
+### 實作流程
 
 ```
 1. 取得每顆碟的容量和速度
@@ -224,16 +286,78 @@ SATA 應拿：600 × 480/1714  = 168KB
 
 ---
 
+## Metadata
+
+```c
+typedef struct {
+    uint32_t version;
+    uint32_t chunk_size;        // 固定 64KB
+    uint32_t segment_count;
+
+    TV_SEGMENT segments[MAX_SEG];
+} TV_METADATA;
+```
+
+儲存格式：
+```
+# /etc/tieredvol/fastpool.scheduler
+[weighted_striping]
+version=1
+chunk_size=65536
+segment_count=3
+# Segment 0: 0~1TB
+seg0_disks=0,1,2,3
+seg0_weight=7,4,2,1
+seg0_stripe_size=896KB
+# ... 其他 segments
+```
+
+---
+
+## Runtime Mapping API
+
+```c
+typedef struct {
+    int      disk;        // 目標碟的 index
+    uint64_t offset;      // 在該碟上的物理 offset
+    uint64_t length;      // 要讀寫的長度
+} TV_MAP;
+
+TV_MAP map_logical_offset(
+    uint64_t logical,     // 邏輯 offset
+    uint64_t length       // 長度
+);
+```
+
+Mapping 流程：
+```
+輸入: logical offset
+    ↓
+先找 Segment（binary search）
+    ↓
+stripe_no = logical / stripe_size
+offset_in = logical % stripe_size
+    ↓
+binary search boundary → 找到 disk id
+    ↓
+physical_offset = stripe_no × (weight × chunk) + offset_in_disk
+    ↓
+輸出: fd, physical offset, length
+```
+
+---
+
 ## 整合到 TieredVol
 
 ```
-tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500
+tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 --scheduler
 
 程式內部：
   1. benchmark → 取得速度
-  2. 計算 weight
-  3. 儲存 weight + chunk_size 到 metadata
-  4. dispatch 時查 weight → 每顆碟拿幾 chunks
+  2. 計算 weight（speed / slowest）
+  3. 依容量分段（build segments）
+  4. 儲存 metadata 到 /etc/tieredvol/*.scheduler
+  5. dispatch 時查 weight → 每顆碟拿幾 chunks
 ```
 
 ---
@@ -244,8 +368,10 @@ tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500
 |------|------|
 | 快碟等慢碟 | 加權 chunk：快碟拿多、慢碟拿少 |
 | 奇怪的速度比例 | 搜尋最小誤差的整數比（限制 max_weight） |
-| 碟容量不同 | 依容量排序，分段處理 |
-| 動態速度變化 | 每輪動態計算比例（進階） |
+| 碟容量不同 | 依容量排序，分段處理（TV_SEGMENT） |
+| 動態速度變化 | 每輪動態計算比例（第二版 DRR） |
+| 資料結構 | TV_DISK（碟資訊）、TV_SEGMENT（分段）、TV_METADATA（持久化） |
+| Offset 映射 | prefix sum + binary search → TV_MAP |
 
 ---
 
