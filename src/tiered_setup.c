@@ -16,10 +16,6 @@
 #include "tiered_common.h"
 #include "version.h"
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-#pragma GCC diagnostic ignored "-Wstringop-truncation"
-
 #define MAX_DISKS 8
 
 static volatile sig_atomic_t bench_interrupted = 0;
@@ -798,7 +794,7 @@ static int cmd_create(int argc, char *argv[]) {
             close(pipefd[0]);
             double w = 0, r = 0;
             int ret = bench_disk(valid[i].disk, &w, &r);
-            struct { int ret; double w; double r; } result = { ret, w, r };
+            bench_result_t result = { ret, w, r };
             const char *wp = (const char *)&result;
             size_t remaining = sizeof(result);
             while (remaining > 0) {
@@ -1115,13 +1111,16 @@ static int cmd_create(int argc, char *argv[]) {
                 (void)run_sudo_argv(mkdir_argv);
                 char dest[512];
                 snprintf(dest, sizeof(dest), "/etc/tieredvol/%s.conf", name);
-                char *cp_argv[] = {"sudo", "cp", conf_path, dest, NULL};
-                int cp_ret = run_sudo_argv(cp_argv);
-                if (cp_ret != 0) fprintf(stderr, "Warning: failed to save config\n");
+                char *mv_argv[] = {"sudo", "mv", "-f", conf_path, dest, NULL};
+                int mv_ret = run_sudo_argv(mv_argv);
+                if (mv_ret != 0) {
+                    fprintf(stderr, "Warning: failed to save config\n");
+                    unlink(conf_path);
+                }
             } else {
                 close(conf_fd);
+                unlink(conf_path);
             }
-            unlink(conf_path);
         }
     }
 
@@ -1303,6 +1302,16 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    const char *deps[] = {"dmsetup", "vgcreate", "pvcreate", NULL};
+    for (int i = 0; deps[i]; i++) {
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "which %s > /dev/null 2>&1", deps[i]);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "Error: '%s' not found. Install lvm2: apt install lvm2\n", deps[i]);
+            return 1;
+        }
+    }
+
     if (argc < 2) {
         print_usage(argv[0]);
         return 0;
@@ -1322,5 +1331,3 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Unknown command: %s\n", argv[1]);
     return 1;
 }
-
-#pragma GCC diagnostic pop

@@ -13,10 +13,6 @@
 #include "tiered_ui_helpers.h"
 #include "version.h"
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-#pragma GCC diagnostic ignored "-Wstringop-truncation"
-
 #define MAX_DISKS 8
 #define MIN_COLS 80
 #define MIN_ROWS 20
@@ -47,7 +43,7 @@ static void signal_handler(int sig) {
     got_signal = 1;
 }
 
-static void detect_tool_path() {
+static void detect_tool_path(void) {
     char *base = getenv("TIERED_VOL_DIR");
     if (base && base[0]) {
         snprintf(tool_path, sizeof(tool_path), "%s/tiered_setup", base);
@@ -69,7 +65,7 @@ static void detect_tool_path() {
 
 static int run_cmd(const char *cmd, char *out, int outsize);
 
-static void detect_existing_volume() {
+static void detect_existing_volume(void) {
     char dm_out[2048] = "";
     run_cmd("sudo dmsetup ls 2>/dev/null", dm_out, sizeof(dm_out));
     char *line = strtok(dm_out, "\n");
@@ -123,7 +119,7 @@ static int run_cmd(const char *cmd, char *out, int outsize) {
     return WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
 }
 
-static void parse_disk_list() {
+static void parse_disk_list(void) {
     char out[4096] = "";
     char cmd[PATH_MAX + 256];
     snprintf(cmd, sizeof(cmd), "%s --list 2>/dev/null", tool_path);
@@ -192,6 +188,10 @@ static void drain_pipe_to_buf(void) {
                 bench_buf_len = 0;
                 bench_buf[0] = 0;
             }
+            if (bench_buf_len + (int)n >= (int)sizeof(bench_buf) - 1) {
+                bench_buf_len = 0;
+                bench_buf[0] = 0;
+            }
         }
         memcpy(bench_buf + bench_buf_len, tmp, n);
         bench_buf_len += n;
@@ -199,7 +199,7 @@ static void drain_pipe_to_buf(void) {
     }
 }
 
-static void auto_bench_start() {
+static void auto_bench_start(void) {
     char disklist[512] = "";
     for (int i = 0; i < ndisks; i++) {
         if (!disks[i].is_root) {
@@ -235,7 +235,7 @@ static void auto_bench_start() {
     bench_start_time = time(NULL);
 }
 
-static void auto_bench_poll() {
+static void auto_bench_poll(void) {
     if (bench_finished || bench_rd_fd < 0) return;
 
     drain_pipe_to_buf();
@@ -350,6 +350,16 @@ static int read_sysctl_int(const char *key) {
     return val;
 }
 
+static int write_sysctl(const char *key, int value) {
+    char path[256];
+    snprintf(path, sizeof(path), "/proc/sys/%s", key);
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "%d\n", value);
+    fclose(f);
+    return 0;
+}
+
 static int mb_to_dirty_ratio(long long total_kb, int mb) {
     if (total_kb <= 0) return 0;
     long long borrow_kb = (long long)mb * 1024;
@@ -359,7 +369,7 @@ static int mb_to_dirty_ratio(long long total_kb, int mb) {
     return ratio;
 }
 
-static void screen_ram_cache() {
+static void screen_ram_cache(void) {
     if (!check_terminal_size()) return;
     read_meminfo(&ram_cache);
     if (system_dirty_ratio < 0) system_dirty_ratio = read_sysctl_int("vm.dirty_ratio");
@@ -478,24 +488,20 @@ static void screen_ram_cache() {
                     int new_bg = new_dirty / 2;
                     if (new_bg < 1) new_bg = 1;
                     if (new_bg > 40) new_bg = 40;
-                    char cmd[256];
-                    snprintf(cmd, sizeof(cmd), "sysctl -w vm.dirty_ratio=%d vm.dirty_background_ratio=%d",
-                             new_dirty, new_bg);
-                    int ret = system(cmd);
-                    if (ret != 0) {
-                        snprintf(status_msg, sizeof(status_msg), "RAM cache: sysctl failed (exit %d)", ret);
+                    int r1 = write_sysctl("vm.dirty_ratio", new_dirty);
+                    int r2 = write_sysctl("vm.dirty_background_ratio", new_bg);
+                    if (r1 != 0 || r2 != 0) {
+                        snprintf(status_msg, sizeof(status_msg), "RAM cache: write to /proc/sys failed");
                     } else {
                         ram_cache.current_borrow_mb = borrow_mb;
                         snprintf(status_msg, sizeof(status_msg), "RAM cache: %d MB applied", borrow_mb);
                     }
                     need_refresh = 1;
                 } else if (sel == 1) {
-                    char cmd[256];
-                    snprintf(cmd, sizeof(cmd), "sysctl -w vm.dirty_ratio=%d vm.dirty_background_ratio=%d",
-                             ram_cache.original_dirty_ratio, ram_cache.original_dirty_bg_ratio);
-                    int ret = system(cmd);
-                    if (ret != 0) {
-                        snprintf(status_msg, sizeof(status_msg), "RAM cache: reset failed (exit %d)", ret);
+                    int r1 = write_sysctl("vm.dirty_ratio", ram_cache.original_dirty_ratio);
+                    int r2 = write_sysctl("vm.dirty_background_ratio", ram_cache.original_dirty_bg_ratio);
+                    if (r1 != 0 || r2 != 0) {
+                        snprintf(status_msg, sizeof(status_msg), "RAM cache: reset failed");
                     } else {
                         ram_cache.current_borrow_mb = 0;
                         borrow_mb = 0;
@@ -515,7 +521,7 @@ static void screen_ram_cache() {
     }
 }
 
-static int screen_main() {
+static int screen_main(void) {
     if (!check_terminal_size()) return 6;
     const char *items[] = {
         "Disk List",
@@ -565,7 +571,7 @@ static int screen_main() {
     }
 }
 
-static void screen_disk_list() {
+static void screen_disk_list(void) {
     if (!check_terminal_size()) return;
     if (ndisks == 0) { snprintf(status_msg, sizeof(status_msg), "No disks found!"); return; }
     auto_bench_poll();
@@ -647,7 +653,7 @@ static void screen_disk_list() {
     }
 }
 
-static void screen_bench() {
+static void screen_bench(void) {
     if (!check_terminal_size()) return;
     if (ndisks == 0) { snprintf(status_msg, sizeof(status_msg), "No disks found!"); return; }
 
@@ -1006,7 +1012,7 @@ static int create_phase_input_settings(char *input_name, char *input_mount, char
     return -1;
 }
 
-static int screen_create_select_disks() {
+static int screen_create_select_disks(void) {
     if (ndisks == 0) { snprintf(status_msg, sizeof(status_msg), "No disks found!"); return -1; }
 
     save_speeds();
@@ -1056,12 +1062,14 @@ static int screen_create_select_disks() {
         if (sel[i]) {
             char tmp[64];
             int n = snprintf(tmp, sizeof(tmp), "%s:%d", disks[i].disk, carve[i]);
-            if (offset + n + 1 < (int)sizeof(disk_spec)) {
-                if (offset > 0) disk_spec[offset++] = ',';
-                memcpy(disk_spec + offset, tmp, n);
-                offset += n;
-                disk_spec[offset] = 0;
+            if (offset + n + 1 >= (int)sizeof(disk_spec)) {
+                snprintf(status_msg, sizeof(status_msg), "Error: too many disks, spec buffer overflow");
+                return -1;
             }
+            if (offset > 0) disk_spec[offset++] = ',';
+            memcpy(disk_spec + offset, tmp, n);
+            offset += n;
+            disk_spec[offset] = 0;
         }
     }
     char cmd[PATH_MAX + 2048];
@@ -1116,7 +1124,7 @@ static int screen_create_select_disks() {
     return 0;
 }
 
-static void screen_status() {
+static void screen_status(void) {
     if (!check_terminal_size()) return;
     clear();
     int maxy = getmaxy(stdscr);
@@ -1223,7 +1231,7 @@ static void screen_status() {
     getch();
 }
 
-static void screen_destroy() {
+static void screen_destroy(void) {
     if (!check_terminal_size()) return;
     clear();
     int maxy = getmaxy(stdscr);
@@ -1271,7 +1279,7 @@ static void screen_destroy() {
         mvprintw(4, 3, "Please wait...");
         refresh();
         char cmd[PATH_MAX + 256];
-        snprintf(cmd, sizeof(cmd), "%s --destroy --name %s 2>&1", tool_path, vol_name);
+        snprintf(cmd, sizeof(cmd), "%s --destroy --name \"%s\" 2>&1", tool_path, vol_name);
         char out[4096] = "";
         run_cmd(cmd, out, sizeof(out));
         clear();
@@ -1306,6 +1314,17 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: tiered_ui requires root privileges.\n");
         fprintf(stderr, "Please run: sudo %s\n", argv[0]);
         return 1;
+    }
+    {
+        const char *deps[] = {"dmsetup", "vgcreate", "pvcreate", NULL};
+        for (int i = 0; deps[i]; i++) {
+            char cmd[64];
+            snprintf(cmd, sizeof(cmd), "which %s > /dev/null 2>&1", deps[i]);
+            if (system(cmd) != 0) {
+                fprintf(stderr, "Error: '%s' not found. Install lvm2: apt install lvm2\n", deps[i]);
+                return 1;
+            }
+        }
     }
     detect_tool_path();
     if (!initscr()) {
@@ -1360,10 +1379,8 @@ int main(int argc, char *argv[]) {
     }
 exit:
     if (ram_cache.current_borrow_mb > 0) {
-        char cmd[256];
-        snprintf(cmd, sizeof(cmd), "sysctl -w vm.dirty_ratio=%d vm.dirty_background_ratio=%d",
-                 ram_cache.original_dirty_ratio, ram_cache.original_dirty_bg_ratio);
-        (void)!system(cmd);
+        write_sysctl("vm.dirty_ratio", ram_cache.original_dirty_ratio);
+        write_sysctl("vm.dirty_background_ratio", ram_cache.original_dirty_bg_ratio);
     }
     if (bench_pid > 0) {
         kill(-bench_pid, SIGTERM);
@@ -1381,5 +1398,3 @@ exit:
     endwin();
     return 0;
 }
-
-#pragma GCC diagnostic pop

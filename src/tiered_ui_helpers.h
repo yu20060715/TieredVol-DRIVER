@@ -3,9 +3,6 @@
 
 #include <string.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-
 typedef struct {
     char disk[32];
     char model[128];
@@ -47,7 +44,5 @@ static inline int bench_disk_done(const char *disk, const char *bench_buf) {
     snprintf(needle, sizeof(needle), "  /dev/%s: Write", disk);
     return strstr(bench_buf, needle) != NULL;
 }
-
-#pragma GCC diagnostic pop
 
 #endif

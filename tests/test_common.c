@@ -56,6 +56,9 @@ static void test_valid_mount(void) {
     check(tiered_is_valid_mount("/mnt/../etc") == 0, "/mnt/../etc rejected");
     check(tiered_is_valid_mount("/..") == 0, "/.. rejected");
     check(tiered_is_valid_mount("/mnt/data/..") == 0, "/mnt/data/.. rejected");
+    check(tiered_is_valid_mount("/a") == 1, "/a short path ok");
+    check(tiered_is_valid_mount("/ab") == 1, "/ab short path ok");
+    check(tiered_is_valid_mount("/abc") == 1, "/abc ok");
 }
 
 int main(void) {
