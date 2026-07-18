@@ -2,6 +2,18 @@
 
 Linux 分層儲存解決方案。將多顆硬碟合併成高效能條紋化磁碟區（striped volume），支援 **自選容量 carve** + dm-linear 分割 + LVM striped + RAM Cache 即時調優。
 
+## TieredVol 是什麼？
+
+TieredVol 是一個 Linux dm-linear + LVM striping 的 **TUI 管理工具**。為了同時最大化讀取速度與儲存空間利用率，本專案使用 Linux 原生的 dm-linear 進行區塊層級的硬碟切割，並透過 LVM 條帶化（striping）將多顆硬碟併行讀寫，達成接近所有貢獻碟速度總和的效能。
+
+**本專案並非發明新的儲存演算法。** TieredVol 的價值在於：
+- 友善的 ncurses TUI 介面，含 3 階段建立精靈
+- 輸入驗證、雙重確認安全提示、失敗自動回滾
+- 背景平行測速、即時 RAM Cache 調整
+- 啟動前依賴檢查與 config 持久化
+
+底層技術（dm-linear + LVM striping）是 Linux kernel 的成熟功能，自 kernel 2.6（2004 年）起即支援。TieredVol 將其封裝成易用、安全的工具。
+
 ```
 Disk A (NVMe, 2000 MB/s) ──dm-linear──┐
 Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV ── filesystem ── mount
@@ -166,6 +178,15 @@ sudo make install
 sudo tiered_ui
 ```
 
+### 啟用開機自動還原（可選）
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable tieredvol-restore
+```
+
+啟用後，TieredVol volume 會在開機時自動從 saved config 重建。詳見 [USAGE.md](USAGE.md#重開機保留)。
+
 ## 建置指令
 
 ```bash
@@ -245,21 +266,25 @@ sudo tiered_ui
 ```
 TieredVol/
 ├── README.md                   # 說明文件（英文，根目錄）
+├── LICENSE                     # MIT 授權條款
 ├── docs/
 │   ├── README_CN.md            # 說明文件（中文，本檔案）
 │   ├── USAGE.md                # 詳細使用教學
 │   └── PLAN.md                 # 改善計畫
+├── scripts/
+│   ├── tieredvol-restore.sh    # 開機還原腳本
+│   └── tieredvol-restore.service  # systemd 單元檔
 ├── Makefile                    # 建置系統
 ├── .gitignore
 ├── src/
-│   ├── tiered_setup.c          # CLI 後端（1326 行）
-│   ├── tiered_ui.c             # ncurses TUI 前端（1379 行）
+│   ├── tiered_setup.c          # CLI 後端
+│   ├── tiered_ui.c             # ncurses TUI 前端
 │   ├── tiered_common.h         # 共用驗證函式（名稱/FS/掛載點白名單）
 │   ├── tiered_ui_helpers.h     # TUI 共用輔助（ui_disk_t、解析函式）
 │   └── version.h               # 版本常數
 └── tests/
-    ├── test_common.c           # 驗證函式測試（31 cases）
-    └── test_tui.c              # TUI 解析測試（22 cases）
+    ├── test_common.c           # 驗證函式測試
+    └── test_tui.c              # TUI 解析測試
 ```
 
 ### 程式碼架構
@@ -270,11 +295,17 @@ TieredVol/
 | `tiered_ui.c` | TUI 前端：7 個畫面、3 階段建立精靈、背景測速、RAM cache 調整、終端防禦 |
 | `tiered_common.h` | 輸入驗證：`tiered_is_valid_name()`、`tiered_is_valid_fs()`、`tiered_is_valid_mount()` |
 | `tiered_ui_helpers.h` | `ui_disk_t` 結構、`parse_bench_output()`、`bench_disk_done()` |
+| `tieredvol-restore.sh` | 開機還原腳本：讀取 `/etc/tieredvol/*.conf` 重建 dm-linear + LVM volumes |
+| `tieredvol-restore.service` | systemd 單元：在本地檔案系統掛載後觸發還原腳本 |
 
 ## 注意事項
 
 - **系統碟無法使用** — dm-linear 在已掛載的根分区上會回傳 EBUSY
-- 選擇的硬碟資料會被**完全清除**
+- **已切過的碟會被鎖定** — 如果硬碟已有 `tv_*_carve` dm target，程式會報錯並提示先解除現有 volume。解除 volume 會銷毀其上所有資料，請先備份。
+- **carve 部分會被覆蓋** — dm-linear 在區塊層級運作，從 sector 0 開始。它無法偵測哪些區塊有資料。carve 部分的資料將永久消失。請在操作前備份。
+- **dm-linear 限制** — dm-linear 是區塊層級工具，不認檔案系統。它無法「跳過有資料的區塊」或「只切空白空間」。這是 Linux 儲存堆疊的根本限制，非本專案的缺陷。
+- **每顆碟只能 carve 一次** — dm-linear 從 sector 0 開始，第二次 carve 同一顆碟會覆蓋第一次。如需重新 carve，請先用 `--remove` 解除現有 volume。
+- **重開機後需重建** — dm-linear targets 和 LVM volumes 在重開機後不會自動恢復。啟用 systemd service 以實現自動還原：`sudo systemctl enable tieredvol-restore`。
 - 需要 root 權限執行所有操作
 - RAM Cache 設定在退出時自動還原
 - Carve 大小不能超過碟本身容量（例如 1T 碟最多 carve 999G）

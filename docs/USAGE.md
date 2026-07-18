@@ -251,6 +251,38 @@ sudo tiered_setup --create --name fastpool --disks sdb:300,sdc:200 --fs ext4 --m
 
 不指定容量時，使用硬碟全部空間（扣 1GB）。
 
+#### 建立流程
+
+程式會依序執行以下步驟：
+
+1. **碟驗證** — 檢查每顆碟的狀態：
+   - 系統碟（`[ROOT]`）→ 跳過
+   - 已掛載碟（`[MOUNTED]`）→ 跳過
+   - **已切過的碟** → 報錯退出，提示先執行 `--remove` 解除（並警告資料會消失）
+   - 碟容量不足 → 報錯退出
+2. **Configuration 顯示** — 列出每顆碟的名稱、carve 大小、剩餘空間、速度、比例
+3. **雙重確認** — 顯示警告訊息，要求輸入 `YES` 才能繼續（其他輸入直接退出）
+4. **清理舊 target** — 自動清除上次的 dm-linear、VG、LV
+5. **建立 dm-linear** — 從每顆碟的 sector 0 切出指定大小
+6. **建立 LVM** — pvcreate → vgcreate → lvcreate striped
+7. **格式化** — mkfs.ext4/xfs/btrfs
+8. **掛載** — mount 到指定路徑
+
+**任何步驟失敗會自動回滾**，清理所有已完成的裝置。
+
+#### 剩餘空間顯示
+
+Configuration 表格會顯示每顆碟 carve 後的剩餘空間：
+
+```
+  DEVICE       CARVE    REMAIN   SPEED      TIER       RATIO
+  ------------ -------- -------- ---------- ---------- ----------
+  sdb          1000GB   0GB      2000       FAST       66.7%
+  sdc          500GB    500GB    1000       SLOW       33.3%
+```
+
+注意：每顆碟只能 carve 一次（dm-linear 從 sector 0 開始）。剩餘空間不能再次 carve。
+
 ### 查看狀態
 
 ```bash
@@ -292,7 +324,58 @@ sudo tiered_setup --remove --name fastpool
 
 - **系統碟無法使用** — 掛載 `/` 的硬碟會標記 `[ROOT]` 並鎖定
 - **已掛載硬碟無法使用** — 標記 `[MOUNTED]` 的硬碟會鎖定
-- 選擇的硬碟資料會被**完全清除**
+- **已切過的碟** — 如果硬碟已經被 carve 過（存在 `tv_*_carve` dm target），程式會報錯並提示先解除
+- **carve 部分會被覆蓋** — dm-linear 從 sector 0 開始，carve 部分的資料將永久消失。操作前請備份
+- **每顆碟只能 carve 一次** — dm-linear 從 sector 0 開始，第二次 carve 會覆蓋第一次
 - 需要 root 權限執行所有操作
 - RAM Cache 設定在退出程式時**自動還原**
 - 建立 volume 時任何步驟失敗會**自動回滾**
+
+---
+
+## 重開機保留
+
+TieredVol 的 volume 預設**不會在重開機後自動恢復**。要實現開機自動重建，需要安裝 systemd service。
+
+### 安裝
+
+```bash
+cd TieredVol
+make
+sudo make install
+sudo systemctl daemon-reload
+sudo systemctl enable tieredvol-restore
+```
+
+安裝後，每次建立 volume 時，systemd service 會在開機時自動讀取 `/etc/tieredvol/*.conf` 並重建。
+
+### 手動測試
+
+```bash
+# 模擬還原（不真的動手）
+sudo tieredvol-restore.sh --dry-run
+
+# 正式還原
+sudo tieredvol-restore.sh
+
+# 查看日誌
+journalctl -u tieredvol-restore
+```
+
+### 管理
+
+```bash
+sudo systemctl status tieredvol-restore   # 查看狀態
+sudo systemctl disable tieredvol-restore  # 停用開機自動還原
+sudo systemctl enable tieredvol-restore   # 重新啟用
+```
+
+### 運作原理
+
+```
+開機 → systemd 啟動 tieredvol-restore.service
+     → 讀取 /etc/tieredvol/*.conf
+     → 依序重建：dm-linear → pvcreate → vgcreate → lvcreate → mount
+```
+
+每個 volume 的 config 檔包含所有必要參數（碟名、容量、檔案系統、掛載點、stripe 大小），restore script 會逐一讀取並重建。

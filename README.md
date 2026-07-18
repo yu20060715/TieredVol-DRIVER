@@ -2,6 +2,18 @@
 
 Linux tiered storage solution. Merge multiple disks into a high-performance striped volume with **custom carve capacity** + dm-linear + LVM striped + real-time RAM Cache tuning.
 
+## What Is TieredVol?
+
+TieredVol is a **TUI management tool** for Linux dm-linear + LVM striping. To maximize both read/write speed and storage space utilization, this project uses Linux native dm-linear for block-level disk carving, and combines multiple disks into a single striped LVM volume via striping — achieving throughput close to the **sum of all contributing disks' speeds**.
+
+**This is not a new storage algorithm.** TieredVol's value lies in:
+- User-friendly ncurses TUI with 3-phase create wizard
+- Input validation, double-confirmation safety prompts, and automatic rollback on failure
+- Background parallel benchmarking, real-time RAM Cache tuning
+- Pre-flight dependency checks and config persistence
+
+The underlying technology (dm-linear + LVM striping) is a well-established Linux kernel feature that has been supported since kernel 2.6 (2004). TieredVol wraps it into an accessible, safe tool.
+
 ```
 Disk A (NVMe, 2000 MB/s) ──dm-linear──┐
 Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV ── filesystem ── mount
@@ -166,6 +178,15 @@ sudo make install
 sudo tiered_ui
 ```
 
+### Enable Auto-Restore on Boot (Optional)
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable tieredvol-restore
+```
+
+After enabling, TieredVol volumes are automatically rebuilt from saved configs at boot. See [USAGE.md](docs/USAGE.md#重開機保留) for details.
+
 ## Build Commands
 
 ```bash
@@ -245,21 +266,25 @@ sudo tiered_ui
 ```
 TieredVol/
 ├── README.md                   # This file (English)
+├── LICENSE                     # MIT License
 ├── docs/
 │   ├── README_CN.md            # Documentation (Chinese)
 │   ├── USAGE.md                # Detailed usage guide
 │   └── PLAN.md                 # Improvement roadmap
+├── scripts/
+│   ├── tieredvol-restore.sh    # Boot restore script
+│   └── tieredvol-restore.service  # systemd unit file
 ├── Makefile                    # Build system
 ├── .gitignore
 ├── src/
-│   ├── tiered_setup.c          # CLI backend (1326 lines)
-│   ├── tiered_ui.c             # ncurses TUI frontend (1379 lines)
+│   ├── tiered_setup.c          # CLI backend
+│   ├── tiered_ui.c             # ncurses TUI frontend
 │   ├── tiered_common.h         # Shared validation (name/FS/mount whitelist)
 │   ├── tiered_ui_helpers.h     # TUI helpers (ui_disk_t, parse functions)
 │   └── version.h               # Version constant
 └── tests/
-    ├── test_common.c           # Validation tests (31 cases)
-    └── test_tui.c              # TUI parsing tests (22 cases)
+    ├── test_common.c           # Validation tests
+    └── test_tui.c              # TUI parsing tests
 ```
 
 ### Code Architecture
@@ -270,11 +295,17 @@ TieredVol/
 | `tiered_ui.c` | TUI frontend: 7 screens, 3-phase create wizard, background benchmarking, RAM cache tuning, terminal defense |
 | `tiered_common.h` | Input validation: `tiered_is_valid_name()`, `tiered_is_valid_fs()`, `tiered_is_valid_mount()` |
 | `tiered_ui_helpers.h` | `ui_disk_t` struct, `parse_bench_output()`, `bench_disk_done()` |
+| `tieredvol-restore.sh` | Boot restore script: reads `/etc/tieredvol/*.conf` and rebuilds dm-linear + LVM volumes |
+| `tieredvol-restore.service` | systemd unit: triggers restore script after local filesystem is mounted |
 
 ## Notes
 
 - **System disk cannot be used** — dm-linear returns EBUSY on mounted root partition
-- Selected disks will be **completely wiped**
+- **Already-carved disks blocked** — If a disk already has a `tv_*_carve` dm target, the program stops and tells you to remove the existing volume first. Removing a volume destroys all data on it — back up first.
+- **Carved portion will be overwritten** — dm-linear operates at block level, starting from sector 0. It cannot detect which blocks contain data. Any data on the carved portion will be permanently lost. Please back up before proceeding.
+- **dm-linear limitation** — dm-linear is a block-level tool, not filesystem-aware. It cannot "skip used blocks" or "only carve free space." This is a fundamental limitation of the Linux storage stack, not a defect of this project.
+- **Each disk can only be carved once** — dm-linear starts from sector 0; a second carve on the same disk would overwrite the first. If you need to re-carve, remove the existing volume first with `--remove`.
+- **Not persistent across reboot** — dm-linear targets and LVM volumes are not automatically restored on boot. Enable the systemd service with `sudo systemctl enable tieredvol-restore` for auto-restore.
 - Requires root privileges for all operations
 - RAM Cache settings auto-restore on exit
 - Carve size cannot exceed disk capacity (e.g., 1TB disk max carve = 999GB)

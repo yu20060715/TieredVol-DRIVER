@@ -760,6 +760,23 @@ static int cmd_create(int argc, char *argv[]) {
             continue;
         }
 
+        {
+            char target[64];
+            make_target(target, sizeof(target), disks_arr[i].disk);
+            char devpath[128];
+            snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
+            struct stat st;
+            if (stat(devpath, &st) == 0) {
+                fprintf(stderr, "Error: /dev/%s is already carved as %s.\n"
+                        "       Please remove the existing volume first:\n"
+                        "         sudo tiered_setup --remove --name <volume_name>\n"
+                        "       WARNING: Removing the volume will destroy all data on it.\n"
+                        "       Please back up your data before proceeding.\n",
+                        disks_arr[i].disk, target);
+                return 1;
+            }
+        }
+
         if (disks_arr[i].size_gb <= 1) {
             fprintf(stderr, "Error: /dev/%s size not detected or too small\n", disks_arr[i].disk);
             return 1;
@@ -881,18 +898,38 @@ static int cmd_create(int argc, char *argv[]) {
     printf("\n");
 
     double total_speed = 0;
-    printf("  %-12s %-8s %-8s %-10s %-10s\n", "DEVICE", "CARVE", "SPEED", "TIER", "RATIO");
-    printf("  %-12s %-8s %-8s %-10s %-10s\n", "------------", "--------", "--------", "----------", "----------");
+    printf("  %-12s %-8s %-8s %-10s %-10s %-10s\n", "DEVICE", "CARVE", "REMAIN", "SPEED", "TIER", "RATIO");
+    printf("  %-12s %-8s %-8s %-10s %-10s %-10s\n", "------------", "--------", "--------", "----------", "----------", "----------");
     for (int i = 0; i < valid_disks; i++) total_speed += valid[i].speed_write;
     for (int i = 0; i < valid_disks; i++) {
         double ratio = (total_speed > 0) ? valid[i].speed_write / total_speed * 100 : 0;
-        printf("  %-12s %-8lldGB %-8.0f %-10s %-10.1f%%\n",
-               valid[i].disk, valid[i].carve_gb, valid[i].speed_write,
+        long long remain = valid[i].size_gb - valid[i].carve_gb;
+        printf("  %-12s %-8lldGB %-8lldGB %-8.0f %-10s %-10.1f%%\n",
+               valid[i].disk, valid[i].carve_gb, remain, valid[i].speed_write,
                (i == 0) ? "FAST" : (i == valid_disks - 1) ? "SLOW" : "MED",
                ratio);
     }
     printf("  Total theoretical speed: %.0f MB/s\n", total_speed);
     printf("  Estimated actual: ~%.0f MB/s\n", total_speed * 0.94);
+    printf("\n");
+
+    printf("  ================================================================\n");
+    printf("  WARNING: The following disks will have their beginning sectors\n");
+    printf("           overwritten. Any data on the carved portion will be\n");
+    printf("           PERMANENTLY LOST.\n");
+    printf("  ================================================================\n");
+    for (int i = 0; i < valid_disks; i++) {
+        printf("    /dev/%s  — carving %lldGB of %lldGB\n",
+               valid[i].disk, valid[i].carve_gb, valid[i].size_gb);
+    }
+    printf("\n  Please back up your data before proceeding.\n");
+    printf("  Type YES to confirm (anything else to abort): ");
+    fflush(stdout);
+    char confirm[16] = "";
+    if (!fgets(confirm, sizeof(confirm), stdin) || strncmp(confirm, "YES", 3) != 0) {
+        fprintf(stderr, "\nAborted by user.\n");
+        return 1;
+    }
     printf("\n");
 
     printf("Step 1: Cleaning up old targets...\n");
