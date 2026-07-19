@@ -3,7 +3,7 @@
 ## 系統需求
 
 - Linux（已測試 Ubuntu 24.04, kernel 6.14）
-- `lvm2` `dmsetup` `libncurses-dev` `gcc` `make`
+- `lvm2` `dmsetup` `libncurses-dev` `liburing-dev` `gcc` `make`
 - Root 權限（sudo）
 
 ### 安裝依賴

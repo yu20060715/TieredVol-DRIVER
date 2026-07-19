@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
-#include <ctype.h>
 #include "tiered_sched.h"
 
 static void usage(void) {

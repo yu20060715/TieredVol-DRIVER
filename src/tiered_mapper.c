@@ -1,10 +1,11 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "tiered_sched.h"
 
 TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta) {
-    TV_MAP map = {0, 0, 0};
-    if (!meta || meta->segment_count == 0) return map;
+    TV_MAP err = {-1, 0, 0};
+    if (!meta || meta->segment_count == 0) return err;
 
     /* Find segment by linear scan (could be binary search for large seg counts) */
     int seg_idx = -1;
@@ -90,5 +91,5 @@ uint64_t tv_map_reverse(int disk_index, uint64_t disk_offset, TV_METADATA *meta)
 
     fprintf(stderr, "tv_map_reverse: disk_index %d offset %lu not found\n",
             disk_index, (unsigned long)disk_offset);
-    return 0;
+    return UINT64_MAX;
 }

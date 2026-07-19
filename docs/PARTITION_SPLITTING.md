@@ -312,7 +312,7 @@ physical_offset = stripe_no × (weight × chunk) + offset_in_disk
 ## 整合到 TieredVol
 
 ```
-sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 --scheduler --fs ext4 --mount /mnt/fast
+sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 --scheduler
 
 程式內部：
   1. benchmark → 取得速度

@@ -1,6 +1,7 @@
 # Compiled binaries
 tiered_setup
 tiered_ui
+tiered_io
 test_tui
 test_common
 

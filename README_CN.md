@@ -68,8 +68,7 @@ NVMe 空等 SATA 完成            所有磁碟大約同時完成
 # 使用加權條帶化建立 session
 sudo tiered_setup --create --name fastpool \
     --disks nvme0n1:1000,sda:500,sdb:500 \
-    --scheduler \
-    --fs ext4 --mount /mnt/fast
+    --scheduler
 ```
 
 詳細實作見：
@@ -166,7 +165,7 @@ sudo pacman -S lvm2 ncurses gcc make liburing
 ## 建置
 
 ```bash
-make              # 編譯 tiered_setup + tiered_ui
+make              # 編譯 tiered_setup + tiered_ui + tiered_io
 make test         # 執行所有測試（56 個 test case）
 make clean        # 刪除所有編譯产物
 sudo make install # 安裝到 /usr/local/bin/
@@ -263,7 +262,7 @@ TieredVol/
 
 ## 限制
 
-- **I/O 路徑尚未整合** — `tv_write()` / `tv_read()` 已實作但沒有呼叫端。`--scheduler` 參數目前僅建立 metadata，實際加權 I/O 尚未端對端驗證。
+- **I/O 路徑已整合** — `tv_write()` / `tv_read()` 已實作，並由 `tiered_io` CLI 工具呼叫。透過 `tiered_io --bench`、`tiered_io --write`、`tiered_io --read` 驗證。FUSE/libtiered 整合尚未完成。
 - **僅支援靜態 weight** — Weight 在初始化時計算並固定。更改 weight 會使所有 mapping 失效。
 - **無容錯機制** — 任何磁碟故障即導致整組 stripe set 損毀。無 degraded mode、無 rebuild、無 mirror/parity。
 - **無法攔截 POSIX write()** — 應用程式必須使用 `tv_write()` / `tv_read()`。標準 `write()` 走檔案系統，不經過 scheduler。

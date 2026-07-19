@@ -68,8 +68,7 @@ NVMe idle waiting for SATA     All disks finish at approximately
 # Create a weighted striping session
 sudo tiered_setup --create --name fastpool \
     --disks nvme0n1:1000,sda:500,sdb:500 \
-    --scheduler \
-    --fs ext4 --mount /mnt/fast
+    --scheduler
 ```
 
 For implementation details, see:
@@ -166,7 +165,7 @@ sudo pacman -S lvm2 ncurses gcc make liburing
 ## Build
 
 ```bash
-make              # Build tiered_setup + tiered_ui
+make              # Build tiered_setup + tiered_ui + tiered_io
 make test         # Run all tests (56 test cases)
 make clean        # Remove all build artifacts
 sudo make install # Install to /usr/local/bin/
@@ -263,7 +262,7 @@ TieredVol/
 
 ## Limitations
 
-- **I/O path not yet integrated** — `tv_write()` / `tv_read()` are implemented but not called by any entry point. The `--scheduler` flag currently only builds metadata; actual weighted I/O has not been end-to-end verified.
+- **I/O path integration** — `tv_write()` / `tv_read()` are implemented and called by `tiered_io` CLI tool. End-to-end verified via `tiered_io --bench`, `tiered_io --write`, and `tiered_io --read`. FUSE/libtiered integration not yet available.
 - **Static weights only** — Weights are computed at initialization and fixed. Changing weights invalidates all mappings.
 - **No fault tolerance** — If any disk fails, the entire stripe set is lost. No degraded mode, no rebuild, no mirror/parity.
 - **No POSIX write() interception** — Applications must use `tv_write()` / `tv_read()`. Standard `write()` goes to the filesystem, not the scheduler.

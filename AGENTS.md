@@ -49,6 +49,8 @@ TieredVol/
 │   ├── test_common.c           # 驗證函式測試
 │   └── test_tui.c              # TUI 解析測試
 ├── scripts/
+│   ├── install_deps.sh         # 一鍵安裝依賴 + 建置
+│   ├── test_scheduler.sh       # End-to-end scheduler 測試
 │   ├── tieredvol-restore.sh
 │   └── tieredvol-restore.service
 ├── docs/
@@ -155,7 +157,6 @@ sudo ./tiered_io --name fastpool --bench --size 128MB
 ```
 
 **仍缺少**：
-- 隨機 offset write（目前 tv_write 從 logical_begin=0 開始，不支援指定 offset）
 - FUSE 檔案系統介面（讓 cp/dd/fio 直接用）
 - libtiered.so 共用函式庫
 
@@ -179,8 +180,7 @@ sudo ./tiered_io --name fastpool --bench --size 128MB
 # Step 1: 建立 scheduler volume
 sudo ./tiered_setup --create --name testpool \
     --disks nvme0n1:100,sda:100 \
-    --scheduler \
-    --fs ext4 --mount /mnt/test
+    --scheduler
 
 # Step 2: 用 tiered_io 測試
 sudo ./tiered_io --name testpool --info

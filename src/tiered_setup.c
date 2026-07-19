@@ -32,6 +32,7 @@ static void print_usage(const char *prog) {
     printf("Usage:\n");
     printf("  %s --list                              List all disks\n", prog);
     printf("  %s --bench --disks sda,sdb,sdc         Benchmark disks (parallel)\n", prog);
+    printf("  %s --bench --disks sda,sdb --sequential Benchmark disks (sequential)\n", prog);
     printf("  %s --create --name NAME --disks ...    Create tiered volume\n", prog);
     printf("  %s --create --name NAME --disks ... --scheduler  Create with weighted I/O scheduler\n", prog);
     printf("  %s --remove --name NAME                Remove tiered volume\n", prog);
@@ -84,9 +85,14 @@ static int run_capture(const char *path, char *const argv[], char *out, size_t o
         _exit(127);
     }
     close(pfd[1]);
-    ssize_t n = read(pfd[0], out, outsize - 1);
+    size_t total = 0;
+    while (total < outsize - 1) {
+        ssize_t n = read(pfd[0], out + total, outsize - 1 - total);
+        if (n <= 0) break;
+        total += n;
+    }
     close(pfd[0]);
-    out[n > 0 ? n : 0] = 0;
+    out[total] = 0;
     int status;
     waitpid(pid, &status, 0);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -1053,6 +1059,7 @@ static int cmd_create(int argc, char *argv[]) {
             tv_disks[i].fd = open(devpath, O_RDWR);
             if (tv_disks[i].fd < 0) {
                 fprintf(stderr, "Error: cannot open %s: %s\n", devpath, strerror(errno));
+                for (int j = 0; j < i; j++) close(tv_disks[j].fd);
                 cleanup_create(name, valid, valid_disks);
                 return 1;
             }
@@ -1271,6 +1278,10 @@ static int cmd_remove(int argc, char *argv[]) {
         return 1;
     }
 
+    if (use_scheduler && (mount_point || strcmp(fs, "ext4") != 0)) {
+        fprintf(stderr, "Warning: --fs and --mount are ignored with --scheduler\n");
+    }
+
     printf("=== TieredVol: Removing '%s' ===\n", name);
 
     /* Check for scheduler volume first */
@@ -1296,21 +1307,46 @@ static int cmd_remove(int argc, char *argv[]) {
 
         /* Remove dm-linear targets */
         printf("Removing dm-linear targets...\n");
+        if (ntargets == 0) {
+            fprintf(stderr, "  Warning: could not read metadata, attempting to find targets by name pattern\n");
+            FILE *p = popen("sudo dmsetup ls 2>/dev/null", "r");
+            if (p) {
+                char line[256];
+                while (fgets(line, sizeof(line), p) && ntargets < MAX_DISKS) {
+                    line[strcspn(line, "\n")] = 0;
+                    char *tok = strtok(line, "\t ");
+                    if (!tok) continue;
+                    /* Match tv_<disk>_carve targets for this volume's disks */
+                    if (strncmp(tok, "tv_", 3) == 0 && strstr(tok, "_carve")) {
+                        snprintf(targets[ntargets], sizeof(targets[0]), "%s", tok);
+                        ntargets++;
+                    }
+                }
+                pclose(p);
+            }
+        }
         for (int i = 0; i < ntargets; i++) {
             char *const dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
             (void)run_sudo_argv(dm_argv);
             printf("  Removed %s\n", targets[i]);
         }
 
-        /* Remove .scheduler metadata */
+        /* Remove .scheduler and .conf metadata */
         printf("Removing scheduler metadata...\n");
         {
             char *rm_argv[] = {"sudo", "rm", "-f", sched_path, NULL};
             (void)run_sudo_argv(rm_argv);
         }
-        char rmdir_cmd[256];
-        snprintf(rmdir_cmd, sizeof(rmdir_cmd), "rmdir /etc/tieredvol 2>/dev/null");
-        (void)system(rmdir_cmd);
+        {
+            char conf_path_cleanup[256];
+            snprintf(conf_path_cleanup, sizeof(conf_path_cleanup), "/etc/tieredvol/%s.conf", name);
+            char *rm_argv[] = {"sudo", "rm", "-f", conf_path_cleanup, NULL};
+            (void)run_sudo_argv(rm_argv);
+        }
+        {
+            char *rmdir_argv[] = {"sudo", "rmdir", "/etc/tieredvol", NULL};
+            (void)run_sudo_argv(rmdir_argv);
+        }
 
         printf("\n=== Remove Complete ===\n");
         return 0;
@@ -1467,9 +1503,22 @@ int main(int argc, char *argv[]) {
 
     const char *deps[] = {"dmsetup", "vgcreate", "pvcreate", NULL};
     for (int i = 0; deps[i]; i++) {
-        char cmd[64];
-        snprintf(cmd, sizeof(cmd), "which %s > /dev/null 2>&1", deps[i]);
-        if (system(cmd) != 0) {
+        char path_buf[256];
+        const char *path_env = getenv("PATH");
+        if (!path_env) path_env = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+        int found = 0;
+        char *path_copy = strdup(path_env);
+        if (path_copy) {
+            char *saveptr = NULL;
+            char *dir = strtok_r(path_copy, ":", &saveptr);
+            while (dir) {
+                snprintf(path_buf, sizeof(path_buf), "%s/%s", dir, deps[i]);
+                if (access(path_buf, X_OK) == 0) { found = 1; break; }
+                dir = strtok_r(NULL, ":", &saveptr);
+            }
+            free(path_copy);
+        }
+        if (!found) {
             fprintf(stderr, "Error: '%s' not found. Install lvm2: apt install lvm2\n", deps[i]);
             return 1;
         }

@@ -106,6 +106,29 @@ static void detect_existing_volume(void) {
             mline = strtok(NULL, "\n");
         }
     }
+
+    /* If no LVM volume found, check for scheduler volume */
+    if (!vol_name[0]) {
+        char sched_out[2048] = "";
+        run_cmd("ls /etc/tieredvol/*.scheduler 2>/dev/null", sched_out, sizeof(sched_out));
+        char *sline = strtok(sched_out, "\n");
+        while (sline) {
+            /* Extract name from path like /etc/tieredvol/fastpool.scheduler */
+            char *base = strrchr(sline, '/');
+            if (base) {
+                base++;
+                char *dot = strstr(base, ".scheduler");
+                if (dot) {
+                    int len = dot - base;
+                    if (len > 0 && len < (int)sizeof(vol_name)) {
+                        strncpy(vol_name, base, len);
+                        vol_name[len] = 0;
+                    }
+                }
+            }
+            break;
+        }
+    }
 }
 
 static int run_cmd(const char *cmd, char *out, int outsize) {

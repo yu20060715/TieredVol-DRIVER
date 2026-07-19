@@ -47,9 +47,9 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-for bin in "$SETUP" "$IO" dmsetup lvm2; do
-    if ! command -v "$bin" &>/dev/null && [[ "$bin" != "$SETUP" && "$bin" != "$IO" ]]; then
-        fail "'$bin' not found. Run: apt install lvm2"
+for bin in dmsetup vgcreate; do
+    if ! command -v "$bin" &>/dev/null; then
+        fail "'$bin' not found. Run: sudo apt install lvm2 (or dnf/pacman equivalent)"
         exit 1
     fi
 done
