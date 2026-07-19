@@ -1293,7 +1293,7 @@ static int cmd_remove(int argc, char *argv[]) {
             }
         }
 
-        /* Remove dm-linear targets */
+        /* Remove dm-linear targets (retry up to 3 times for kernel release) */
         printf("Removing dm-linear targets...\n");
         if (ntargets == 0) {
             fprintf(stderr, "  Warning: could not read metadata, attempting to find targets by name pattern\n");
@@ -1304,7 +1304,6 @@ static int cmd_remove(int argc, char *argv[]) {
                     line[strcspn(line, "\n")] = 0;
                     char *tok = strtok(line, "\t ");
                     if (!tok) continue;
-                    /* Match tv_<disk>_carve targets for this volume's disks */
                     if (strncmp(tok, "tv_", 3) == 0 && strstr(tok, "_carve")) {
                         snprintf(targets[ntargets], sizeof(targets[0]), "%s", tok);
                         ntargets++;
@@ -1314,9 +1313,22 @@ static int cmd_remove(int argc, char *argv[]) {
             }
         }
         for (int i = 0; i < ntargets; i++) {
-            char *const dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
-            (void)run_sudo_argv(dm_argv);
-            printf("  Removed %s\n", targets[i]);
+            int removed = 0;
+            for (int retry = 0; retry < 3; retry++) {
+                char *const dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
+                if (run_sudo_argv(dm_argv) == 0) {
+                    removed = 1;
+                    break;
+                }
+                if (retry < 2) {
+                    fprintf(stderr, "  %s busy, retrying in 1s...\n", targets[i]);
+                    sleep(1);
+                }
+            }
+            if (removed)
+                printf("  Removed %s\n", targets[i]);
+            else
+                fprintf(stderr, "  Failed to remove %s after retries\n", targets[i]);
         }
 
         /* Remove .scheduler and .conf metadata */
