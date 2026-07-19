@@ -12,7 +12,7 @@ tiered_setup: src/tiered_setup.c src/tiered_common.h src/tiered_sched.h src/vers
 	$(CC) $(CFLAGS) -o $@ src/tiered_setup.c $(SCHED_OBJS) -lm -luring
 
 tiered_ui: src/tiered_ui.c src/tiered_common.h src/tiered_ui_helpers.h src/tiered_sched.h src/version.h $(SCHED_OBJS)
-	$(CC) $(CFLAGS) -o $@ src/tiered_ui.c $(SCHED_OBJS) -lncurses -lm -luring
+	$(CC) $(CFLAGS) -o $@ src/tiered_ui.c $(SCHED_OBJS) -lncurses -luring
 
 tiered_io: src/tiered_io.c src/tiered_sched.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ src/tiered_io.c $(SCHED_OBJS) -luring
@@ -24,9 +24,6 @@ src/tiered_partition.o: src/tiered_partition.c src/tiered_sched.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/tiered_mapper.o: src/tiered_mapper.c src/tiered_sched.h
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-src/tiered_stripe_buf.o: src/tiered_stripe_buf.c src/tiered_sched.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/tiered_io_uring.o: src/tiered_io_uring.c src/tiered_sched.h

@@ -237,7 +237,6 @@ TieredVol/
 │   ├── tiered_sched.h          # Scheduler structs + API
 │   ├── tiered_sched.c          # Scheduler core
 │   ├── tiered_mapper.c         # Offset mapping
-│   ├── tiered_stripe_buf.c     # Stripe buffer
 │   ├── tiered_io_uring.c       # io_uring wrapper
 │   ├── tiered_benchmark.c      # Initialization benchmark
 │   ├── tiered_partition.c      # Weight + segment calculation
@@ -256,7 +255,6 @@ TieredVol/
 | `tiered_ui.c` | TUI frontend: 7 screens, create wizard, benchmarking, RAM cache tuning |
 | `tiered_sched.c` | Scheduler core: init, write (buffer + flush), read (mapping + io_uring), destroy |
 | `tiered_mapper.c` | Logical ↔ Physical offset mapping (prefix sum + linear scan) |
-| `tiered_stripe_buf.c` | Stripe buffer management (ring buffer, flush when full) |
 | `tiered_io_uring.c` | io_uring wrapper (SQE/CQE, submit, wait) |
 | `tiered_benchmark.c` | Initialization benchmark (O_DIRECT, 3 runs average) — **not a storage benchmark** |
 | `tiered_partition.c` | Weight calculation, capacity segmentation, segment building |

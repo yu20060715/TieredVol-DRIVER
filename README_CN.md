@@ -237,7 +237,6 @@ TieredVol/
 │   ├── tiered_sched.h          # Scheduler struct + API
 │   ├── tiered_sched.c          # Scheduler 核心
 │   ├── tiered_mapper.c         # Offset mapping
-│   ├── tiered_stripe_buf.c     # Stripe buffer
 │   ├── tiered_io_uring.c       # io_uring wrapper
 │   ├── tiered_benchmark.c      # 初始化 benchmark
 │   ├── tiered_partition.c      # Weight + segment 計算
@@ -256,7 +255,6 @@ TieredVol/
 | `tiered_ui.c` | TUI 前端：7 個畫面、建立精靈、測速、RAM cache 調整 |
 | `tiered_sched.c` | Scheduler 核心：init、write（buffer + flush）、read（mapping + io_uring）、destroy |
 | `tiered_mapper.c` | Logical ↔ Physical offset mapping（prefix sum + linear scan） |
-| `tiered_stripe_buf.c` | Stripe buffer 管理（ring buffer，滿了就 flush） |
 | `tiered_io_uring.c` | io_uring wrapper（SQE/CQE、submit、wait） |
 | `tiered_benchmark.c` | 初始化 benchmark（O_DIRECT，3 次取平均）— **不是儲存 benchmark** |
 | `tiered_partition.c` | Weight 計算、容量分段、segment 建立 |

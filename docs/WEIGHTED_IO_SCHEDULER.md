@@ -26,9 +26,9 @@ TieredVol Scheduler
   │  5. 等 CQE 完成             │
   └─────────────────────────────┘
      ↓
-NVMe ← 256KB
-SATA1 ← 64KB
-SATA2 ← 64KB
+NVMe ← 1792KB
+SATA1 ← 1024KB
+SATA2 ← 256KB
 ```
 
 TieredVol 不是 RAID，而是一個 **I/O Scheduler**。它自己控制資料怎麼分配到各碟，不依賴 LVM striping。
@@ -65,16 +65,16 @@ TieredVol 不是 RAID，而是一個 **I/O Scheduler**。它自己控制資料�
 從 PARTITION_SPLITTING.md 的演算法得到 weight 後，建立查表用的 prefix sum table：
 
 ```
-chunk_size = 64KB
+chunk_size = 256KB
 weight = [6, 3, 2, 1]   (A, B, C, D)
 
 disk_boundary[0] = 0              (A start)
-disk_boundary[1] = 6 × 64 = 384  (B start)
-disk_boundary[2] = 9 × 64 = 576  (C start)
-disk_boundary[3] = 11 × 64 = 704 (D start)
-disk_boundary[4] = 12 × 64 = 768 (stripe end)
+disk_boundary[1] = 6 × 256 = 1536  (B start)
+disk_boundary[2] = 9 × 256 = 2304  (C start)
+disk_boundary[3] = 11 × 256 = 2816 (D start)
+disk_boundary[4] = 12 × 256 = 3072 (stripe end)
 
-stripe_size = 768KB
+stripe_size = 3072KB
 ```
 
 任何 offset 落在哪個範圍，就知道對應哪顆碟。
@@ -101,16 +101,16 @@ disk_offset  = stripe_no * weight[disk_index] * chunk_size
 ### 具體範例
 
 ```
-logical_offset = 2MB = 2048KB
-stripe_size = 768KB
+logical_offset = 4MB = 4096KB
+stripe_size = 3072KB
 
-stripe_no = 2048 / 768 = 2
-offset_in = 2048 % 768 = 512
+stripe_no = 4096 / 3072 = 1
+offset_in = 4096 % 3072 = 1024
 
-disk_boundary = [0, 384, 576, 704, 768]
-512 落在 [384, 576) → disk B (index 1)
+disk_boundary = [0, 1536, 2304, 2816, 3072]
+1024 落在 [0, 1536) → disk A (index 0)
 
-disk_offset = 2 × 3 × 64KB + (512 - 384) = 384KB + 128KB = 512KB
+disk_offset = 1 × 6 × 256KB + 1024 = 1536KB + 1024KB = 2560KB
 ```
 
 ### 讀取：Physical → Logical
@@ -124,19 +124,19 @@ disk_offset = 2 × 3 × 64KB + (512 - 384) = 384KB + 128KB = 512KB
 
 ## Stripe Buffer（Partial Stripe 處理）
 
-應用程式不一定寫 stripe_size 的整數倍。例如 stripe_size = 768KB，但應用寫 100KB。
+應用程式不一定寫 stripe_size 的整數倍。例如 stripe_size = 3072KB，但應用寫 100KB。
 
 ### 方案 A：Buffer（推薦）
 
-TieredVol 內部維護 ring buffer：
+TieredVol 內部維護 pipeline pool（`TV_STRIPE_BUF` ring）：
 
 ```
-寫入 100KB → buffer: [100KB / 768KB]
-寫入 200KB → buffer: [300KB / 768KB]
-寫入 468KB → buffer: [768KB / 768KB] → flush → dispatch
+寫入 100KB → buffer: [100KB / stripe_size]
+寫入 200KB → buffer: [300KB / stripe_size]
+寫入 468KB → buffer 滿 → flush → dispatch
 ```
 
-使用 `TV_BUFFER` struct（定義在 `src/tiered_sched.h`）。實作見 `src/tiered_stripe_buf.c`。
+使用 `TV_STRIPE_BUF` struct（定義在 `src/tiered_sched.h`）。實作見 `src/tiered_sched.c`。
 
 ### flush_stripe：真正 dispatch
 
@@ -192,10 +192,10 @@ for (int i = 0; i < (int)seg->disk_count; i++) {
 只需要保存：
 
 ```
-chunk_size:     64KB
+chunk_size:     256KB
 weight:         [6, 3, 2, 1]
 disk_list:      [nvme0n1, sda, sdb, sdc]
-stripe_size:    768KB  (= sum(weight) × chunk_size)
+stripe_size:    3072KB  (= sum(weight) × chunk_size)
 ```
 
 不需要記錄每個 block 的位置。所有映射都可以從 weight + offset 計算得出。
@@ -206,7 +206,7 @@ stripe_size:    768KB  (= sum(weight) × chunk_size)
 # /etc/tieredvol/fastpool.scheduler
 [weighted_striping]
 version=1
-chunk_size=65536
+chunk_size=262144
 segment_count=3
 disk_count=4
 disk0_name=nvme0n1
@@ -247,11 +247,11 @@ seg2_stripe=45088768
 
 Scheduler 核心：io_uring ring, metadata 指標, 碟陣列, stripe buffer。
 
-### TV_BUFFER
+### TV_STRIPE_BUF
 
-Stripe buffer：data 指標, 使用量, 邏輯起始 offset。
+Stripe buffer：data 指標, 使用量, 邏輯起始 offset, in_flight 計數, CQEs pending。
 
-buffer 固定大小 = stripe_size（例如 896KB）。
+buffer 固定大小 = stripe_size（例如 3072KB）。Scheduler 內建 pipeline pool（8 個 buffer 交替使用）。
 
 ---
 
@@ -277,8 +277,8 @@ buffer: 400KB
 
 第三次：
 ```
-write(fd, data, 496KB)
-buffer: 896KB → 滿了 → 開始 Flush
+write(fd, data, 2772KB)
+buffer: 3072KB → 滿了 → 開始 Flush
 ```
 
 ---
@@ -290,20 +290,20 @@ buffer: 896KB → 滿了 → 開始 Flush
 依 weight 切分 buffer：
 ```
 weight = [7, 4, 2, 1]
-chunk = 64KB
+chunk = 256KB
 
-disk0: 7 × 64KB = 448KB
-disk1: 4 × 64KB = 256KB
-disk2: 2 × 64KB = 128KB
-disk3: 1 × 64KB =  64KB
+disk0: 7 × 256KB = 1792KB
+disk1: 4 × 256KB = 1024KB
+disk2: 2 × 256KB = 512KB
+disk3: 1 × 256KB = 256KB
 ```
 
 pointer 切分：
 ```
-buffer 0~448KB   → disk0
-buffer 448~704KB → disk1
-buffer 704~832KB → disk2
-buffer 832~896KB → disk3
+buffer 0~1792KB    → disk0
+buffer 1792~2816KB → disk1
+buffer 2816~3328KB → disk2
+buffer 3328~3584KB → disk3
 ```
 
 ### Step 2：Build SQE
@@ -312,10 +312,10 @@ buffer 832~896KB → disk3
 ```c
 struct io_uring_sqe *sqe;
 
-sqe0: disk0, 448KB, offset = map_logical_offset(...)
-sqe1: disk1, 256KB, offset = map_logical_offset(...)
-sqe2: disk2, 128KB, offset = map_logical_offset(...)
-sqe3: disk3,  64KB, offset = map_logical_offset(...)
+sqe0: disk0, 1792KB, offset = map_logical_offset(...)
+sqe1: disk1, 1024KB, offset = map_logical_offset(...)
+sqe2: disk2, 512KB, offset = map_logical_offset(...)
+sqe3: disk3, 256KB, offset = map_logical_offset(...)
 ```
 
 ### Step 3：Submit
@@ -420,18 +420,18 @@ buffer.used = 0;  // 下一個 stripe
 ### 每輪怎麼走
 
 ```
-chunk_size = 64KB
+chunk_size = 256KB
 weight = [6, 3, 2, 1]
 
 每輪開始：
-  credit[A] += 6 × 64KB = 384KB
-  credit[B] += 3 × 64KB = 192KB
-  credit[C] += 2 × 64KB = 128KB
-  credit[D] += 1 × 64KB =  64KB
+  credit[A] += 6 × 256KB = 1536KB
+  credit[B] += 3 × 256KB = 768KB
+  credit[C] += 2 × 256KB = 512KB
+  credit[D] += 1 × 256KB = 256KB
 
 派工：
-  A credit 夠 64KB → 派 64KB → 扣 64KB
-  B credit 夠 64KB → 派 64KB → 扣 64KB
+  A credit 夠 256KB → 派 256KB → 扣 256KB
+  B credit 夠 256KB → 派 256KB → 扣 256KB
   ...以此類推
 ```
 
@@ -450,12 +450,12 @@ weight = [6, 3, 2, 1]
 ### Weighted Striping 的優勢
 
 ```
-Disk0: NVMe  3100 MB/s → weight=7 → 7 chunks = 448KB
-Disk1: SATA  1700 MB/s → weight=4 → 4 chunks = 256KB
-Disk2: SATA   800 MB/s → weight=2 → 2 chunks = 128KB
-Disk3: SATA   450 MB/s → weight=1 → 1 chunk  =  64KB
+Disk0: NVMe  3100 MB/s → weight=7 → 7 chunks = 1792KB
+Disk1: SATA  1700 MB/s → weight=4 → 4 chunks = 1024KB
+Disk2: SATA   800 MB/s → weight=2 → 2 chunks = 512KB
+Disk3: SATA   450 MB/s → weight=1 → 1 chunk  = 256KB
 
-一輪：14 chunks × 64KB = 896KB
+一輪：14 chunks × 256KB = 3584KB
 大家幾乎同時完成 → 整體吞吐量接近各碟速度總和
 ```
 
@@ -481,7 +481,6 @@ src/
 ├── tiered_sched.h          # 所有 struct + API 定義
 ├── tiered_sched.c          # Scheduler 核心
 ├── tiered_mapper.c         # Logical ↔ Physical offset 映射
-├── tiered_stripe_buf.c     # Stripe buffer (ring buffer)
 ├── tiered_io_uring.c       # io_uring wrapper
 ├── tiered_benchmark.c      # 測速
 ├── tiered_partition.c      # Segment 計算

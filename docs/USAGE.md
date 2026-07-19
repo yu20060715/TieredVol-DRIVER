@@ -336,14 +336,14 @@ sudo tiered_io --name fastpool --info
 輸出 metadata 和 segment 資訊：
 
 ```
-Metadata: v1, chunk=64KB, 2 disks, 2 segments
+Metadata: v1, chunk=256KB, 2 disks, 2 segments
   Disk[0] nvme0n1
   Disk[1] sda
-  Segment[0]: 0 - 53687091200 (2 disks, stripe=192KB)
-    disk[0] weight=2 chunk=128KB
-    disk[1] weight=1 chunk=64KB
-  Segment[1]: 53687091200 - 107374182400 (1 disks, stripe=64KB)
-    disk[1] weight=1 chunk=64KB
+  Segment[0]: 0 - 53687091200 (2 disks, stripe=768KB)
+    disk[0] weight=2 chunk=512KB
+    disk[1] weight=1 chunk=256KB
+  Segment[1]: 53687091200 - 107374182400 (1 disks, stripe=256KB)
+    disk[1] weight=1 chunk=256KB
 ```
 
 ### 寫入 Benchmark
@@ -356,12 +356,12 @@ sudo tiered_io --name fastpool --bench --size 128MB
 sudo tiered_io --name fastpool --bench --size 128MB --warmup
 
 # 大 size + O_DIRECT + 持久速度
-sudo tiered_io --name fastpool --bench --size 1GB --direct --warmup
+sudo tiered_io --name fastpool --bench --size 1GB --warmup
 ```
 
 透過 weighted striping 寫入指定大小的資料，測量吞吐量。
 加 `--warmup` 先寫 20%% 的 volume（最多4GB）填滿 SLC cache 再測，得到持久速度。
-加 `--direct` 繞過 page cache，得到真實磁碟速度。
+預設使用 O_DIRECT（繞過 page cache，得到真實磁碟速度）。加 `--no-direct` 可關閉。
 
 輸出範例：
 ```
