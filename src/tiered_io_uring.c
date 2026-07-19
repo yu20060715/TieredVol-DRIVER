@@ -3,7 +3,7 @@
 #include <errno.h>
 #include "tiered_sched.h"
 
-int tv_uring_init(io_uring *ring, int queue_depth) {
+int tv_uring_init(struct io_uring *ring, int queue_depth) {
     int ret = io_uring_queue_init(queue_depth, ring, 0);
     if (ret < 0) {
         fprintf(stderr, "io_uring_queue_init failed: %s\n", strerror(-ret));
@@ -12,7 +12,7 @@ int tv_uring_init(io_uring *ring, int queue_depth) {
     return 0;
 }
 
-int tv_uring_write(io_uring *ring, int fd, void *buf, size_t len, off_t offset) {
+int tv_uring_write(struct io_uring *ring, int fd, const void *buf, size_t len, off_t offset) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     if (!sqe) return -1;
 
@@ -21,7 +21,7 @@ int tv_uring_write(io_uring *ring, int fd, void *buf, size_t len, off_t offset) 
     return 0;
 }
 
-int tv_uring_read(io_uring *ring, int fd, void *buf, size_t len, off_t offset) {
+int tv_uring_read(struct io_uring *ring, int fd, void *buf, size_t len, off_t offset) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     if (!sqe) return -1;
 
@@ -30,7 +30,7 @@ int tv_uring_read(io_uring *ring, int fd, void *buf, size_t len, off_t offset) {
     return 0;
 }
 
-int tv_uring_submit(io_uring *ring) {
+int tv_uring_submit(struct io_uring *ring) {
     int ret = io_uring_submit(ring);
     if (ret < 0) {
         fprintf(stderr, "io_uring_submit failed: %s\n", strerror(-ret));
@@ -39,7 +39,7 @@ int tv_uring_submit(io_uring *ring) {
     return 0;
 }
 
-int tv_uring_wait(io_uring *ring) {
+int tv_uring_wait(struct io_uring *ring) {
     struct io_uring_cqe *cqe = NULL;
     int ret = io_uring_wait_cqe(ring, &cqe);
     if (ret < 0) {
@@ -51,6 +51,6 @@ int tv_uring_wait(io_uring *ring) {
     return res;
 }
 
-void tv_uring_destroy(io_uring *ring) {
+void tv_uring_destroy(struct io_uring *ring) {
     io_uring_queue_exit(ring);
 }

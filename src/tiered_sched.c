@@ -75,9 +75,10 @@ int tv_flush(TV_SCHED *sched) {
         boundary[i + 1] = boundary[i] + (uint64_t)seg->weight[i] * TV_CHUNK_SIZE;
     }
 
-    size_t buf_pos = 0;
+    uint64_t buf_pos = 0;
+    uint64_t remaining = sched->buf.used;
 
-    for (int i = 0; i < (int)seg->disk_count; i++) {
+    for (int i = 0; i < (int)seg->disk_count && remaining > 0; i++) {
         uint64_t disk_bytes = (uint64_t)seg->weight[i] * TV_CHUNK_SIZE;
         if (disk_bytes == 0) continue;
 
@@ -86,14 +87,16 @@ int tv_flush(TV_SCHED *sched) {
             return -1;
         }
 
+        uint64_t write_bytes = (disk_bytes < remaining) ? disk_bytes : remaining;
         uint64_t disk_off = stripe_no * disk_bytes;
         int fd = sched->disks[seg->disk_index[i]].fd;
 
         tv_uring_write(&sched->ring, fd,
                        sched->buf.data + buf_pos,
-                       (size_t)disk_bytes, (off_t)disk_off);
+                       (size_t)write_bytes, (off_t)disk_off);
 
-        buf_pos += disk_bytes;
+        buf_pos += write_bytes;
+        remaining -= write_bytes;
     }
 
     tv_uring_submit(&sched->ring);

@@ -28,8 +28,8 @@ int tv_buf_write(TV_BUFFER *buf, const void *data, uint64_t len) {
 
 void tv_buf_reset(TV_BUFFER *buf) {
     if (!buf) return;
+    buf->logical_begin += buf->used;
     buf->used = 0;
-    buf->logical_begin += buf->capacity;
 }
 
 void tv_buf_destroy(TV_BUFFER *buf) {

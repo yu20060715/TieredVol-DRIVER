@@ -51,7 +51,7 @@ typedef struct {
 } TV_BUFFER;
 
 typedef struct {
-    io_uring ring;
+    struct io_uring ring;
     TV_METADATA *meta;
     TV_DISK     *disks;
     int          ndisks;
@@ -80,5 +80,12 @@ int  tv_buf_init(TV_BUFFER *buf, uint64_t stripe_size);
 int  tv_buf_write(TV_BUFFER *buf, const void *data, uint64_t len);
 void tv_buf_reset(TV_BUFFER *buf);
 void tv_buf_destroy(TV_BUFFER *buf);
+
+int  tv_uring_init(struct io_uring *ring, int queue_depth);
+int  tv_uring_write(struct io_uring *ring, int fd, const void *buf, size_t len, off_t offset);
+int  tv_uring_read(struct io_uring *ring, int fd, void *buf, size_t len, off_t offset);
+int  tv_uring_submit(struct io_uring *ring);
+int  tv_uring_wait(struct io_uring *ring);
+void tv_uring_destroy(struct io_uring *ring);
 
 #endif
