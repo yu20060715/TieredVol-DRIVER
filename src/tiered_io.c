@@ -18,10 +18,12 @@ static void usage(void) {
         "  --write --offset <N> --len <N>   Write bytes (input from stdin)\n"
         "  --bench --size <N>MB      Write benchmark (default: 64MB)\n"
         "  --bench --size <N>GB      Write benchmark in GB\n"
+        "  --direct                  Use O_DIRECT (bypass page cache)\n"
         "\n"
         "Examples:\n"
         "  tiered_io --name fastpool --info\n"
         "  tiered_io --name fastpool --bench --size 128MB\n"
+        "  tiered_io --name fastpool --bench --size 1GB --direct\n"
         "  dd if=/dev/zero bs=1M count=10 | tiered_io --name fastpool --write --offset 0 --len 10485760\n"
         "  tiered_io --name fastpool --read --offset 0 --len 1024 | xxd\n"
     );
@@ -36,7 +38,8 @@ static uint64_t parse_size(const char *s) {
     return val;
 }
 
-static int open_disks(TV_METADATA *meta, TV_DISK *disks) {
+static int open_disks(TV_METADATA *meta, TV_DISK *disks, int use_direct) {
+    int flags = O_RDWR | (use_direct ? O_DIRECT : 0);
     for (uint32_t i = 0; i < meta->disk_count; i++) {
         memset(&disks[i], 0, sizeof(TV_DISK));
         disks[i].id = (int)i;
@@ -45,14 +48,15 @@ static int open_disks(TV_METADATA *meta, TV_DISK *disks) {
         char devpath[128];
         snprintf(devpath, sizeof(devpath), "/dev/mapper/tv_%s_carve",
                  meta->disk_names[i]);
-        disks[i].fd = open(devpath, O_RDWR);
+        disks[i].fd = open(devpath, flags);
         if (disks[i].fd < 0) {
             fprintf(stderr, "Error: cannot open %s: %s\n",
                     devpath, strerror(errno));
             for (int j = 0; j < (int)i; j++) close(disks[j].fd);
             return -1;
         }
-        fprintf(stderr, "Opened %s (fd=%d)\n", devpath, disks[i].fd);
+        fprintf(stderr, "Opened %s (fd=%d)%s\n", devpath, disks[i].fd,
+                use_direct ? " [O_DIRECT]" : "");
     }
     return 0;
 }
@@ -228,7 +232,7 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
 
 int main(int argc, char *argv[]) {
     const char *name = NULL;
-    int do_info = 0, do_read = 0, do_write = 0, do_bench = 0;
+    int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, use_direct = 0;
     uint64_t offset = 0, len = 0, bench_size = 64 * 1024 * 1024;
 
     for (int i = 1; i < argc; i++) {
@@ -242,6 +246,8 @@ int main(int argc, char *argv[]) {
             do_write = 1;
         } else if (strcmp(argv[i], "--bench") == 0) {
             do_bench = 1;
+        } else if (strcmp(argv[i], "--direct") == 0) {
+            use_direct = 1;
         } else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc) {
             offset = strtoull(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--len") == 0 && i + 1 < argc) {
@@ -281,7 +287,7 @@ int main(int argc, char *argv[]) {
 
     /* Open disks */
     TV_DISK disks[TV_MAX_DISKS];
-    if (open_disks(&meta, disks) < 0) {
+    if (open_disks(&meta, disks, use_direct) < 0) {
         return 1;
     }
 

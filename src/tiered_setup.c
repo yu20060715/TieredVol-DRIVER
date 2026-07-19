@@ -115,6 +115,25 @@ static int run_sudo_argv(char *const argv[]) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+static int run_sudo_quiet(char *const argv[]) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        char *sudo_argv[64];
+        sudo_argv[0] = "sudo";
+        int i = 1;
+        for (char *const *a = argv; *a && i < 62; a++) sudo_argv[i++] = *a;
+        sudo_argv[i] = NULL;
+        execvp("sudo", sudo_argv);
+        _exit(127);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
 typedef struct {
     char disk[32];
     char model[128];
@@ -967,20 +986,20 @@ static int cmd_create(int argc, char *argv[]) {
         make_target(target, sizeof(target), valid[i].disk);
         {
             char *const dm_argv[] = {"sudo", "dmsetup", "remove", target, NULL};
-            (void)run_sudo_argv(dm_argv);
+            (void)run_sudo_quiet(dm_argv);
         }
     }
     {
         char full_lv[256];
         snprintf(full_lv, sizeof(full_lv), "tv_vg_%s/tv_lv_%s", name, name);
         char *const lv_argv[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", full_lv, NULL};
-        (void)safe_execvp("lvremove", lv_argv);
+        (void)run_quiet("lvremove", lv_argv);
     }
     {
         char vg_name[128];
         snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
         char *const vg_argv[] = {"vgremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", vg_name, NULL};
-        (void)safe_execvp("vgremove", vg_argv);
+        (void)run_quiet("vgremove", vg_argv);
     }
     for (int i = 0; i < valid_disks; i++) {
         char target[64];
@@ -988,7 +1007,7 @@ static int cmd_create(int argc, char *argv[]) {
         char devpath[128];
         snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
         char *const pv_argv[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", devpath, NULL};
-        (void)safe_execvp("pvremove", pv_argv);
+        (void)run_quiet("pvremove", pv_argv);
     }
 
     printf("Step 2: Creating carved targets...\n");
