@@ -175,6 +175,14 @@ static int cmd_write(TV_SCHED *sched, uint64_t offset, uint64_t len) {
 }
 
 static int cmd_bench(TV_SCHED *sched, uint64_t size) {
+    uint64_t vol_size = sched->meta->segments[sched->meta->segment_count - 1].logical_end;
+    uint64_t remaining = vol_size - sched->sbuf_logical;
+    if (size > remaining) {
+        fprintf(stderr, "Warning: bench size (%lu MB) exceeds remaining volume (%lu MB), capping\n",
+                (unsigned long)(size / 1048576), (unsigned long)(remaining / 1048576));
+        size = remaining;
+    }
+
     uint8_t *buf = malloc((size_t)(sched->stripe_size));
     if (!buf) {
         fprintf(stderr, "Error: cannot allocate buffer\n");
