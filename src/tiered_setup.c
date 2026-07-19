@@ -704,6 +704,10 @@ static int cmd_create(int argc, char *argv[]) {
         return 1;
     }
 
+    if (use_scheduler && (mount_point || strcmp(fs, "ext4") != 0)) {
+        fprintf(stderr, "Warning: --fs and --mount are ignored with --scheduler\n");
+    }
+
     disk_t disks_arr[MAX_DISKS];
     int nd = 0;
     char buf[1024];
@@ -1276,10 +1280,6 @@ static int cmd_remove(int argc, char *argv[]) {
     if (!tiered_is_valid_name(name)) {
         fprintf(stderr, "Error: invalid name '%s'\n", name);
         return 1;
-    }
-
-    if (use_scheduler && (mount_point || strcmp(fs, "ext4") != 0)) {
-        fprintf(stderr, "Warning: --fs and --mount are ignored with --scheduler\n");
     }
 
     printf("=== TieredVol: Removing '%s' ===\n", name);
