@@ -3,6 +3,8 @@
 
 #include <string.h>
 
+#define MAX_DISKS 8
+
 static inline int tiered_is_valid_name(const char *name) {
     if (!name || !*name) return 0;
     for (const char *p = name; *p; p++) {

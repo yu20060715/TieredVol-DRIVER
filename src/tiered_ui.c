@@ -14,7 +14,6 @@
 #include "tiered_sched.h"
 #include "version.h"
 
-#define MAX_DISKS 8
 #define MIN_COLS 80
 #define MIN_ROWS 20
 
@@ -1372,9 +1371,22 @@ int main(int argc, char *argv[]) {
     {
         const char *deps[] = {"dmsetup", "vgcreate", "pvcreate", NULL};
         for (int i = 0; deps[i]; i++) {
-            char cmd[64];
-            snprintf(cmd, sizeof(cmd), "which %s > /dev/null 2>&1", deps[i]);
-            if (system(cmd) != 0) {
+            char path_buf[256];
+            const char *path_env = getenv("PATH");
+            if (!path_env) path_env = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+            int found = 0;
+            char *path_copy = strdup(path_env);
+            if (path_copy) {
+                char *saveptr = NULL;
+                char *dir = strtok_r(path_copy, ":", &saveptr);
+                while (dir) {
+                    snprintf(path_buf, sizeof(path_buf), "%s/%s", dir, deps[i]);
+                    if (access(path_buf, X_OK) == 0) { found = 1; break; }
+                    dir = strtok_r(NULL, ":", &saveptr);
+                }
+                free(path_copy);
+            }
+            if (!found) {
                 fprintf(stderr, "Error: '%s' not found. Install lvm2: apt install lvm2\n", deps[i]);
                 return 1;
             }

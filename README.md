@@ -62,7 +62,7 @@ NVMe idle waiting for SATA     All disks finish at approximately
 → throughput ≈ slowest disk    the same time → higher aggregate
 ```
 
-**Weight is generated at initialization** via a benchmark that measures sequential write speed with SLC cache warm-up (10GB pre-write). This ensures weights reflect sustained disk speed, not peak SLC cache speed.
+**Weight is generated at initialization** via a benchmark that measures sequential write speed with SLC cache warm-up (2GB pre-write). This ensures weights reflect sustained disk speed, not peak SLC cache speed.
 
 ```bash
 # Create a weighted striping session
@@ -271,7 +271,7 @@ TieredVol/
 - **No fault tolerance** — If any disk fails, the entire stripe set is lost. No degraded mode, no rebuild, no mirror/parity.
 - **No POSIX write() interception** — Applications must use `tv_write()` / `tv_read()`. Standard `write()` goes to the filesystem, not the scheduler.
 - **No partial stripe tracking** — Close/fsync behavior for partial stripes is not fully implemented.
-- **Benchmark is for initialization only** — The built-in benchmark measures initial sequential write speed with SLC cache warm-up (10GB pre-write). It is not a comprehensive storage benchmark (no latency, no queue depth sweep).
+- **Benchmark is for initialization only** — The built-in benchmark measures initial sequential write speed with SLC cache warm-up (2GB pre-write). It is not a comprehensive storage benchmark (no latency, no queue depth sweep).
 - **Not persistent across reboot** — dm-linear targets and LVM volumes require the systemd service for auto-restore.
 - **System disk cannot be used** — dm-linear returns EBUSY on mounted root partition.
 

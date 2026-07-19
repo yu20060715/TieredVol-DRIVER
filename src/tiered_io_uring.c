@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include "tiered_sched.h"
 
 int tv_uring_init(struct io_uring *ring, int queue_depth) {
@@ -13,6 +14,10 @@ int tv_uring_init(struct io_uring *ring, int queue_depth) {
 }
 
 int tv_uring_write(struct io_uring *ring, int fd, const void *buf, size_t len, off_t offset) {
+    if (len > UINT_MAX) {
+        fprintf(stderr, "tv_uring_write: len %zu exceeds UINT_MAX\n", len);
+        return -1;
+    }
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     if (!sqe) return -1;
 
@@ -22,6 +27,10 @@ int tv_uring_write(struct io_uring *ring, int fd, const void *buf, size_t len, o
 }
 
 int tv_uring_read(struct io_uring *ring, int fd, void *buf, size_t len, off_t offset) {
+    if (len > UINT_MAX) {
+        fprintf(stderr, "tv_uring_read: len %zu exceeds UINT_MAX\n", len);
+        return -1;
+    }
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
     if (!sqe) return -1;
 

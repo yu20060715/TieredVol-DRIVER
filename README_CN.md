@@ -62,7 +62,7 @@ NVMe 空等 SATA 完成            所有磁碟大約同時完成
 → 吞吐量 ≈ 最慢的碟            → 更高的整體吞吐量
 ```
 
-**Weight 在初始化時產生**，透過 benchmark 測量循序寫入速度，並在 SLC cache 預熱（先寫10GB）後測速。這確保 weight 反映的是持久速度，而非 SLC cache 衝刺速度。
+**Weight 在初始化時產生**，透過 benchmark 測量循序寫入速度，並在 SLC cache 預熱（先寫2GB）後測速。這確保 weight 反映的是持久速度，而非 SLC cache 衝刺速度。
 
 ```bash
 # 使用加權條帶化建立 session

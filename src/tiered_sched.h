@@ -57,6 +57,11 @@ typedef struct {
     TV_DISK     *disks;
     int          ndisks;
     TV_BUFFER    buf;
+    /* Pipelining: overlap I/O with next buffer fill */
+    uint8_t     *flush_data;      /* copy of data being flushed */
+    int          flush_pending;   /* 1 if async flush in progress */
+    int          flush_submitted; /* number of SQEs to wait for */
+    uint64_t     flush_expected[TV_MAX_DISKS]; /* expected bytes per SQE */
 } TV_SCHED;
 
 uint32_t tv_compute_weight(uint64_t speed, uint64_t slowest);
@@ -64,7 +69,6 @@ int      tv_build_segments(TV_DISK *disks, int ndisks, TV_SEGMENT *segs, int *ns
 uint64_t tv_compute_stripe_size(uint32_t *weights, int nweights, uint32_t chunk_size);
 
 TV_MAP   tv_map_logical(uint64_t logical, TV_METADATA *meta);
-uint64_t tv_map_reverse(int disk_index, uint64_t disk_offset, TV_METADATA *meta);
 
 TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta);
 int       tv_write(TV_SCHED *sched, const void *buf, uint64_t len);

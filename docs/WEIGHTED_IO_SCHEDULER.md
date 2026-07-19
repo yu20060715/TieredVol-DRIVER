@@ -8,7 +8,7 @@
 > - 應用程式必須透過 `tv_write()` / `tv_read()` 與 scheduler 互動，標準 POSIX `write()` 不經過 scheduler。
 > - 僅支援靜態 weight（初始化時計算，不可變更）。
 > - 無容錯機制（任何磁碟故障即導致整組 stripe set 損毀）。
-> - Benchmark 僅用於初始化，含 SLC cache 預熱（10GB pre-write）以確保 weight 反映持久速度。
+> - Benchmark 僅用於初始化，含 SLC cache 預熱（2GB pre-write）以確保 weight 反映持久速度。
 
 ---
 
@@ -531,11 +531,10 @@ TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta);
 ### CLI 模式
 
 ```bash
-# 使用 scheduler 模式建立 volume
+# 使用 scheduler 模式建立 volume（--fs 和 --mount 會被忽略）
 sudo tiered_setup --create --name fastpool \
     --disks nvme0n1:500,sda:500 \
-    --scheduler \
-    --fs ext4 --mount /mnt/fast
+    --scheduler
 ```
 
 ### TUI 模式

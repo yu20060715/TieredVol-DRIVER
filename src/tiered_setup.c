@@ -18,8 +18,6 @@
 #include "tiered_sched.h"
 #include "version.h"
 
-#define MAX_DISKS 8
-
 static volatile sig_atomic_t bench_interrupted = 0;
 
 static void bench_signal_handler(int sig) {
@@ -320,7 +318,7 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd, int
         rs = calloc(iterations, sizeof(double));
         if (!ws || !rs) goto cleanup;
 
-        /* SLC cache warm-up: write 10GB to exhaust SLC cache before benchmarking */
+        /* SLC cache warm-up: write 2GB to exhaust SLC cache before benchmarking */
         if (warmup) {
             char warmup_path[PATH_MAX];
             snprintf(warmup_path, sizeof(warmup_path), "%s/.bench_warmup_%s", mp, disk);
@@ -330,8 +328,8 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd, int
                 void *wbuf = NULL;
                 if (posix_memalign(&wbuf, 4096, block_size) == 0 && wbuf) {
                     memset(wbuf, 0xAB, block_size);
-                    fprintf(stderr, "  Warming up SLC cache (10GB)...\n");
-                    long long warmup_target = 10LL * 1024 * 1024 * 1024;
+                    fprintf(stderr, "  Warming up SLC cache (2GB)...\n");
+                    long long warmup_target = 2LL * 1024 * 1024 * 1024;
                     long long warmup_written = 0;
                     while (warmup_written < warmup_target && !bench_interrupted) {
                         ssize_t n = pwrite(wfd, wbuf, block_size, warmup_written);
@@ -474,6 +472,84 @@ static int cmp_speed(const void *a, const void *b) {
 }
 
 typedef struct { pid_t pid; int pipe_fd; int idx; } bench_child_t;
+typedef void (*bench_interrupt_fn)(void *ctx);
+
+static int run_parallel_bench(disk_t *disks, int ndisks, int warmup,
+    bench_interrupt_fn on_interrupt, void *interrupt_ctx) {
+    bench_child_t children[MAX_DISKS];
+    int nchildren = 0;
+    for (int i = 0; i < ndisks; i++) {
+        int pipefd[2];
+        if (pipe(pipefd) < 0) { fprintf(stderr, "pipe failed\n"); continue; }
+        pid_t pid = fork();
+        if (pid < 0) { close(pipefd[0]); close(pipefd[1]); continue; }
+        if (pid == 0) {
+            close(pipefd[0]);
+            double w = 0, r = 0;
+            int ret = bench_disk(disks[i].disk, &w, &r, warmup);
+            bench_result_t result = { ret, w, r };
+            const char *wp = (const char *)&result;
+            size_t remaining = sizeof(result);
+            while (remaining > 0) {
+                ssize_t n = write(pipefd[1], wp, remaining);
+                if (n <= 0) break;
+                wp += n;
+                remaining -= n;
+            }
+            close(pipefd[1]);
+            _exit(0);
+        }
+        close(pipefd[1]);
+        children[nchildren].pid = pid;
+        children[nchildren].pipe_fd = pipefd[0];
+        children[nchildren].idx = i;
+        nchildren++;
+        printf("  Started benchmark for /dev/%s\n", disks[i].disk);
+    }
+    int done = 0;
+    while (done < nchildren) {
+        if (bench_interrupted) {
+            for (int c = 0; c < nchildren; c++) {
+                if (children[c].pid > 0) kill(children[c].pid, SIGTERM);
+            }
+            for (int c = 0; c < nchildren; c++) {
+                if (children[c].pid > 0) {
+                    waitpid(children[c].pid, NULL, 0);
+                    close(children[c].pipe_fd);
+                }
+            }
+            fprintf(stderr, "\nBenchmark interrupted.\n");
+            if (on_interrupt) on_interrupt(interrupt_ctx);
+            return 1;
+        }
+        int status;
+        for (int c = 0; c < nchildren; c++) {
+            if (children[c].pid <= 0) continue;
+            pid_t ret = waitpid(children[c].pid, &status, WNOHANG);
+            if (ret > 0) {
+                bench_result_t result = { -1, 0, 0 };
+                ssize_t nread = read(children[c].pipe_fd, &result, sizeof(result));
+                close(children[c].pipe_fd);
+                int idx = children[c].idx;
+                if (nread == sizeof(result)) {
+                    disks[idx].speed_write = result.w;
+                    disks[idx].speed_read = result.r;
+                    if (result.ret == 0)
+                        printf("  /dev/%s: Write %.0f MB/s  Read %.0f MB/s\n",
+                               disks[idx].disk, result.w, result.r);
+                    else
+                        printf("  /dev/%s: FAILED\n", disks[idx].disk);
+                } else {
+                    printf("  /dev/%s: pipe read error\n", disks[idx].disk);
+                }
+                children[c].pid = 0;
+                done++;
+            }
+        }
+        if (done < nchildren) usleep(100000);
+    }
+    return 0;
+}
 
 static int cmd_list(void) {
     printf("%-12s %-8s %-28s %-12s %-8s %-8s\n",
@@ -576,82 +652,8 @@ static int cmd_bench(int argc, char *argv[]) {
     } else {
         printf("Benchmarking %d disks in parallel...\n", nd);
 
-        bench_child_t children[MAX_DISKS];
-        int nchildren = 0;
-
-        for (int i = 0; i < nd; i++) {
-            int pipefd[2];
-            if (pipe(pipefd) < 0) { fprintf(stderr, "pipe failed\n"); continue; }
-
-            pid_t pid = fork();
-            if (pid < 0) { close(pipefd[0]); close(pipefd[1]); continue; }
-
-            if (pid == 0) {
-                close(pipefd[0]);
-                double w = 0, r = 0;
-                int ret = bench_disk(info[i].disk, &w, &r, warmup);
-                bench_result_t result = { ret, w, r };
-                const char *wp = (const char *)&result;
-                size_t remaining = sizeof(result);
-                while (remaining > 0) {
-                    ssize_t n = write(pipefd[1], wp, remaining);
-                    if (n <= 0) break;
-                    wp += n;
-                    remaining -= n;
-                }
-                close(pipefd[1]);
-                _exit(0);
-            }
-
-            close(pipefd[1]);
-            children[nchildren].pid = pid;
-            children[nchildren].pipe_fd = pipefd[0];
-            children[nchildren].idx = i;
-            nchildren++;
-            printf("  Started benchmark for /dev/%s (pid %d)\n", info[i].disk, (int)pid);
-        }
-
-        int done = 0;
-        while (done < nchildren) {
-            if (bench_interrupted) {
-                for (int c = 0; c < nchildren; c++) {
-                    if (children[c].pid > 0) kill(children[c].pid, SIGTERM);
-                }
-                for (int c = 0; c < nchildren; c++) {
-                    if (children[c].pid > 0) {
-                        waitpid(children[c].pid, NULL, 0);
-                        close(children[c].pipe_fd);
-                    }
-                }
-                fprintf(stderr, "\nBenchmark interrupted.\n");
-                return 1;
-            }
-            int status;
-            for (int c = 0; c < nchildren; c++) {
-                if (children[c].pid <= 0) continue;
-                pid_t ret = waitpid(children[c].pid, &status, WNOHANG);
-                if (ret > 0) {
-                    bench_result_t result = { -1, 0, 0 };
-                    ssize_t nread = read(children[c].pipe_fd, &result, sizeof(result));
-                    close(children[c].pipe_fd);
-                    int idx = children[c].idx;
-                    if (nread == sizeof(result)) {
-                        info[idx].speed_write = result.w;
-                        info[idx].speed_read = result.r;
-                        if (result.ret == 0)
-                            printf("  /dev/%s: Write %.0f MB/s  Read %.0f MB/s\n",
-                                   info[idx].disk, result.w, result.r);
-                        else
-                            printf("  /dev/%s: FAILED\n", info[idx].disk);
-                    } else {
-                        printf("  /dev/%s: pipe read error\n", info[idx].disk);
-                    }
-                    children[c].pid = 0;
-                    done++;
-                }
-            }
-            if (done < nchildren) usleep(100000);
-        }
+        if (run_parallel_bench(info, nd, warmup, NULL, NULL) == 1)
+            return 1;
     }
 
     double total_w = 0;
@@ -871,79 +873,9 @@ static int cmd_create(int argc, char *argv[]) {
     }
 
     printf("  Benchmarking %d disks in parallel...\n", valid_disks);
-    bench_child_t children[MAX_DISKS];
-    int nchildren = 0;
-    for (int i = 0; i < valid_disks; i++) {
-        int pipefd[2];
-        if (pipe(pipefd) < 0) { fprintf(stderr, "pipe failed\n"); continue; }
-        pid_t pid = fork();
-        if (pid < 0) { close(pipefd[0]); close(pipefd[1]); continue; }
-        if (pid == 0) {
-            close(pipefd[0]);
-            double w = 0, r = 0;
-            int ret = bench_disk(valid[i].disk, &w, &r, 1);
-            bench_result_t result = { ret, w, r };
-            const char *wp = (const char *)&result;
-            size_t remaining = sizeof(result);
-            while (remaining > 0) {
-                ssize_t n = write(pipefd[1], wp, remaining);
-                if (n <= 0) break;
-                wp += n;
-                remaining -= n;
-            }
-            close(pipefd[1]);
-            _exit(0);
-        }
-        close(pipefd[1]);
-        children[nchildren].pid = pid;
-        children[nchildren].pipe_fd = pipefd[0];
-        children[nchildren].idx = i;
-        nchildren++;
-        printf("  Started benchmark for /dev/%s\n", valid[i].disk);
-    }
-    {
-        int done = 0;
-        while (done < nchildren) {
-            if (bench_interrupted) {
-                for (int c = 0; c < nchildren; c++) {
-                    if (children[c].pid > 0) kill(children[c].pid, SIGTERM);
-                }
-                for (int c = 0; c < nchildren; c++) {
-                    if (children[c].pid > 0) {
-                        waitpid(children[c].pid, NULL, 0);
-                        close(children[c].pipe_fd);
-                    }
-                }
-                fprintf(stderr, "\nBenchmark interrupted during create.\n");
-                cleanup_create(name, valid, valid_disks);
-                return 1;
-            }
-            int status;
-            for (int c = 0; c < nchildren; c++) {
-                if (children[c].pid <= 0) continue;
-                pid_t ret = waitpid(children[c].pid, &status, WNOHANG);
-                if (ret > 0) {
-                    bench_result_t result = { -1, 0, 0 };
-                    ssize_t nread = read(children[c].pipe_fd, &result, sizeof(result));
-                    close(children[c].pipe_fd);
-                    int idx = children[c].idx;
-                    if (nread == sizeof(result)) {
-                        valid[idx].speed_write = result.w;
-                        valid[idx].speed_read = result.r;
-                        if (result.ret == 0)
-                            printf("  /dev/%s: Write %.0f MB/s  Read %.0f MB/s\n",
-                                   valid[idx].disk, result.w, result.r);
-                        else
-                            printf("  /dev/%s: FAILED\n", valid[idx].disk);
-                    } else {
-                        printf("  /dev/%s: pipe read error\n", valid[idx].disk);
-                    }
-                    children[c].pid = 0;
-                    done++;
-                }
-            }
-            if (done < nchildren) usleep(100000);
-        }
+    if (run_parallel_bench(valid, valid_disks, 1, NULL, NULL) == 1) {
+        cleanup_create(name, valid, valid_disks);
+        return 1;
     }
 
     qsort(valid, valid_disks, sizeof(disk_t), cmp_speed);
@@ -969,8 +901,8 @@ static int cmd_create(int argc, char *argv[]) {
     printf("\n");
 
     double total_speed = 0;
-    printf("  %-12s %-8s %-8s %-10s %-10s %-10s\n", "DEVICE", "CARVE", "REMAIN", "SPEED", "TIER", "RATIO");
-    printf("  %-12s %-8s %-8s %-10s %-10s %-10s\n", "------------", "--------", "--------", "----------", "----------", "----------");
+    printf("  %-12s %-10s %-10s %-8s %-10s %-10s\n", "DEVICE", "CARVE", "REMAIN", "SPEED", "TIER", "RATIO");
+    printf("  %-12s %-10s %-10s %-8s %-10s %-10s\n", "------------", "----------", "----------", "--------", "----------", "----------");
     for (int i = 0; i < valid_disks; i++) total_speed += valid[i].speed_write;
     for (int i = 0; i < valid_disks; i++) {
         double ratio = (total_speed > 0) ? valid[i].speed_write / total_speed * 100 : 0;

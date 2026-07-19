@@ -18,7 +18,8 @@ static void usage(void) {
         "  --write --offset <N> --len <N>   Write bytes (input from stdin)\n"
         "  --bench --size <N>MB      Write benchmark (default: 64MB)\n"
         "  --bench --size <N>GB      Write benchmark in GB\n"
-        "  --direct                  Use O_DIRECT (bypass page cache)\n"
+        "  --direct                  Use O_DIRECT (bypass page cache, default for --bench)\n"
+        "  --no-direct               Disable O_DIRECT for benchmark\n"
         "  --warmup                  SLC cache warm-up (sustained speed)\n"
         "\n"
         "Examples:\n"
@@ -234,7 +235,7 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
 
 int main(int argc, char *argv[]) {
     const char *name = NULL;
-    int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, use_direct = 0, do_warmup = 0;
+    int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, use_direct = -1, do_warmup = 0;
     uint64_t offset = 0, len = 0, bench_size = 64 * 1024 * 1024;
 
     for (int i = 1; i < argc; i++) {
@@ -250,6 +251,8 @@ int main(int argc, char *argv[]) {
             do_bench = 1;
         } else if (strcmp(argv[i], "--direct") == 0) {
             use_direct = 1;
+        } else if (strcmp(argv[i], "--no-direct") == 0) {
+            use_direct = 0;
         } else if (strcmp(argv[i], "--warmup") == 0) {
             do_warmup = 1;
         } else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc) {
@@ -274,6 +277,9 @@ int main(int argc, char *argv[]) {
         usage();
         return 1;
     }
+
+    /* --bench defaults to O_DIRECT unless --no-direct is specified */
+    if (use_direct < 0) use_direct = do_bench ? 1 : 0;
 
     /* Load metadata */
     TV_METADATA meta;
@@ -307,24 +313,30 @@ int main(int argc, char *argv[]) {
     /* SLC cache warm-up: write through scheduler to exhaust SLC cache */
     if (do_warmup && do_bench) {
         uint64_t vol_size = meta.segments[0].logical_end - meta.segments[0].logical_begin;
-        uint64_t warmup_size = vol_size * 8 / 10;  /* 80% of volume */
-        if (warmup_size > 10ULL * 1024 * 1024 * 1024)
-            warmup_size = 10ULL * 1024 * 1024 * 1024;  /* cap at 10GB */
+        uint64_t warmup_size = vol_size * 2 / 10;  /* 20% of volume */
+        if (warmup_size > 4ULL * 1024 * 1024 * 1024)
+            warmup_size = 4ULL * 1024 * 1024 * 1024;  /* cap at 4GB */
         uint8_t *wbuf = malloc((size_t)sched->buf.capacity);
         if (wbuf) {
             memset(wbuf, 0xAB, (size_t)sched->buf.capacity);
-            fprintf(stderr, "Warming up SLC cache (%luMB, 80%% of volume)...\n",
+            fprintf(stderr, "Warming up SLC cache (%luMB, 20%% of volume)...\n",
                     (unsigned long)(warmup_size / (1024 * 1024)));
             uint64_t warmup_written = 0;
+            int warmup_ok = 1;
             while (warmup_written < warmup_size) {
                 uint64_t chunk = sched->buf.capacity;
                 if (warmup_written + chunk > warmup_size) chunk = warmup_size - warmup_written;
-                if (tv_write(sched, wbuf, chunk) < 0) break;
+                if (tv_write(sched, wbuf, chunk) < 0) { warmup_ok = 0; break; }
                 warmup_written += chunk;
             }
-            if (sched->buf.used > 0) tv_flush(sched);
+            if (warmup_ok && sched->buf.used > 0) {
+                if (tv_flush(sched) < 0) warmup_ok = 0;
+            }
             free(wbuf);
-            fprintf(stderr, "Warm-up complete, starting benchmark...\n");
+            if (warmup_ok)
+                fprintf(stderr, "Warm-up complete, starting benchmark...\n");
+            else
+                fprintf(stderr, "WARNING: warm-up failed, benchmark results may be inaccurate\n");
         }
     }
 

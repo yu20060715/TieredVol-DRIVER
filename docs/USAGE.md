@@ -236,7 +236,7 @@ sudo tiered_setup --bench --disks sdb,sdc --sequential
 ```
 
 預設 parallel 模式，多顆碟同時跑。輸出每顆碟的 Write / Read 速度（MB/s）。
-加 `--warmup` 會先寫 10GB 填滿 SLC cache 再測速，得到持久速度。
+加 `--warmup` 會先寫 2GB 填滿 SLC cache 再測速，得到持久速度。
 
 ### 建立 Volume
 
@@ -360,7 +360,7 @@ sudo tiered_io --name fastpool --bench --size 1GB --direct --warmup
 ```
 
 透過 weighted striping 寫入指定大小的資料，測量吞吐量。
-加 `--warmup` 先寫 10GB 填滿 SLC cache 再測，得到持久速度。
+加 `--warmup` 先寫 20%% 的 volume（最多4GB）填滿 SLC cache 再測，得到持久速度。
 加 `--direct` 繞過 page cache，得到真實磁碟速度。
 
 輸出範例：
