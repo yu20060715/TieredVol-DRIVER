@@ -55,7 +55,7 @@ int tv_flush(TV_SCHED *sched) {
     if (!sched || sched->buf.used == 0) return 0;
 
     uint64_t logical = sched->buf.logical_begin;
-    TV_SEGMENT *seg = &sched->meta->segments[0];
+    TV_SEGMENT *seg = NULL;
 
     /* Find the segment that contains this logical offset */
     for (int i = 0; i < (int)sched->meta->segment_count; i++) {
@@ -64,6 +64,12 @@ int tv_flush(TV_SCHED *sched) {
             seg = &sched->meta->segments[i];
             break;
         }
+    }
+
+    if (!seg) {
+        fprintf(stderr, "tv_flush: logical offset %lu not in any segment\n",
+                (unsigned long)logical);
+        return -1;
     }
 
     uint64_t stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
@@ -77,6 +83,7 @@ int tv_flush(TV_SCHED *sched) {
 
     uint64_t buf_pos = 0;
     uint64_t remaining = sched->buf.used;
+    int submitted = 0;
 
     for (int i = 0; i < (int)seg->disk_count && remaining > 0; i++) {
         uint64_t disk_bytes = (uint64_t)seg->weight[i] * TV_CHUNK_SIZE;
@@ -97,11 +104,12 @@ int tv_flush(TV_SCHED *sched) {
 
         buf_pos += write_bytes;
         remaining -= write_bytes;
+        submitted++;
     }
 
     tv_uring_submit(&sched->ring);
 
-    for (int i = 0; i < (int)seg->disk_count; i++) {
+    for (int i = 0; i < submitted; i++) {
         int res = tv_uring_wait(&sched->ring);
         if (res < 0) {
             fprintf(stderr, "tv_flush: I/O error on stripe at %lu\n",

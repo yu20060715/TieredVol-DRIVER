@@ -35,7 +35,6 @@ int tv_build_segments(TV_DISK *disks, int ndisks, TV_SEGMENT *segs, int *nsegs) 
     }
 
     /* Build capacity-sorted boundary list */
-    uint64_t bounds[TV_MAX_DISKS + 1];
     int sorted_idx[TV_MAX_DISKS];
 
     /* Simple insertion sort by free_size ascending */

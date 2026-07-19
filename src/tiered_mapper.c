@@ -16,13 +16,16 @@ TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta) {
         }
     }
 
-    /* If not found, use last segment */
-    if (seg_idx < 0) seg_idx = meta->segment_count - 1;
+    /* If not found, return error */
+    if (seg_idx < 0) {
+        TV_MAP err = {-1, 0, 0};
+        return err;
+    }
 
     TV_SEGMENT *seg = &meta->segments[seg_idx];
 
     uint64_t stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
-    uint64_t offset_in = logical % seg->stripe_size;
+    uint64_t offset_in = (logical - seg->logical_begin) % seg->stripe_size;
 
     /* Build prefix sum boundary */
     uint64_t boundary[TV_MAX_DISKS + 1];
@@ -77,9 +80,15 @@ uint64_t tv_map_reverse(int disk_index, uint64_t disk_offset, TV_METADATA *meta)
             boundary[j + 1] = boundary[j] + (uint64_t)seg->weight[j] * TV_CHUNK_SIZE;
         }
 
-        return seg->logical_begin + stripe_no * seg->stripe_size
-             + boundary[disk_pos] + off_in_chunk;
+        uint64_t logical = seg->logical_begin + stripe_no * seg->stripe_size
+                         + boundary[disk_pos] + off_in_chunk;
+
+        /* Verify the result falls within this segment */
+        if (logical >= seg->logical_begin && logical < seg->logical_end)
+            return logical;
     }
 
+    fprintf(stderr, "tv_map_reverse: disk_index %d offset %lu not found\n",
+            disk_index, (unsigned long)disk_offset);
     return 0;
 }

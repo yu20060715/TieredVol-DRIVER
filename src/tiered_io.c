@@ -149,10 +149,9 @@ static int cmd_write(TV_SCHED *sched, uint64_t offset, uint64_t len) {
     fprintf(stderr, "Writing %lu bytes to offset %lu...\n",
             (unsigned long)total, (unsigned long)offset);
 
-    /* For now, tv_write always starts at logical_begin=0.
-     * We need to set the buffer's logical_begin to match the requested offset.
-     * Since the API doesn't support random offset writes yet,
-     * we write from offset 0 and let the user manage offset externally. */
+    /* Set the buffer's logical_begin to the requested offset */
+    sched->buf.logical_begin = offset;
+
     int ret = tv_write(sched, buf, total);
     if (ret < 0) {
         fprintf(stderr, "Error: tv_write failed\n");
@@ -181,7 +180,6 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
     memset(buf, 0xAB, (size_t)sched->buf.capacity);
 
     uint64_t written = 0;
-    int stripe_count = 0;
 
     struct timespec ts_start, ts_end;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
@@ -198,17 +196,6 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
             return -1;
         }
 
-        /* Flush every stripe to get accurate timing */
-        if (sched->buf.used == sched->buf.capacity) {
-            ret = tv_flush(sched);
-            if (ret < 0) {
-                fprintf(stderr, "Error: tv_flush failed\n");
-                free(buf);
-                return -1;
-            }
-            stripe_count++;
-        }
-
         written += chunk;
     }
 
@@ -220,7 +207,6 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
             free(buf);
             return -1;
         }
-        stripe_count++;
     }
 
     clock_gettime(CLOCK_MONOTONIC, &ts_end);
@@ -229,6 +215,8 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
 
     double mb = (double)written / (1024.0 * 1024.0);
     double mbps = mb / elapsed;
+    int stripe_count = (int)(written / sched->buf.capacity);
+    if (written % sched->buf.capacity) stripe_count++;
 
     printf("Benchmark: %lu bytes (%.1f MB) in %.3f seconds\n",
            (unsigned long)written, mb, elapsed);

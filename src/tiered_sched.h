@@ -2,6 +2,7 @@
 #define TIERED_SCHED_H
 
 #include <stdint.h>
+#include <unistd.h>
 #include <liburing.h>
 
 #define TV_MAX_DISKS    16
