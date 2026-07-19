@@ -8,6 +8,7 @@
 #define TV_MAX_DISKS    16
 #define TV_MAX_SEGS     16
 #define TV_CHUNK_SIZE   (64 * 1024)
+#define TV_BUF_COUNT    8   /* stripe buffer pool size for pipelining */
 
 typedef struct {
     int      id;
@@ -45,22 +46,23 @@ typedef struct {
 } TV_MAP;
 
 typedef struct {
-    uint8_t *data;
-    uint64_t used;
-    uint64_t capacity;
-    uint64_t logical_begin;
-} TV_BUFFER;
+    uint8_t *data;       /* 512-byte aligned stripe buffer */
+    uint64_t logical;    /* logical offset for this stripe */
+    int      in_flight;  /* 1 = I/O submitted, waiting for completion */
+} TV_STRIPE_BUF;
 
 typedef struct {
     struct io_uring ring;
     TV_METADATA *meta;
     TV_DISK     *disks;
     int          ndisks;
-    TV_BUFFER    buf;
-    /* Pipelining: overlap I/O with next buffer fill */
-    uint8_t     *flush_data;      /* copy of data being flushed */
-    int          flush_pending;   /* 1 if async flush in progress */
-    int          flush_submitted; /* number of SQEs to wait for */
+    /* Stripe buffer pool for pipelining */
+    TV_STRIPE_BUF sbuf[TV_BUF_COUNT];
+    uint64_t      stripe_size;
+    int           sbuf_head;     /* index of buffer being filled */
+    uint64_t      sbuf_used;     /* bytes used in current buffer */
+    uint64_t      sbuf_logical;  /* logical offset of current buffer */
+    int           inflight;      /* number of in-flight I/O submissions */
 } TV_SCHED;
 
 uint32_t tv_compute_weight(uint64_t speed, uint64_t slowest);
@@ -79,11 +81,6 @@ int  tv_metadata_save(TV_METADATA *meta, const char *path);
 int  tv_metadata_load(TV_METADATA *meta, const char *path);
 
 int  tv_benchmark(const char *disk_path, uint64_t *speed_out, int warmup);
-
-int  tv_buf_init(TV_BUFFER *buf, uint64_t stripe_size);
-int  tv_buf_write(TV_BUFFER *buf, const void *data, uint64_t len);
-void tv_buf_reset(TV_BUFFER *buf);
-void tv_buf_destroy(TV_BUFFER *buf);
 
 int  tv_uring_init(struct io_uring *ring, int queue_depth);
 int  tv_uring_write(struct io_uring *ring, int fd, const void *buf, size_t len, off_t offset);

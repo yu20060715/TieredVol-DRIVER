@@ -3,7 +3,7 @@ CFLAGS=-Wall -Wextra -Wpedantic -std=gnu11 -O2
 PREFIX=/usr/local
 
 SCHED_OBJS=src/tiered_sched.o src/tiered_partition.o src/tiered_mapper.o \
-           src/tiered_stripe_buf.o src/tiered_io_uring.o src/tiered_metadata.o \
+           src/tiered_io_uring.o src/tiered_metadata.o \
            src/tiered_benchmark.o
 
 all: tiered_setup tiered_ui tiered_io

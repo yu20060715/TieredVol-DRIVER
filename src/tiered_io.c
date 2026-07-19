@@ -155,9 +155,6 @@ static int cmd_write(TV_SCHED *sched, uint64_t offset, uint64_t len) {
     fprintf(stderr, "Writing %lu bytes to offset %lu...\n",
             (unsigned long)total, (unsigned long)offset);
 
-    /* Set the buffer's logical_begin to the requested offset */
-    sched->buf.logical_begin = offset;
-
     int ret = tv_write(sched, buf, total);
     if (ret < 0) {
         fprintf(stderr, "Error: tv_write failed\n");
@@ -178,12 +175,12 @@ static int cmd_write(TV_SCHED *sched, uint64_t offset, uint64_t len) {
 }
 
 static int cmd_bench(TV_SCHED *sched, uint64_t size) {
-    uint8_t *buf = malloc((size_t)(sched->buf.capacity));
+    uint8_t *buf = malloc((size_t)(sched->stripe_size));
     if (!buf) {
         fprintf(stderr, "Error: cannot allocate buffer\n");
         return -1;
     }
-    memset(buf, 0xAB, (size_t)sched->buf.capacity);
+    memset(buf, 0xAB, (size_t)sched->stripe_size);
 
     uint64_t written = 0;
 
@@ -191,7 +188,7 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
     while (written < size) {
-        uint64_t chunk = sched->buf.capacity;
+        uint64_t chunk = sched->stripe_size;
         if (written + chunk > size) chunk = size - written;
 
         int ret = tv_write(sched, buf, chunk);
@@ -205,8 +202,8 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
         written += chunk;
     }
 
-    /* Flush remaining partial stripe */
-    if (sched->buf.used > 0) {
+    /* Flush remaining partial stripe and wait for all in-flight I/O */
+    {
         int ret = tv_flush(sched);
         if (ret < 0) {
             fprintf(stderr, "Error: final tv_flush failed\n");
@@ -221,8 +218,8 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
 
     double mb = (double)written / (1024.0 * 1024.0);
     double mbps = mb / elapsed;
-    int stripe_count = (int)(written / sched->buf.capacity);
-    if (written % sched->buf.capacity) stripe_count++;
+    int stripe_count = (int)(written / sched->stripe_size);
+    if (written % sched->stripe_size) stripe_count++;
 
     printf("Benchmark: %lu bytes (%.1f MB) in %.3f seconds\n",
            (unsigned long)written, mb, elapsed);
@@ -316,20 +313,20 @@ int main(int argc, char *argv[]) {
         uint64_t warmup_size = vol_size * 2 / 10;  /* 20% of volume */
         if (warmup_size > 4ULL * 1024 * 1024 * 1024)
             warmup_size = 4ULL * 1024 * 1024 * 1024;  /* cap at 4GB */
-        uint8_t *wbuf = aligned_alloc(512, (size_t)sched->buf.capacity);
+        uint8_t *wbuf = malloc((size_t)sched->stripe_size);
         if (wbuf) {
-            memset(wbuf, 0xAB, (size_t)sched->buf.capacity);
+            memset(wbuf, 0xAB, (size_t)sched->stripe_size);
             fprintf(stderr, "Warming up SLC cache (%luMB, 20%% of volume)...\n",
                     (unsigned long)(warmup_size / (1024 * 1024)));
             uint64_t warmup_written = 0;
             int warmup_ok = 1;
             while (warmup_written < warmup_size) {
-                uint64_t chunk = sched->buf.capacity;
+                uint64_t chunk = sched->stripe_size;
                 if (warmup_written + chunk > warmup_size) chunk = warmup_size - warmup_written;
                 if (tv_write(sched, wbuf, chunk) < 0) { warmup_ok = 0; break; }
                 warmup_written += chunk;
             }
-            if (warmup_ok && sched->buf.used > 0) {
+            if (warmup_ok && sched->sbuf_used > 0) {
                 if (tv_flush(sched) < 0) warmup_ok = 0;
             }
             free(wbuf);
