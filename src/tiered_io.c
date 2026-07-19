@@ -19,11 +19,13 @@ static void usage(void) {
         "  --bench --size <N>MB      Write benchmark (default: 64MB)\n"
         "  --bench --size <N>GB      Write benchmark in GB\n"
         "  --direct                  Use O_DIRECT (bypass page cache)\n"
+        "  --warmup                  SLC cache warm-up (sustained speed)\n"
         "\n"
         "Examples:\n"
         "  tiered_io --name fastpool --info\n"
         "  tiered_io --name fastpool --bench --size 128MB\n"
-        "  tiered_io --name fastpool --bench --size 1GB --direct\n"
+        "  tiered_io --name fastpool --bench --size 128MB --warmup\n"
+        "  tiered_io --name fastpool --bench --size 1GB --direct --warmup\n"
         "  dd if=/dev/zero bs=1M count=10 | tiered_io --name fastpool --write --offset 0 --len 10485760\n"
         "  tiered_io --name fastpool --read --offset 0 --len 1024 | xxd\n"
     );
@@ -232,7 +234,7 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
 
 int main(int argc, char *argv[]) {
     const char *name = NULL;
-    int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, use_direct = 0;
+    int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, use_direct = 0, do_warmup = 0;
     uint64_t offset = 0, len = 0, bench_size = 64 * 1024 * 1024;
 
     for (int i = 1; i < argc; i++) {
@@ -248,6 +250,8 @@ int main(int argc, char *argv[]) {
             do_bench = 1;
         } else if (strcmp(argv[i], "--direct") == 0) {
             use_direct = 1;
+        } else if (strcmp(argv[i], "--warmup") == 0) {
+            do_warmup = 1;
         } else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc) {
             offset = strtoull(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--len") == 0 && i + 1 < argc) {
@@ -298,6 +302,26 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: tv_sched_init failed\n");
         close_disks(disks, (int)meta.disk_count);
         return 1;
+    }
+
+    /* SLC cache warm-up: write 10GB through scheduler to exhaust SLC cache */
+    if (do_warmup && do_bench) {
+        uint64_t warmup_size = 10ULL * 1024 * 1024 * 1024;
+        uint8_t *wbuf = malloc((size_t)sched->buf.capacity);
+        if (wbuf) {
+            memset(wbuf, 0xAB, (size_t)sched->buf.capacity);
+            fprintf(stderr, "Warming up SLC cache (10GB)...\n");
+            uint64_t warmup_written = 0;
+            while (warmup_written < warmup_size) {
+                uint64_t chunk = sched->buf.capacity;
+                if (warmup_written + chunk > warmup_size) chunk = warmup_size - warmup_written;
+                if (tv_write(sched, wbuf, chunk) < 0) break;
+                warmup_written += chunk;
+            }
+            if (sched->buf.used > 0) tv_flush(sched);
+            free(wbuf);
+            fprintf(stderr, "Warm-up complete, starting benchmark...\n");
+        }
     }
 
     int ret = 0;

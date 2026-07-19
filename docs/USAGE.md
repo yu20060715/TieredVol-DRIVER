@@ -225,14 +225,18 @@ nvme0n1      disk     WD Black SN770              nvme         1.0T       -
 ### 測速
 
 ```bash
-# 依序測試
+# 依序測試（峰值速度）
 sudo tiered_setup --bench --disks sdb,sdc,nvme0n1
 
-# 依序測試（加 --sequential）
+# 依序測試（含 SLC cache 預熱，持久速度）
+sudo tiered_setup --bench --disks sdb,sdc,nvme0n1 --warmup
+
+# 依序測試
 sudo tiered_setup --bench --disks sdb,sdc --sequential
 ```
 
 預設 parallel 模式，多顆碟同時跑。輸出每顆碟的 Write / Read 速度（MB/s）。
+加 `--warmup` 會先寫 10GB 填滿 SLC cache 再測速，得到持久速度。
 
 ### 建立 Volume
 
@@ -345,11 +349,19 @@ Metadata: v1, chunk=64KB, 2 disks, 2 segments
 ### 寫入 Benchmark
 
 ```bash
+# 峰值速度（SLC cache 還在）
 sudo tiered_io --name fastpool --bench --size 128MB
-sudo tiered_io --name fastpool --bench --size 1GB
+
+# 持久速度（SLC cache 預熱後）
+sudo tiered_io --name fastpool --bench --size 128MB --warmup
+
+# 大 size + O_DIRECT + 持久速度
+sudo tiered_io --name fastpool --bench --size 1GB --direct --warmup
 ```
 
 透過 weighted striping 寫入指定大小的資料，測量吞吐量。
+加 `--warmup` 先寫 10GB 填滿 SLC cache 再測，得到持久速度。
+加 `--direct` 繞過 page cache，得到真實磁碟速度。
 
 輸出範例：
 ```

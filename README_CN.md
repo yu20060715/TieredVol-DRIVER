@@ -62,13 +62,17 @@ NVMe 空等 SATA 完成            所有磁碟大約同時完成
 → 吞吐量 ≈ 最慢的碟            → 更高的整體吞吐量
 ```
 
-**Weight 在初始化時產生**，透過 benchmark 測量循序寫入速度。這是一個初始估計值，不是永久保證。SSD 速度會隨時間變化（例如 SLC cache 衰退），因此在持續負載下 weight 可能變得次優。
+**Weight 在初始化時產生**，透過 benchmark 測量循序寫入速度，並在 SLC cache 預熱（先寫10GB）後測速。這確保 weight 反映的是持久速度，而非 SLC cache 衝刺速度。
 
 ```bash
 # 使用加權條帶化建立 session
 sudo tiered_setup --create --name fastpool \
     --disks nvme0n1:1000,sda:500,sdb:500 \
     --scheduler
+
+# 比較峰值 vs 持久速度
+sudo tiered_io --name fastpool --bench --size 128MB           # 峰值（SLC cache）
+sudo tiered_io --name fastpool --bench --size 128MB --warmup  # 持久
 ```
 
 詳細實作見：
@@ -267,7 +271,7 @@ TieredVol/
 - **無容錯機制** — 任何磁碟故障即導致整組 stripe set 損毀。無 degraded mode、無 rebuild、無 mirror/parity。
 - **無法攔截 POSIX write()** — 應用程式必須使用 `tv_write()` / `tv_read()`。標準 `write()` 走檔案系統，不經過 scheduler。
 - **未完整實作 partial stripe tracking** — close/fsync 對部分 stripe 的處理尚未完成。
-- **Benchmark 僅用於初始化** — 內建 benchmark 測量初始循序寫入速度，不是完整的儲存 benchmark（無 sustained write、無 latency、無 queue depth sweep）。
+- **Benchmark 僅用於初始化** — 內建 benchmark 測量初始循序寫入速度（含 SLC cache 預熱），不是完整的儲存 benchmark（無 latency、無 queue depth sweep）。
 - **重開機後不保留** — dm-linear targets 和 LVM volumes 需要 systemd service 才能自動還原。
 - **系統碟無法使用** — dm-linear 在已掛載的根分区上回傳 EBUSY。
 

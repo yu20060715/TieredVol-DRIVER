@@ -75,7 +75,7 @@ void      tv_sched_destroy(TV_SCHED *sched);
 int  tv_metadata_save(TV_METADATA *meta, const char *path);
 int  tv_metadata_load(TV_METADATA *meta, const char *path);
 
-int  tv_benchmark(const char *disk_path, uint64_t *speed_out);
+int  tv_benchmark(const char *disk_path, uint64_t *speed_out, int warmup);
 
 int  tv_buf_init(TV_BUFFER *buf, uint64_t stripe_size);
 int  tv_buf_write(TV_BUFFER *buf, const void *data, uint64_t len);

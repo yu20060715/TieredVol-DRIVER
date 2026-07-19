@@ -243,7 +243,7 @@ static void find_mount_for_disk(const char *disk, char *mp, size_t mp_size) {
     }
 }
 
-static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
+static int bench_disk(const char *disk, double *write_spd, double *read_spd, int warmup) {
     *write_spd = *read_spd = 0;
     char mp[512] = {0};
     int need_unmount = 0;
@@ -295,7 +295,7 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
             char devpath_raw[64];
             snprintf(devpath_raw, sizeof(devpath_raw), "/dev/%s", disk);
             uint64_t raw_speed = 0;
-            if (tv_benchmark(devpath_raw, &raw_speed) == 0) {
+            if (tv_benchmark(devpath_raw, &raw_speed, warmup) == 0) {
                 *write_spd = (double)raw_speed;
                 *read_spd = (double)raw_speed;
                 result = 0;
@@ -319,6 +319,33 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd) {
         ws = calloc(iterations, sizeof(double));
         rs = calloc(iterations, sizeof(double));
         if (!ws || !rs) goto cleanup;
+
+        /* SLC cache warm-up: write 10GB to exhaust SLC cache before benchmarking */
+        if (warmup) {
+            char warmup_path[PATH_MAX];
+            snprintf(warmup_path, sizeof(warmup_path), "%s/.bench_warmup_%s", mp, disk);
+            int wfd = open(warmup_path, O_RDWR | O_CREAT | O_DIRECT, 0644);
+            if (wfd < 0) wfd = open(warmup_path, O_RDWR | O_CREAT, 0644);
+            if (wfd >= 0) {
+                void *wbuf = NULL;
+                if (posix_memalign(&wbuf, 4096, block_size) == 0 && wbuf) {
+                    memset(wbuf, 0xAB, block_size);
+                    fprintf(stderr, "  Warming up SLC cache (10GB)...\n");
+                    long long warmup_target = 10LL * 1024 * 1024 * 1024;
+                    long long warmup_written = 0;
+                    while (warmup_written < warmup_target && !bench_interrupted) {
+                        ssize_t n = pwrite(wfd, wbuf, block_size, warmup_written);
+                        if (n <= 0) break;
+                        warmup_written += n;
+                    }
+                    fdatasync(wfd);
+                    free(wbuf);
+                    fprintf(stderr, "  Warm-up complete, starting benchmark...\n");
+                }
+                close(wfd);
+                unlink(warmup_path);
+            }
+        }
 
         int completed = 0;
         for (int iter = 0; iter < iterations; iter++) {
@@ -478,17 +505,19 @@ static int cmd_list(void) {
 
 static int cmd_bench(int argc, char *argv[]) {
     char *disk_list = NULL;
-    int sequential = 0;
+    int sequential = 0, warmup = 0;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--disks") == 0 && i + 1 < argc) {
             disk_list = argv[++i];
         } else if (strcmp(argv[i], "--sequential") == 0) {
             sequential = 1;
+        } else if (strcmp(argv[i], "--warmup") == 0) {
+            warmup = 1;
         }
     }
 
     if (!disk_list) {
-        fprintf(stderr, "Usage: tiered_setup --bench --disks sda,sdb,sdc [--sequential]\n");
+        fprintf(stderr, "Usage: tiered_setup --bench --disks sda,sdb,sdc [--sequential] [--warmup]\n");
         return 1;
     }
 
@@ -538,7 +567,7 @@ static int cmd_bench(int argc, char *argv[]) {
         for (int i = 0; i < nd; i++) {
             printf("  Testing /dev/%s ... ", info[i].disk);
             fflush(stdout);
-            if (bench_disk(info[i].disk, &info[i].speed_write, &info[i].speed_read) == 0) {
+            if (bench_disk(info[i].disk, &info[i].speed_write, &info[i].speed_read, warmup) == 0) {
                 printf("Write: %.0f MB/s  Read: %.0f MB/s\n", info[i].speed_write, info[i].speed_read);
             } else {
                 printf("FAILED\n");
@@ -560,7 +589,7 @@ static int cmd_bench(int argc, char *argv[]) {
             if (pid == 0) {
                 close(pipefd[0]);
                 double w = 0, r = 0;
-                int ret = bench_disk(info[i].disk, &w, &r);
+                int ret = bench_disk(info[i].disk, &w, &r, warmup);
                 bench_result_t result = { ret, w, r };
                 const char *wp = (const char *)&result;
                 size_t remaining = sizeof(result);
@@ -852,7 +881,7 @@ static int cmd_create(int argc, char *argv[]) {
         if (pid == 0) {
             close(pipefd[0]);
             double w = 0, r = 0;
-            int ret = bench_disk(valid[i].disk, &w, &r);
+            int ret = bench_disk(valid[i].disk, &w, &r, 1);
             bench_result_t result = { ret, w, r };
             const char *wp = (const char *)&result;
             size_t remaining = sizeof(result);

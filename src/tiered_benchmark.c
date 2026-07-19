@@ -11,8 +11,9 @@
 #define BENCH_SIZE      (32 * 1024 * 1024)
 #define BENCH_RUNS      3
 #define BENCH_BLOCK     512
+#define WARMUP_SIZE     (10LL * 1024 * 1024 * 1024)  /* 10GB */
 
-int tv_benchmark(const char *disk_path, uint64_t *speed_out) {
+int tv_benchmark(const char *disk_path, uint64_t *speed_out, int warmup) {
     if (!disk_path || !speed_out) return -1;
     *speed_out = 0;
 
@@ -43,6 +44,27 @@ int tv_benchmark(const char *disk_path, uint64_t *speed_out) {
         bench_offset = dev_size - (off_t)BENCH_SIZE * BENCH_RUNS - 1024 * 1024;
         /* Align to 512 bytes */
         bench_offset = bench_offset & ~((off_t)BENCH_BLOCK - 1);
+    }
+
+    /* SLC cache warm-up: write 10GB to exhaust SLC cache before benchmarking */
+    if (warmup) {
+        off_t warmup_offset = 0;
+        if (dev_size > WARMUP_SIZE + 1024 * 1024) {
+            warmup_offset = dev_size - WARMUP_SIZE - 1024 * 1024;
+            warmup_offset = warmup_offset & ~((off_t)BENCH_BLOCK - 1);
+        }
+        fprintf(stderr, "  Warming up SLC cache (10GB)...\n");
+        uint64_t warmup_written = 0;
+        while (warmup_written < (uint64_t)WARMUP_SIZE) {
+            ssize_t n = pwrite(fd, buf, BENCH_SIZE, warmup_offset + (off_t)warmup_written);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            warmup_written += n;
+        }
+        fsync(fd);
+        fprintf(stderr, "  Warm-up complete, starting benchmark...\n");
     }
 
     struct timespec ts_start, ts_end;

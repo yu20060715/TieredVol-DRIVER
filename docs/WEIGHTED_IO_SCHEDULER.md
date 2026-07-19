@@ -8,7 +8,7 @@
 > - 應用程式必須透過 `tv_write()` / `tv_read()` 與 scheduler 互動，標準 POSIX `write()` 不經過 scheduler。
 > - 僅支援靜態 weight（初始化時計算，不可變更）。
 > - 無容錯機制（任何磁碟故障即導致整組 stripe set 損毀）。
-> - Benchmark 僅用於初始化，不是完整的儲存 benchmark（無 sustained write、無 latency、無 queue depth sweep）。
+> - Benchmark 僅用於初始化，含 SLC cache 預熱（10GB pre-write）以確保 weight 反映持久速度。
 
 ---
 
