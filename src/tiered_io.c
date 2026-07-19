@@ -191,6 +191,10 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
     memset(buf, 0xAB, (size_t)sched->stripe_size);
 
     uint64_t written = 0;
+    int stripe_idx = 0;
+
+    fprintf(stderr, "  [debug] bench starting: size=%luMB stripe=%luKB\n",
+            (unsigned long)(size / 1048576), (unsigned long)(sched->stripe_size / 1024));
 
     struct timespec ts_start, ts_end;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
@@ -208,6 +212,10 @@ static int cmd_bench(TV_SCHED *sched, uint64_t size) {
         }
 
         written += chunk;
+        stripe_idx++;
+        if (stripe_idx % 50 == 0)
+            fprintf(stderr, "  [debug] bench: %d stripes, %luMB written, inflight=%d\n",
+                    stripe_idx, (unsigned long)(written / 1048576), sched->inflight);
     }
 
     /* Flush remaining partial stripe and wait for all in-flight I/O */

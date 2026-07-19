@@ -10,6 +10,7 @@ TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta) {
     if (!disks || ndisks <= 0 || !meta) return NULL;
     if (meta->segment_count == 0) return NULL;
 
+    fprintf(stderr, "  [debug] calloc TV_SCHED...\n");
     TV_SCHED *sched = calloc(1, sizeof(TV_SCHED));
     if (!sched) return NULL;
 
@@ -17,15 +18,19 @@ TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta) {
     sched->ndisks = ndisks;
     sched->meta = meta;
     sched->stripe_size = meta->segments[0].stripe_size;
+    fprintf(stderr, "  [debug] stripe_size=%luKB\n", (unsigned long)(sched->stripe_size / 1024));
 
+    fprintf(stderr, "  [debug] io_uring_init...\n");
     if (tv_uring_init(&sched->ring, 256) < 0) {
         free(sched);
         return NULL;
     }
 
+    fprintf(stderr, "  [debug] aligned_alloc x%d...\n", TV_BUF_COUNT);
     for (int i = 0; i < TV_BUF_COUNT; i++) {
         sched->sbuf[i].data = aligned_alloc(512, (size_t)sched->stripe_size);
         if (!sched->sbuf[i].data) {
+            fprintf(stderr, "  [debug] aligned_alloc FAILED at i=%d\n", i);
             for (int j = 0; j < i; j++) free(sched->sbuf[j].data);
             tv_uring_destroy(&sched->ring);
             free(sched);
@@ -39,6 +44,7 @@ TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta) {
     sched->sbuf_logical = 0;
     sched->inflight = 0;
 
+    fprintf(stderr, "  [debug] tv_sched_init done\n");
     return sched;
 }
 

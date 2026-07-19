@@ -8,7 +8,7 @@
 #define TV_MAX_DISKS    16
 #define TV_MAX_SEGS     16
 #define TV_CHUNK_SIZE   (256 * 1024)
-#define TV_BUF_COUNT    32  /* stripe buffer pool size for pipelining */
+#define TV_BUF_COUNT    8   /* stripe buffer pool size for pipelining */
 
 typedef struct {
     int      id;
