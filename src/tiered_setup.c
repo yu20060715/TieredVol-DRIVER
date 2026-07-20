@@ -1104,7 +1104,7 @@ static int cmd_create(int argc, char *argv[]) {
         for (int i = 0; i < n_tv_disks; i++) close(tv_disks[i].fd);
 
         printf("\n=== Weighted I/O Scheduler volume '%s' created ===\n", name);
-        printf("  Use tiered_ui to manage this volume.\n");
+        printf("  Use tiered_io to manage this volume.\n");
         printf("  NOTE: This volume uses the weighted I/O scheduler, not LVM striping.\n");
         return 0;
     }
