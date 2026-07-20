@@ -72,7 +72,7 @@ static void test_map_single_seg_begin(void) {
     TV_MAP map = tv_map_logical(0, &m);
     check(map.disk == 0, "maps to disk 0 (nvme0n1)");
     check(map.offset == 0, "offset 0");
-    check(map.length == m.segments[0].stripe_size / m.segments[0].disk_count, "length = stripe/disks");
+    check(map.length == m.segments[0].weight[0] * TV_CHUNK_SIZE, "length = weight * chunk");
 }
 
 static void test_map_single_seg_mid(void) {
