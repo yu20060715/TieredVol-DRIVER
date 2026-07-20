@@ -18,7 +18,7 @@ sudo dmsetup ls | grep tv_ || echo "  (clean)"
 # ===== Step B: 拉最新代碼 + 編譯 =====
 echo ""
 echo "=== Step B: Build ==="
-cd ~/Desktop/TieredVol
+cd ~/TieredVol
 git pull
 make clean && make
 
