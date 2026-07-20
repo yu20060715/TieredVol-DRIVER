@@ -246,7 +246,8 @@ int tv_flush(TV_SCHED *sched) {
 int tv_sched_seek(TV_SCHED *sched, uint64_t offset) {
     if (!sched) return -1;
     if (tv_flush(sched) < 0) return -1;
-    sched->sbuf_logical = offset;
+    uint64_t aligned = (offset / sched->stripe_size) * sched->stripe_size;
+    sched->sbuf_logical = aligned;
     sched->sbuf_used = 0;
     return 0;
 }
