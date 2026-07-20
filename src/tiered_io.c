@@ -380,7 +380,7 @@ static int cmd_bench_all(TV_METADATA *meta) {
 
 /* Direct path benchmark: write to a file on a filesystem (LVM/ext4/etc.)
  * or directly to a block device (--raw).
- * Uses same block size (256KB) and O_DIRECT as scheduler mode for fair comparison. */
+ * Uses same block size (TV_CHUNK_SIZE) and O_DIRECT as scheduler mode for fair comparison. */
 static int cmd_bench_path(const char *path, uint64_t size, int warmup, int use_direct, int raw) {
     int fd;
     int is_file = !raw;
@@ -410,7 +410,7 @@ static int cmd_bench_path(const char *path, uint64_t size, int warmup, int use_d
                 use_direct ? " [O_DIRECT]" : "");
     }
 
-    /* Use same block size as scheduler (256KB) */
+    /* Use same block size as scheduler (TV_CHUNK_SIZE) */
     uint64_t chunk_size = TV_CHUNK_SIZE;
 
     uint8_t *buf = NULL;
