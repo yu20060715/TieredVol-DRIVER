@@ -153,7 +153,7 @@ sudo ./tiered_io --path /mnt/test --bench --size 128MB
 sudo ./tiered_io --path /mnt/test --bench-all
 ```
 
-**兩種模式使用相同的 256KB block size 和 O_DIRECT，確保公平比較。**
+**兩種模式使用相同的 1MB block size 和 O_DIRECT，確保公平比較。**
 
 ---
 

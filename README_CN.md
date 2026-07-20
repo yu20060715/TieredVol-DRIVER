@@ -56,7 +56,7 @@ Application
 NVMe  3100 MB/s → 1 chunk     NVMe  3100 MB/s → 7 chunks = 1792KB
 SATA  1700 MB/s → 1 chunk     SATA  1700 MB/s → 4 chunks = 1024KB
 SATA   800 MB/s → 1 chunk     SATA   800 MB/s → 2 chunks = 512KB
-SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  256KB
+SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  1MB
 
 NVMe 空等 SATA 完成            所有磁碟大約同時完成
 → 吞吐量 ≈ 最慢的碟            → 更高的整體吞吐量
@@ -245,7 +245,7 @@ sudo ./tiered_io --name fastpool --bench --size 128MB
 sudo ./tiered_io --path /mnt/test --bench --size 128MB
 ```
 
-兩種模式使用相同的 256KB block size 和 O_DIRECT，確保公平比較。
+兩種模式使用相同的 1MB block size 和 O_DIRECT，確保公平比較。
 
 ---
 

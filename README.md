@@ -56,7 +56,7 @@ Fixed striping (LVM):          Weighted striping (TieredVol):
 NVMe  3100 MB/s → 1 chunk     NVMe  3100 MB/s → 7 chunks = 1792KB
 SATA  1700 MB/s → 1 chunk     SATA  1700 MB/s → 4 chunks = 1024KB
 SATA   800 MB/s → 1 chunk     SATA   800 MB/s → 2 chunks = 512KB
-SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  256KB
+SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  1MB
 
 NVMe idle waiting for SATA     All disks finish at approximately
 → throughput ≈ slowest disk    the same time → higher aggregate
@@ -245,7 +245,7 @@ sudo ./tiered_io --name fastpool --bench --size 128MB
 sudo ./tiered_io --path /mnt/test --bench --size 128MB
 ```
 
-Both modes use the same 256KB block size and O_DIRECT for fair comparison.
+Both modes use the same 1MB block size and O_DIRECT for fair comparison.
 
 ---
 

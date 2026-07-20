@@ -407,6 +407,7 @@ static int cmd_bench_path(const char *path, uint64_t size, int warmup, int use_d
     /* Warmup: fill SLC cache with 20% of size (capped at 4GB) */
     if (warmup) {
         uint64_t warmup_size = size * 2 / 10;
+        warmup_size = (warmup_size / 512) * 512;  /* O_DIRECT alignment */
         if (warmup_size > 4ULL * 1024 * 1024 * 1024)
             warmup_size = 4ULL * 1024 * 1024 * 1024;
         fprintf(stderr, "Warming up SLC cache (%luMB)...\n",

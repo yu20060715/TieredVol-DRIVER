@@ -51,10 +51,10 @@ int tv_uring_submit(struct io_uring *ring) {
 
 int tv_uring_wait(struct io_uring *ring) {
     struct io_uring_cqe *cqe = NULL;
-    struct __kernel_timespec ts = { .tv_sec = 30, .tv_nsec = 0 };
+    struct __kernel_timespec ts = { .tv_sec = 5, .tv_nsec = 0 };
     int ret = io_uring_wait_cqe_timeout(ring, &cqe, &ts);
     if (ret == -ETIME) {
-        fprintf(stderr, "io_uring_wait_cqe timed out (30s)\n");
+        fprintf(stderr, "io_uring_wait_cqe timed out (5s)\n");
         return -ETIME;
     }
     if (ret < 0) {

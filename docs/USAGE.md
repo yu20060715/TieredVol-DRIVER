@@ -165,14 +165,14 @@ sudo tiered_io --name fastpool --info
 輸出 metadata 和 segment 資訊：
 
 ```
-Metadata: v1, chunk=256KB, 2 disks, 2 segments
+Metadata: v1, chunk=1MB, 2 disks, 2 segments
   Disk[0] nvme0n1
   Disk[1] sda
   Segment[0]: 0 - 53687091200 (2 disks, stripe=768KB)
     disk[0] weight=2 chunk=512KB
-    disk[1] weight=1 chunk=256KB
-  Segment[1]: 53687091200 - 107374182400 (1 disks, stripe=256KB)
-    disk[1] weight=1 chunk=256KB
+    disk[1] weight=1 chunk=1MB
+  Segment[1]: 53687091200 - 107374182400 (1 disks, stripe=1MB)
+    disk[1] weight=1 chunk=1MB
 ```
 
 ### 寫入 Benchmark（Scheduler 模式）
@@ -222,7 +222,7 @@ sudo tiered_io --path /mnt/test --bench-all
 ```
 
 Direct path 模式使用 `pwrite()` 直接寫入指定路徑，適用於 LVM volume 或任何檔案系統。
-**使用相同的 256KB block size 和 O_DIRECT，確保與 scheduler 模式公平比較。**
+**使用相同的 1MB block size 和 O_DIRECT，確保與 scheduler 模式公平比較。**
 
 ### 信號處理
 

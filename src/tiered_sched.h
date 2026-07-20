@@ -13,8 +13,8 @@ extern volatile sig_atomic_t g_shutdown_requested;
 
 #define TV_MAX_DISKS    16
 #define TV_MAX_SEGS     16
-#define TV_CHUNK_SIZE   (256 * 1024)
-#define TV_BUF_COUNT    8   /* stripe buffer pool size for pipelining */
+#define TV_CHUNK_SIZE   (1024 * 1024)   /* 1MB per disk per stripe */
+#define TV_BUF_COUNT    16  /* stripe buffer pool size for pipelining */
 
 typedef struct {
     int      id;
