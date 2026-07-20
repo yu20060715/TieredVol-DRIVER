@@ -475,11 +475,14 @@ Disk3: SATA   450 MB/s → weight=1 → 1 chunk  = 256KB
 ### 實測方法
 
 ```bash
-# 用 fio 測試加權 stripe volume
-fio --name=test --filename=/mnt/fast/test \
-    --rw=write --bs=4k --size=1G \
-    --numjobs=4 --iodepth=32 --direct=1
+# Scheduler 模式（加權條帶化）
+sudo tiered_io --name fastpool --bench --size 128MB
+
+# Direct path 模式（LVM/filesystem 對比）
+sudo tiered_io --path /mnt/test --bench --size 128MB
 ```
+
+兩種模式使用相同的 256KB block size 和 O_DIRECT，確保公平比較。
 
 ---
 
@@ -498,9 +501,9 @@ src/
 ├── tiered_benchmark.c      # 測速
 ├── tiered_partition.c      # Segment 計算
 ├── tiered_metadata.c       # Metadata 讀寫
-├── tiered_io.c             # CLI I/O 工具（read/write/bench/info）
+├── tiered_io.c             # CLI I/O 工具（read/write/bench/info/path）
 ├── tiered_setup.c          # CLI（加入 --scheduler 模式）
-└── tiered_ui.c             # TUI（加入 scheduler 狀態顯示）
+└── tiered_common.h         # 共用驗證函式
 ```
 
 ### API
@@ -548,14 +551,6 @@ sudo tiered_setup --create --name fastpool \
     --disks nvme0n1:500,sda:500 \
     --scheduler
 ```
-
-### TUI 模式
-
-Create Volume 精靈加入 `--scheduler` 選項。建立後，Volume Status 畫面顯示：
-- 目前的 weight table
-- 每顆碟的 chunks per cycle
-- stripe size
-- buffer 使用率
 
 ### 開機還原
 

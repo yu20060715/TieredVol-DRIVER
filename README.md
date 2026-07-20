@@ -13,7 +13,7 @@ Application
   tv_write() / tv_read()    ← Application must use this API
       │
       ▼
-  TieredVol Scheduler       ← weighted chunk分配 + offset mapping
+  TieredVol Scheduler       ← weighted chunk allocation + offset mapping
       │
       ▼
   io_uring                  ← async I/O dispatch
@@ -84,7 +84,7 @@ For implementation details, see:
 
 ## Legacy: dm-linear + LVM Striping Tool
 
-The project also includes a TUI management tool for dm-linear carving + LVM striping (Phase 0/1). This tool predates the weighted striping scheduler and provides a user-friendly way to combine disks using Linux's native dm-linear and LVM.
+The project also includes a CLI management tool for dm-linear carving + LVM striping (Phase 0/1). This tool predates the weighted striping scheduler and provides a way to combine disks using Linux's native dm-linear and LVM.
 
 ```
 Disk A (NVMe, 2000 MB/s) ──dm-linear──┐
@@ -99,7 +99,6 @@ Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV
 ### Features
 
 - **Carve Custom Capacity** — Slice a specified amount from each disk via dm-linear
-- **ncurses TUI** — Interactive 3-phase create wizard, disk list, benchmark, RAM cache tuning
 - **Input Validation** — Name/FS/mount whitelists, double-confirmation safety prompts
 - **Error Rollback** — Any step failure automatically cleans up all created devices
 - **Auto Benchmark** — Background parallel speed testing of all disks
@@ -111,7 +110,7 @@ Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV
 git clone https://github.com/yu20060715/TieredVol.git
 cd TieredVol
 make
-sudo ./tiered_ui
+sudo ./tiered_setup --list
 ```
 
 ### CLI Usage (LVM Striping)
@@ -149,7 +148,7 @@ sudo tiered_setup --destroy --name fastpool
 ## Requirements
 
 - Linux (kernel 5.1+ for io_uring support)
-- `lvm2` `dmsetup` `libncurses-dev` `gcc` `make`
+- `lvm2` `dmsetup` `gcc` `make`
 - `liburing-dev` (for Weighted Striping Scheduler)
 - Root privileges (sudo)
 
@@ -157,20 +156,20 @@ sudo tiered_setup --destroy --name fastpool
 
 ```bash
 # Debian / Ubuntu
-sudo apt install lvm2 libncurses-dev gcc make liburing-dev
+sudo apt install lvm2 gcc make liburing-dev
 
 # Fedora / RHEL
-sudo dnf install lvm2 ncurses-devel gcc make liburing-devel
+sudo dnf install lvm2 gcc make liburing-devel
 
 # Arch
-sudo pacman -S lvm2 ncurses gcc make liburing
+sudo pacman -S lvm2 gcc make liburing
 ```
 
 ## Build
 
 ```bash
-make              # Build tiered_setup + tiered_ui + tiered_io
-make test         # Run all tests (56 test cases)
+make              # Build tiered_setup + tiered_io
+make test         # Run all tests (34 test cases)
 make clean        # Remove all build artifacts
 sudo make install # Install to /usr/local/bin/
 ```
@@ -181,31 +180,6 @@ sudo make install # Install to /usr/local/bin/
 sudo systemctl daemon-reload
 sudo systemctl enable tieredvol-restore
 ```
-
----
-
-## TUI Interface
-
-```
-┌─ Main Menu ─────────────────────┐
-│   > Disk List                   │
-│     Benchmark                   │
-│     Create Volume               │
-│     Volume Status               │
-│     RAM Cache                   │
-│     Destroy Volume              │
-│     Exit                        │
-└─────────────────────────────────┘
-```
-
-| Screen | Key | Action |
-|--------|-----|--------|
-| Main Menu | ↑↓ Enter Q/ESC | Select / Confirm / Exit |
-| Disk List | B | Re-benchmark |
-| Create Phase 1 | Space Enter | Toggle disk / Next |
-| Create Phase 2 | ←→ ↑↓ | Adjust carve size |
-| RAM Cache | ←→ ↑↓ Enter | Adjust / Apply / Reset |
-| Destroy | Y | Confirm destruction |
 
 ---
 
@@ -230,9 +204,7 @@ TieredVol/
 ├── Makefile
 ├── src/
 │   ├── tiered_setup.c          # CLI backend
-│   ├── tiered_ui.c             # ncurses TUI frontend
 │   ├── tiered_common.h         # Shared validation
-│   ├── tiered_ui_helpers.h     # TUI helpers
 │   ├── version.h
 │   ├── tiered_sched.h          # Scheduler structs + API
 │   ├── tiered_sched.c          # Scheduler core
@@ -241,10 +213,9 @@ TieredVol/
 │   ├── tiered_benchmark.c      # Initialization benchmark
 │   ├── tiered_partition.c      # Weight + segment calculation
 │   ├── tiered_metadata.c       # Metadata save/load
-│   └── tiered_io.c             # CLI I/O tool (read/write/bench)
+│   └── tiered_io.c             # CLI I/O tool (read/write/bench/path)
 └── tests/
-    ├── test_common.c
-    └── test_tui.c
+    └── test_common.c
 ```
 
 ### Code Architecture
@@ -252,13 +223,29 @@ TieredVol/
 | Module | Responsibility |
 |--------|---------------|
 | `tiered_setup.c` | CLI core: disk discovery, benchmark, dm-linear/LVM/scheduler create, rollback |
-| `tiered_ui.c` | TUI frontend: 7 screens, create wizard, benchmarking, RAM cache tuning |
 | `tiered_sched.c` | Scheduler core: init, write (buffer + flush), read (mapping + io_uring), destroy |
 | `tiered_mapper.c` | Logical ↔ Physical offset mapping (prefix sum + linear scan) |
 | `tiered_io_uring.c` | io_uring wrapper (SQE/CQE, submit, wait) |
 | `tiered_benchmark.c` | Initialization benchmark (O_DIRECT, 3 runs average) — **not a storage benchmark** |
 | `tiered_partition.c` | Weight calculation, capacity segmentation, segment building |
 | `tiered_metadata.c` | Metadata save/load (static weights only) |
+| `tiered_io.c` | CLI I/O tool: info/read/write/bench/bench-all/path |
+
+---
+
+## Fair Comparison: Scheduler vs LVM
+
+To compare weighted striping against LVM striping, use the `--path` option:
+
+```bash
+# Scheduler mode (weighted striping)
+sudo ./tiered_io --name fastpool --bench --size 128MB
+
+# Direct path mode (LVM/filesystem)
+sudo ./tiered_io --path /mnt/test --bench --size 128MB
+```
+
+Both modes use the same 256KB block size and O_DIRECT for fair comparison.
 
 ---
 

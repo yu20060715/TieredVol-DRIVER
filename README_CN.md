@@ -84,7 +84,7 @@ sudo tiered_io --name fastpool --bench --size 128MB --warmup  # 持久
 
 ## 舊版：dm-linear + LVM Striping 工具
 
-本專案也包含一個 dm-linear carving + LVM striping 的 TUI 管理工具（Phase 0/1）。此工具早於加權條帶化排程器，提供友善的介面使用 Linux 原生 dm-linear 和 LVM 組合磁碟。
+本專案也包含一個 dm-linear carving + LVM striping 的 CLI 管理工具（Phase 0/1）。此工具早於加權條帶化排程器，提供方式使用 Linux 原生 dm-linear 和 LVM 組合磁碟。
 
 ```
 Disk A (NVMe, 2000 MB/s) ──dm-linear──┐
@@ -99,7 +99,6 @@ Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV
 ### 功能
 
 - **自選容量 carve** — 透過 dm-linear 從每顆碟切出指定大小
-- **ncurses TUI** — 互動式 3 階段建立精靈、硬碟清單、測速、RAM Cache 調整
 - **輸入驗證** — 名稱/FS/掛載點白名單、雙重確認安全提示
 - **錯誤回滾** — 任何步驟失敗自動清理所有已建立的裝置
 - **自動測速** — 背景平行測試所有磁碟的讀寫速度
@@ -111,7 +110,7 @@ Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV
 git clone https://github.com/yu20060715/TieredVol.git
 cd TieredVol
 make
-sudo ./tiered_ui
+sudo ./tiered_setup --list
 ```
 
 ### CLI 使用（LVM Striping）
@@ -149,7 +148,7 @@ sudo tiered_setup --destroy --name fastpool
 ## 系統需求
 
 - Linux（kernel 5.1+ 以支援 io_uring）
-- `lvm2` `dmsetup` `libncurses-dev` `gcc` `make`
+- `lvm2` `dmsetup` `gcc` `make`
 - `liburing-dev`（Weighted Striping Scheduler 需要）
 - Root 權限（sudo）
 
@@ -157,20 +156,20 @@ sudo tiered_setup --destroy --name fastpool
 
 ```bash
 # Debian / Ubuntu
-sudo apt install lvm2 libncurses-dev gcc make liburing-dev
+sudo apt install lvm2 gcc make liburing-dev
 
 # Fedora / RHEL
-sudo dnf install lvm2 ncurses-devel gcc make liburing-devel
+sudo dnf install lvm2 gcc make liburing-devel
 
 # Arch
-sudo pacman -S lvm2 ncurses gcc make liburing
+sudo pacman -S lvm2 gcc make liburing
 ```
 
 ## 建置
 
 ```bash
-make              # 編譯 tiered_setup + tiered_ui + tiered_io
-make test         # 執行所有測試（56 個 test case）
+make              # 編譯 tiered_setup + tiered_io
+make test         # 執行所有測試（34 個 test case）
 make clean        # 刪除所有編譯产物
 sudo make install # 安裝到 /usr/local/bin/
 ```
@@ -181,31 +180,6 @@ sudo make install # 安裝到 /usr/local/bin/
 sudo systemctl daemon-reload
 sudo systemctl enable tieredvol-restore
 ```
-
----
-
-## TUI 介面
-
-```
-┌─ Main Menu ─────────────────────┐
-│   > Disk List                   │
-│     Benchmark                   │
-│     Create Volume               │
-│     Volume Status               │
-│     RAM Cache                   │
-│     Destroy Volume              │
-│     Exit                        │
-└─────────────────────────────────┘
-```
-
-| 畫面 | 按鍵 | 動作 |
-|------|------|------|
-| 主選單 | ↑↓ Enter Q/ESC | 選擇/確認/離開 |
-| Disk List | B | 重新測速 |
-| Create Phase 1 | Space Enter | 選碟 / 下一步 |
-| Create Phase 2 | ←→ ↑↓ | 調整 carve 容量 |
-| RAM Cache | ←→ ↑↓ Enter | 調整 / Apply / Reset |
-| Destroy | Y | 確認刪除 |
 
 ---
 
@@ -230,9 +204,7 @@ TieredVol/
 ├── Makefile
 ├── src/
 │   ├── tiered_setup.c          # CLI 後端
-│   ├── tiered_ui.c             # ncurses TUI 前端
 │   ├── tiered_common.h         # 共用驗證函式
-│   ├── tiered_ui_helpers.h     # TUI 輔助函式
 │   ├── version.h
 │   ├── tiered_sched.h          # Scheduler struct + API
 │   ├── tiered_sched.c          # Scheduler 核心
@@ -241,10 +213,9 @@ TieredVol/
 │   ├── tiered_benchmark.c      # 初始化 benchmark
 │   ├── tiered_partition.c      # Weight + segment 計算
 │   ├── tiered_metadata.c       # Metadata 讀寫
-│   └── tiered_io.c             # CLI I/O 工具（read/write/bench）
+│   └── tiered_io.c             # CLI I/O 工具（read/write/bench/path）
 └── tests/
-    ├── test_common.c
-    └── test_tui.c
+    └── test_common.c
 ```
 
 ### 程式碼架構
@@ -252,13 +223,29 @@ TieredVol/
 | 模組 | 職責 |
 |------|------|
 | `tiered_setup.c` | CLI 核心：磁碟發現、benchmark、dm-linear/LVM/scheduler 建立、rollback |
-| `tiered_ui.c` | TUI 前端：7 個畫面、建立精靈、測速、RAM cache 調整 |
 | `tiered_sched.c` | Scheduler 核心：init、write（buffer + flush）、read（mapping + io_uring）、destroy |
 | `tiered_mapper.c` | Logical ↔ Physical offset mapping（prefix sum + linear scan） |
 | `tiered_io_uring.c` | io_uring wrapper（SQE/CQE、submit、wait） |
 | `tiered_benchmark.c` | 初始化 benchmark（O_DIRECT，3 次取平均）— **不是儲存 benchmark** |
 | `tiered_partition.c` | Weight 計算、容量分段、segment 建立 |
 | `tiered_metadata.c` | Metadata 讀寫（僅支援靜態 weight） |
+| `tiered_io.c` | CLI I/O 工具：info/read/write/bench/bench-all/path |
+
+---
+
+## 公平比較：Scheduler vs LVM
+
+要比較加權條帶化和 LVM striping，使用 `--path` 選項：
+
+```bash
+# Scheduler 模式（加權條帶化）
+sudo ./tiered_io --name fastpool --bench --size 128MB
+
+# Direct path 模式（LVM/filesystem）
+sudo ./tiered_io --path /mnt/test --bench --size 128MB
+```
+
+兩種模式使用相同的 256KB block size 和 O_DIRECT，確保公平比較。
 
 ---
 

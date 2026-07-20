@@ -16,24 +16,31 @@ static void sigterm_handler(int sig) {
 
 static void usage(void) {
     fprintf(stderr,
-        "Usage: tiered_io --name <vol> [options]\n"
+        "Usage:\n"
+        "  tiered_io --name <vol> [options]    # Scheduler mode\n"
+        "  tiered_io --path <dir> [options]    # Direct path mode (for LVM/filesystem)\n"
         "\n"
-        "Options:\n"
+        "Scheduler mode options:\n"
         "  --info                    Show metadata and segment info\n"
         "  --read  --offset <N> --len <N>   Read bytes (output to stdout)\n"
         "  --write --offset <N> --len <N>   Write bytes (input from stdin)\n"
+        "\n"
+        "Benchmark options (both modes):\n"
         "  --bench --size <N>MB      Write benchmark (default: 64MB)\n"
         "  --bench --size <N>GB      Write benchmark in GB\n"
-        "  --bench-all               Run full benchmark suite (512MB/5120MB/10240MB ± warmup)\n"
-        "  --direct                  Use O_DIRECT (bypass page cache, default for --bench)\n"
+        "  --bench-all               Run full benchmark suite (512MB/5120MB/10240MB)\n"
+        "  --direct                  Use O_DIRECT (default for --bench)\n"
         "  --no-direct               Disable O_DIRECT for benchmark\n"
         "  --warmup                  SLC cache warm-up (sustained speed)\n"
         "\n"
         "Examples:\n"
-        "  tiered_io --name fastpool --info\n"
+        "  # Scheduler (weighted striping)\n"
         "  tiered_io --name fastpool --bench --size 128MB\n"
         "  tiered_io --name fastpool --bench-all\n"
-        "  tiered_io --name fastpool --bench --size 128MB --warmup\n"
+        "\n"
+        "  # Direct path (LVM/filesystem, fair comparison)\n"
+        "  tiered_io --path /mnt/test --bench --size 128MB\n"
+        "  tiered_io --path /mnt/test --bench-all\n"
     );
 }
 
@@ -367,11 +374,137 @@ static int cmd_bench_all(TV_METADATA *meta) {
     return ret;
 }
 
+/* Direct path benchmark: write to a file on a filesystem (LVM/ext4/etc.)
+ * Uses same block size (256KB) and O_DIRECT as scheduler mode for fair comparison. */
+static int cmd_bench_path(const char *path, uint64_t size, int warmup, int use_direct) {
+    /* Create benchmark file */
+    char benchfile[512];
+    snprintf(benchfile, sizeof(benchfile), "%s/tieredvol_bench.dat", path);
+
+    int flags = O_WRONLY | O_CREAT | O_TRUNC;
+    if (use_direct) flags |= O_DIRECT;
+
+    int fd = open(benchfile, flags, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "Error: cannot open %s: %s\n", benchfile, strerror(errno));
+        return -1;
+    }
+
+    fprintf(stderr, "Benchmark file: %s%s\n", benchfile,
+            use_direct ? " [O_DIRECT]" : "");
+
+    /* Use same block size as scheduler (256KB) */
+    uint64_t chunk_size = TV_CHUNK_SIZE;
+
+    uint8_t *buf = NULL;
+    if (posix_memalign((void **)&buf, 512, (size_t)chunk_size) != 0) {
+        fprintf(stderr, "Error: cannot allocate buffer\n");
+        close(fd);
+        return -1;
+    }
+    memset(buf, 0xAB, (size_t)chunk_size);
+
+    /* Warmup: fill SLC cache with 20% of size (capped at 4GB) */
+    if (warmup) {
+        uint64_t warmup_size = size * 2 / 10;
+        if (warmup_size > 4ULL * 1024 * 1024 * 1024)
+            warmup_size = 4ULL * 1024 * 1024 * 1024;
+        fprintf(stderr, "Warming up SLC cache (%luMB)...\n",
+                (unsigned long)(warmup_size / (1024 * 1024)));
+        uint64_t warmup_written = 0;
+        while (warmup_written < warmup_size) {
+            if (g_shutdown_requested) break;
+            uint64_t chunk = chunk_size;
+            if (warmup_written + chunk > warmup_size) chunk = warmup_size - warmup_written;
+            ssize_t n = pwrite(fd, buf, (size_t)chunk, (off_t)warmup_written);
+            if (n < 0) {
+                fprintf(stderr, "Error: warmup pwrite failed: %s\n", strerror(errno));
+                break;
+            }
+            warmup_written += n;
+        }
+        fsync(fd);
+        fprintf(stderr, "Warm-up complete.\n");
+    }
+
+    /* Benchmark */
+    uint64_t written = 0;
+    struct timespec ts_start, ts_end;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
+    while (written < size) {
+        if (g_shutdown_requested) {
+            fprintf(stderr, "\nShutdown requested\n");
+            break;
+        }
+        uint64_t chunk = chunk_size;
+        if (written + chunk > size) chunk = size - written;
+
+        ssize_t n = pwrite(fd, buf, (size_t)chunk, (off_t)written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            fprintf(stderr, "Error: pwrite failed at %lu bytes: %s\n",
+                    (unsigned long)written, strerror(errno));
+            break;
+        }
+        written += n;
+
+        if (written % (64 * 1024 * 1024) == 0 || written == size) {
+            fprintf(stderr, "\r  progress: %lu / %lu MB",
+                    (unsigned long)(written / 1048576),
+                    (unsigned long)(size / 1048576));
+        }
+    }
+    fprintf(stderr, "\n");
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+
+    fsync(fd);
+    close(fd);
+
+    /* Clean up benchmark file */
+    unlink(benchfile);
+
+    double elapsed = (ts_end.tv_sec - ts_start.tv_sec) +
+                     (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
+
+    double mb = (double)written / (1024.0 * 1024.0);
+    double mbps = mb / elapsed;
+
+    fprintf(stderr, "Benchmark: %lu bytes (%.1f MB) in %.3f seconds\n",
+           (unsigned long)written, mb, elapsed);
+    fprintf(stderr, "Throughput: %.1f MB/s\n", mbps);
+
+    free(buf);
+    return 0;
+}
+
+static int cmd_bench_path_all(const char *path, int use_direct) {
+    uint64_t sizes[] = {
+        512ULL  * 1024 * 1024,
+        5120ULL * 1024 * 1024,
+        10240ULL * 1024 * 1024,
+    };
+    int nsizes = sizeof(sizes) / sizeof(sizes[0]);
+
+    for (int phase = 0; phase < 2; phase++) {
+        for (int i = 0; i < nsizes; i++) {
+            if (g_shutdown_requested) break;
+            fprintf(stderr, "\n=== Bench %luMB (%s) ===\n",
+                    (unsigned long)(sizes[i] / 1048576),
+                    phase == 0 ? "no warmup" : "with warmup");
+            cmd_bench_path(path, sizes[i], phase == 1, use_direct);
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     signal(SIGTERM, sigterm_handler);
     signal(SIGINT, sigterm_handler);
 
     const char *name = NULL;
+    const char *path = NULL;
     int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, do_bench_all = 0;
     int use_direct = -1, do_warmup = 0;
     uint64_t offset = 0, len = 0, bench_size = 64 * 1024 * 1024;
@@ -379,6 +512,8 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
             name = argv[++i];
+        } else if (strcmp(argv[i], "--path") == 0 && i + 1 < argc) {
+            path = argv[++i];
         } else if (strcmp(argv[i], "--info") == 0) {
             do_info = 1;
         } else if (strcmp(argv[i], "--read") == 0) {
@@ -407,6 +542,23 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    /* --bench defaults to O_DIRECT unless --no-direct is specified */
+    if (use_direct < 0) use_direct = do_bench ? 1 : 0;
+
+    /* Direct path mode */
+    if (path) {
+        if (!do_bench && !do_bench_all) {
+            fprintf(stderr, "Error: --path requires --bench or --bench-all\n");
+            usage();
+            return 1;
+        }
+        if (do_bench_all) {
+            return cmd_bench_path_all(path, use_direct);
+        }
+        return cmd_bench_path(path, bench_size, do_warmup, use_direct);
+    }
+
+    /* Scheduler mode */
     if (!name) {
         usage();
         return 1;
@@ -422,9 +574,6 @@ int main(int argc, char *argv[]) {
         do_bench = 1;
         use_direct = 1;
     }
-
-    /* --bench defaults to O_DIRECT unless --no-direct is specified */
-    if (use_direct < 0) use_direct = do_bench ? 1 : 0;
 
     /* Load metadata */
     TV_METADATA meta;
