@@ -34,8 +34,8 @@ Benchmark 一次
 標準 LVM striping / md RAID0 使用統一 stripe size，每顆碟每 cycle 拿**相同數量的 chunk**。快碟被迫等慢碟：
 
 ```
-NVMe 2000 MB/s: [64KB] → 0.032ms → 等待中...
-SATA 500 MB/s:  [64KB] → 0.128ms → 進行中...
+NVMe 2000 MB/s: [256KB] → 0.128ms → 等待中...
+SATA 500 MB/s:  [256KB] → 0.512ms → 進行中...
 NVMe 每 cycle 空等 75% 的時間。
 ```
 
@@ -46,12 +46,12 @@ NVMe 每 cycle 空等 75% 的時間。
 ## 核心概念：加權 Chunk
 
 ```
-NVMe  2000 MB/s → 4 chunks per cycle (4 × 64KB = 256KB)
-SATA   500 MB/s → 1 chunk per cycle  (1 × 64KB = 64KB)
+NVMe  2000 MB/s → 4 chunks per cycle (4 × 256KB = 1024KB)
+SATA   500 MB/s → 1 chunk per cycle  (1 × 256KB = 256KB)
 
 時間：
-  NVMe: 256KB / 2000 MB/s = 0.128ms
-  SATA:  64KB / 500 MB/s  = 0.128ms
+  NVMe: 1024KB / 2000 MB/s = 0.512ms
+  SATA:  256KB / 500 MB/s  = 0.512ms
   → 兩者同時完成
 ```
 
@@ -83,13 +83,13 @@ D:  500 / 500 = 1
 weight = [6, 3, 2, 1]
 ```
 
-每輪共 `6+3+2+1 = 12` chunks。如果 chunk=64KB，一輪 768KB。
+每輪共 `6+3+2+1 = 12` chunks。如果 chunk=256KB，一輪 3072KB。
 
 ### Step 3：Dispatch
 
 ```
 A A A A A A | B B B | C C | D
-384KB        | 192KB | 128KB | 64KB
+1536KB       | 768KB | 512KB | 256KB
 ```
 
 大家幾乎同時完成。
@@ -171,7 +171,7 @@ C 只有 512GB，A 和 B 有 1TB。當 C 用完後，剩下三顆碟的比例就
 ```
 速度：3000, 1500, 1000, 500
 比例：6:3:2:1
-一輪：12 chunks × 64KB = 768KB
+一輪：12 chunks × 256KB = 3072KB
 ```
 
 #### 段 2（512GB ~ 1TB）：C 用完了
@@ -179,7 +179,7 @@ C 只有 512GB，A 和 B 有 1TB。當 C 用完後，剩下三顆碟的比例就
 ```
 剩：A(3000), B(1500), D(500)
 比例：6:3:1
-一輪：10 chunks × 64KB = 640KB
+一輪：10 chunks × 256KB = 2560KB
 ```
 
 #### 段 3（1TB ~ 2TB）：A、B 都用完了
@@ -222,18 +222,18 @@ Segment2: 2~4TB     → disk [0]        weight [7]
 
 不一定要用固定 weight。每次 dispatch 時，動態計算每顆碟「理論上應該拿多少資料」。
 
-### 範例：600KB 需要寫入
+### 範例：2400KB 需要寫入
 
 ```
 速度：NVMe 1234 MB/s, SATA 480 MB/s
 總速度：1714 MB/s
 
-NVMe 應拿：600 × 1234/1714 = 432KB
-SATA 應拿：600 × 480/1714  = 168KB
+NVMe 應拿：2400 × 1234/1714 = 1728KB
+SATA 應拿：2400 × 480/1714  = 672KB
 
-對齊到 64KB chunk：
-  NVMe → 448KB (7 chunks)
-  SATA → 192KB (3 chunks)
+對齊到 256KB chunk：
+  NVMe → 1792KB (7 chunks)
+  SATA → 768KB (3 chunks)
 ```
 
 ### 優點
@@ -262,7 +262,7 @@ Metadata 結構定義在 `src/tiered_sched.h`（TV_METADATA）。
 # /etc/tieredvol/fastpool.scheduler
 [weighted_striping]
 version=1
-chunk_size=65536
+chunk_size=262144
 segment_count=3
 disk_count=4
 disk0_name=nvme0n1
@@ -274,7 +274,7 @@ seg0_end=1073741824
 seg0_count=4
 seg0_disks=0,1,2,3
 seg0_weight=7,4,2,1
-seg0_stripe=917504
+seg0_stripe=3670016
 # ... 其他 segments
 ```
 

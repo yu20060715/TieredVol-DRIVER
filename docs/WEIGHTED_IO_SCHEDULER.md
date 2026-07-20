@@ -218,19 +218,19 @@ seg0_end=1073741824
 seg0_count=4
 seg0_disks=0,1,2,3
 seg0_weight=7,4,2,1
-seg0_stripe=917504
+seg0_stripe=3670016
 seg1_begin=1073741824
 seg1_end=2147483648
 seg1_count=3
 seg1_disks=0,1,2
 seg1_weight=7,4,2
-seg1_stripe=8388608
+seg1_stripe=3407872
 seg2_begin=2147483648
 seg2_end=3221225472
 seg2_count=1
 seg2_disks=0
 seg2_weight=7
-seg2_stripe=45088768
+seg2_stripe=1835008
 ```
 
 ### Restore
@@ -396,6 +396,19 @@ buffer.used = 0;  // 下一個 stripe
 - 不頻繁做
 
 否則整個 volume 會很卡。
+
+### 坑 5：io_uring + O_DIRECT + dm-linear 會丟 CQE
+
+在 io_uring 搭配 O_DIRECT 且底層為 dm-linear 時，部分 CQE 可能丢失（res=0 但實際未完成寫入）。可能原因：
+- dm-linear 的 boundary 對齊問題
+- O_DIRECT 要求 alignment（512B / 4KB），未對齊的寫入會被靜默忽略
+- io_uring 的 ring overflow
+
+建議：
+- 使用 `io_uring_register_buf_ring()` 做 buffer registration
+- 每次 submit 後 double-check CQE count
+- 保持 chunk_size 為 256KB（確保 4KB alignment）
+- 加 30s timeout 防止 hang
 
 ---
 

@@ -239,28 +239,6 @@ int tv_flush(TV_SCHED *sched) {
     return 0;
 }
 
-void tv_sched_reset(TV_SCHED *sched) {
-    if (!sched) return;
-    /* Drain leftover CQEs with a safety counter to prevent infinite loop */
-    int drained = 0;
-    int max_drain = TV_BUF_COUNT * 4;
-    struct io_uring_cqe *cqe;
-    while (drained < max_drain) {
-        int ret = io_uring_peek_cqe(&sched->ring, &cqe);
-        if (ret < 0 || !cqe) break;
-        io_uring_cqe_seen(&sched->ring, cqe);
-        drained++;
-    }
-    for (int i = 0; i < TV_BUF_COUNT; i++) {
-        sched->sbuf[i].in_flight = 0;
-        sched->sbuf[i].cqes_pending = 0;
-    }
-    sched->sbuf_head = 0;
-    sched->sbuf_used = 0;
-    sched->sbuf_logical = 0;
-    sched->inflight = 0;
-}
-
 int tv_read(TV_SCHED *sched, void *buf, uint64_t len, uint64_t offset) {
     if (!sched || !buf || len == 0) return -1;
 

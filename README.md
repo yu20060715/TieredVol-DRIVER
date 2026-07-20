@@ -53,10 +53,10 @@ Traditional RAID0 and LVM striping use a fixed stripe size for all disks. When s
 ```
 Fixed striping (LVM):          Weighted striping (TieredVol):
 
-NVMe  3100 MB/s → 1 chunk     NVMe  3100 MB/s → 7 chunks = 448KB
-SATA  1700 MB/s → 1 chunk     SATA  1700 MB/s → 4 chunks = 256KB
-SATA   800 MB/s → 1 chunk     SATA   800 MB/s → 2 chunks = 128KB
-SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  64KB
+NVMe  3100 MB/s → 1 chunk     NVMe  3100 MB/s → 7 chunks = 1792KB
+SATA  1700 MB/s → 1 chunk     SATA  1700 MB/s → 4 chunks = 1024KB
+SATA   800 MB/s → 1 chunk     SATA   800 MB/s → 2 chunks = 512KB
+SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  256KB
 
 NVMe idle waiting for SATA     All disks finish at approximately
 → throughput ≈ slowest disk    the same time → higher aggregate

@@ -370,6 +370,42 @@ Throughput: 547.0 MB/s
 Stripes flushed: 667
 ```
 
+### 完整 Benchmark Suite
+
+```bash
+# 執行所有 benchmark 模式（write + BLKDISCARD + read）
+sudo tiered_io --name fastpool --bench-all
+
+# 指定大小
+sudo tiered_io --name fastpool --bench-all --size 256MB
+```
+
+`--bench-all` 會依序執行：
+1. **Sequential write** — 加權條帶化寫入，測量寫入吞吐量
+2. **BLKDISCARD** — 對整個 volume 執行 discard（釋放已寫入的區塊）
+3. **Sequential read** — 加權條帶化讀取，測量讀取吞吐量
+
+輸出每個階段的 MB/s，方便一次取得完整的讀寫效能數據。
+
+### 信號處理
+
+`tiered_io` 支援 SIGTERM 和 SIGINT（Ctrl+C）優雅中斷：
+
+- 收到信號後，等待目前 in-flight 的 I/O 完成
+- 清理 io_uring ring 和 stripe buffer
+- 正確關閉所有檔案描述元
+- 輸出已完成的 stripes 數量和部分吞吐量統計
+
+```bash
+# 優雅中斷（Ctrl+C）
+sudo tiered_io --name fastpool --bench --size 1GB
+^C
+# → 等待 in-flight I/O 完成後退出
+
+# 背景執行 + timeout
+sudo timeout 30s tiered_io --name fastpool --bench --size 1GB
+```
+
 ### 寫入資料
 
 ```bash

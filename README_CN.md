@@ -53,10 +53,10 @@ Application
 ```
 固定條帶化（LVM）：             加權條帶化（TieredVol）：
 
-NVMe  3100 MB/s → 1 chunk     NVMe  3100 MB/s → 7 chunks = 448KB
-SATA  1700 MB/s → 1 chunk     SATA  1700 MB/s → 4 chunks = 256KB
-SATA   800 MB/s → 1 chunk     SATA   800 MB/s → 2 chunks = 128KB
-SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  64KB
+NVMe  3100 MB/s → 1 chunk     NVMe  3100 MB/s → 7 chunks = 1792KB
+SATA  1700 MB/s → 1 chunk     SATA  1700 MB/s → 4 chunks = 1024KB
+SATA   800 MB/s → 1 chunk     SATA   800 MB/s → 2 chunks = 512KB
+SATA   450 MB/s → 1 chunk     SATA   450 MB/s → 1 chunk  =  256KB
 
 NVMe 空等 SATA 完成            所有磁碟大約同時完成
 → 吞吐量 ≈ 最慢的碟            → 更高的整體吞吐量
