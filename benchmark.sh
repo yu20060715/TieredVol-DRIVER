@@ -37,7 +37,7 @@ sudo ./tiered_setup --create --name testpool \
 # ===== Step E: Scheduler bench-all =====
 echo ""
 echo "=== Step E: Scheduler bench-all ==="
-sudo ./tiered_io --name testpool --bench-all 2>&1 | tee /tmp/scheduler_result.txt
+sudo ./tiered_io --name testpool --bench-all 2>&1 | tee ~/Desktop/scheduler_result.txt
 
 # ===== Step F: Destroy scheduler =====
 echo ""
@@ -60,31 +60,31 @@ lsblk | grep test
 # ===== Step I: LVM ext4 bench-all =====
 echo ""
 echo "=== Step I: LVM ext4 bench-all ==="
-sudo ./tiered_io --path /mnt/test --bench-all 2>&1 | tee /tmp/path_fs_result.txt
+sudo ./tiered_io --path /mnt/test --bench-all 2>&1 | tee ~/Desktop/path_fs_result.txt
 
 # ===== Step J: LVM raw bench-all (bypass filesystem) =====
 echo ""
 echo "=== Step J: LVM raw bench-all (bypass ext4) ==="
 LVM_DEV="/dev/mapper/tv_vg_testpool2-tv_lv_testpool2"
 echo "  Raw device: $LVM_DEV"
-sudo ./tiered_io --path "$LVM_DEV" --bench-all --raw 2>&1 | tee /tmp/path_raw_result.txt
+sudo ./tiered_io --path "$LVM_DEV" --bench-all --raw 2>&1 | tee ~/Desktop/path_raw_result.txt
 
 # ===== Step K: 看結果 =====
 echo ""
 echo "============================================"
 echo "========== Scheduler（加權） =========="
 echo "============================================"
-cat /tmp/scheduler_result.txt
+cat ~/Desktop/scheduler_result.txt
 echo ""
 echo "============================================"
 echo "========== Path ext4（LVM striping）========="
 echo "============================================"
-cat /tmp/path_fs_result.txt
+cat ~/Desktop/path_fs_result.txt
 echo ""
 echo "============================================"
 echo "========== Path raw（LVM 直寫）=========="
 echo "============================================"
-cat /tmp/path_raw_result.txt
+cat ~/Desktop/path_raw_result.txt
 
 # ===== Step L: 清理 =====
 echo ""
