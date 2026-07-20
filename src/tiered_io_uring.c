@@ -2,6 +2,7 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+#include <time.h>
 #include "tiered_sched.h"
 
 int tv_uring_init(struct io_uring *ring, int queue_depth) {
@@ -50,7 +51,12 @@ int tv_uring_submit(struct io_uring *ring) {
 
 int tv_uring_wait(struct io_uring *ring) {
     struct io_uring_cqe *cqe = NULL;
-    int ret = io_uring_wait_cqe(ring, &cqe);
+    struct __kernel_timespec ts = { .tv_sec = 30, .tv_nsec = 0 };
+    int ret = io_uring_wait_cqe_timeout(ring, &cqe, &ts);
+    if (ret == -ETIME) {
+        fprintf(stderr, "io_uring_wait_cqe timed out (30s)\n");
+        return -ETIME;
+    }
     if (ret < 0) {
         fprintf(stderr, "io_uring_wait_cqe failed: %s\n", strerror(-ret));
         return -1;

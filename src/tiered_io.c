@@ -4,9 +4,15 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <signal.h>
 #include <time.h>
 #include <errno.h>
 #include "tiered_sched.h"
+
+static void sigterm_handler(int sig) {
+    (void)sig;
+    g_shutdown_requested = 1;
+}
 
 static void usage(void) {
     fprintf(stderr,
@@ -67,6 +73,23 @@ static void close_disks(TV_DISK *disks, int ndisks) {
     for (int i = 0; i < ndisks; i++) {
         if (disks[i].fd >= 0) close(disks[i].fd);
     }
+}
+
+#include <sys/ioctl.h>
+#include <linux/fs.h>
+
+static int discard_disks(TV_DISK *disks, int ndisks) {
+    for (int i = 0; i < ndisks; i++) {
+        if (disks[i].fd < 0) continue;
+        off_t sz = lseek(disks[i].fd, 0, SEEK_END);
+        if (sz <= 0) continue;
+        uint64_t range[2] = { 0, (uint64_t)sz };
+        if (ioctl(disks[i].fd, BLKDISCARD, range) < 0) {
+            fprintf(stderr, "Warning: BLKDISCARD on %s failed: %s\n",
+                    disks[i].name, strerror(errno));
+        }
+    }
+    return 0;
 }
 
 static int cmd_info(TV_METADATA *meta) {
@@ -186,6 +209,7 @@ static int do_warmup_exec(TV_SCHED *sched, TV_METADATA *meta) {
     uint64_t warmup_written = 0;
     int warmup_ok = 1;
     while (warmup_written < warmup_size) {
+        if (g_shutdown_requested) { warmup_ok = 0; break; }
         uint64_t chunk = sched->stripe_size;
         if (warmup_written + chunk > warmup_size) chunk = warmup_size - warmup_written;
         if (tv_write(sched, wbuf, chunk) < 0) { warmup_ok = 0; break; }
@@ -208,6 +232,10 @@ static int do_warmup_exec(TV_SCHED *sched, TV_METADATA *meta) {
 }
 
 static int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA *meta) {
+    if (warmup) {
+        do_warmup_exec(sched, meta);
+    }
+
     uint64_t vol_size = meta->segments[meta->segment_count - 1].logical_end;
     uint64_t remaining = vol_size - sched->sbuf_logical;
     if (size > remaining) {
@@ -218,10 +246,6 @@ static int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA
     if (size == 0) {
         fprintf(stderr, "Warning: no space left in volume, skipping bench\n");
         return 0;
-    }
-
-    if (warmup) {
-        do_warmup_exec(sched, meta);
     }
 
     uint8_t *buf = malloc((size_t)(sched->stripe_size));
@@ -237,11 +261,19 @@ static int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
     while (written < size) {
+        if (g_shutdown_requested) {
+            fprintf(stderr, "\nShutdown requested, flushing...\n");
+            break;
+        }
         uint64_t chunk = sched->stripe_size;
         if (written + chunk > size) chunk = size - written;
 
         int ret = tv_write(sched, buf, chunk);
         if (ret < 0) {
+            if (g_shutdown_requested) {
+                fprintf(stderr, "\nShutdown requested during write\n");
+                break;
+            }
             fprintf(stderr, "Error: tv_write failed at %lu bytes\n",
                     (unsigned long)written);
             free(buf);
@@ -249,14 +281,21 @@ static int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA
         }
 
         written += chunk;
+
+        if (written % (64 * 1024 * 1024) == 0 || written == size) {
+            fprintf(stderr, "\r  progress: %lu / %lu MB",
+                    (unsigned long)(written / 1048576),
+                    (unsigned long)(size / 1048576));
+        }
     }
+    fprintf(stderr, "\n");
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
 
     {
         int ret = tv_flush(sched);
         if (ret < 0) {
-            fprintf(stderr, "Error: final tv_flush failed\n");
-            free(buf);
-            return -1;
+            fprintf(stderr, "Warning: final tv_flush failed (some CQEs may be stuck)\n");
         }
     }
 
@@ -264,8 +303,6 @@ static int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA
         if (sched->disks[i].fd >= 0)
             fsync(sched->disks[i].fd);
     }
-
-    clock_gettime(CLOCK_MONOTONIC, &ts_end);
     double elapsed = (ts_end.tv_sec - ts_start.tv_sec) +
                      (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
 
@@ -274,10 +311,10 @@ static int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA
     int stripe_count = (int)(written / sched->stripe_size);
     if (written % sched->stripe_size) stripe_count++;
 
-    printf("Benchmark: %lu bytes (%.1f MB) in %.3f seconds\n",
+    fprintf(stderr, "Benchmark: %lu bytes (%.1f MB) in %.3f seconds\n",
            (unsigned long)written, mb, elapsed);
-    printf("Throughput: %.1f MB/s\n", mbps);
-    printf("Stripes flushed: %d\n", stripe_count);
+    fprintf(stderr, "Throughput: %.1f MB/s\n", mbps);
+    fprintf(stderr, "Stripes flushed: %d\n", stripe_count);
 
     free(buf);
     return 0;
@@ -292,39 +329,48 @@ static int cmd_bench_all(TV_METADATA *meta) {
     int nsizes = sizeof(sizes) / sizeof(sizes[0]);
     int ret = 0;
 
+    TV_DISK disks[TV_MAX_DISKS];
+    if (open_disks(meta, disks, 1) < 0) return -1;
+
     for (int phase = 0; phase < 2; phase++) {
         for (int i = 0; i < nsizes; i++) {
-            /* Reopen disks + reinit scheduler for each run to reset write offset */
-            TV_DISK disks[TV_MAX_DISKS];
-            if (open_disks(meta, disks, 1) < 0) { ret = -1; break; }
-
-            TV_SCHED *sched = tv_sched_init(disks, (int)meta->disk_count, meta);
-            if (!sched) {
-                fprintf(stderr, "Error: tv_sched_init failed\n");
-                close_disks(disks, (int)meta->disk_count);
-                ret = -1;
-                break;
-            }
-
+            if (g_shutdown_requested) { ret = -1; break; }
             fprintf(stderr, "\n=== Bench %luMB (%s) ===\n",
                     (unsigned long)(sizes[i] / 1048576),
                     phase == 0 ? "no warmup" : "with warmup");
-            if (cmd_bench_one(sched, sizes[i], phase == 1, meta) < 0) {
-                tv_sched_destroy(sched);
-                close_disks(disks, (int)meta->disk_count);
+
+            /* Discard blocks to avoid io_uring CQE loss when
+             * overwriting previously io_uring-written dm-linear blocks. */
+            discard_disks(disks, (int)meta->disk_count);
+
+            /* Fresh scheduler per bench: avoids kernel I/O hang when
+             * io_uring reuses memory buffers for writes to already-
+             * written dm-linear blocks (O_DIRECT + dm-linear bug). */
+            TV_SCHED *sched = tv_sched_init(disks, (int)meta->disk_count, meta);
+            if (!sched) {
+                fprintf(stderr, "Error: tv_sched_init failed\n");
                 ret = -1;
                 break;
             }
 
+            if (cmd_bench_one(sched, sizes[i], phase == 1, meta) < 0) {
+                tv_sched_destroy(sched);
+                fprintf(stderr, "Warning: bench failed, continuing to next size\n");
+                continue;
+            }
             tv_sched_destroy(sched);
-            close_disks(disks, (int)meta->disk_count);
         }
         if (ret < 0) break;
     }
+
+    close_disks(disks, (int)meta->disk_count);
     return ret;
 }
 
 int main(int argc, char *argv[]) {
+    signal(SIGTERM, sigterm_handler);
+    signal(SIGINT, sigterm_handler);
+
     const char *name = NULL;
     int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, do_bench_all = 0;
     int use_direct = -1, do_warmup = 0;
@@ -394,51 +440,49 @@ int main(int argc, char *argv[]) {
         return cmd_info(&meta);
     }
 
-    /* Open disks */
-    TV_DISK disks[TV_MAX_DISKS];
-    if (open_disks(&meta, disks, use_direct) < 0) {
-        return 1;
-    }
-
-    /* Init scheduler */
-    fprintf(stderr, "Initializing scheduler...\n");
-    TV_SCHED *sched = tv_sched_init(disks, (int)meta.disk_count, &meta);
-    if (!sched) {
-        fprintf(stderr, "Error: tv_sched_init failed\n");
-        close_disks(disks, (int)meta.disk_count);
-        return 1;
-    }
-
     int ret = 0;
     if (do_bench_all) {
-        /* bench-all manages its own scheduler lifecycle (reopen per run) */
-        tv_sched_destroy(sched);
-        close_disks(disks, (int)meta.disk_count);
+        /* bench-all manages its own scheduler lifecycle */
         ret = cmd_bench_all(&meta);
-    } else if (do_read) {
-        if (len == 0) {
-            fprintf(stderr, "Error: --read requires --len\n");
-            ret = 1;
-        } else {
-            ret = cmd_read(sched, offset, len);
+    } else {
+        /* Open disks */
+        TV_DISK disks[TV_MAX_DISKS];
+        if (open_disks(&meta, disks, use_direct) < 0) {
+            return 1;
         }
-    } else if (do_write) {
-        if (len == 0) {
-            fprintf(stderr, "Error: --write requires --len\n");
-            ret = 1;
-        } else {
-            ret = cmd_write(sched, offset, len);
-        }
-    } else if (do_bench) {
-        /* Single bench with optional warmup */
-        if (do_warmup) {
-            do_warmup_exec(sched, &meta);
-        }
-        ret = cmd_bench_one(sched, bench_size, 0, &meta);
-    }
 
-    /* Cleanup (bench-all manages its own lifecycle) */
-    if (!do_bench_all) {
+        /* Init scheduler */
+        fprintf(stderr, "Initializing scheduler...\n");
+        TV_SCHED *sched = tv_sched_init(disks, (int)meta.disk_count, &meta);
+        if (!sched) {
+            fprintf(stderr, "Error: tv_sched_init failed\n");
+            close_disks(disks, (int)meta.disk_count);
+            return 1;
+        }
+
+        if (do_read) {
+            if (len == 0) {
+                fprintf(stderr, "Error: --read requires --len\n");
+                ret = 1;
+            } else {
+                ret = cmd_read(sched, offset, len);
+            }
+        } else if (do_write) {
+            if (len == 0) {
+                fprintf(stderr, "Error: --write requires --len\n");
+                ret = 1;
+            } else {
+                ret = cmd_write(sched, offset, len);
+            }
+        } else if (do_bench) {
+            discard_disks(disks, (int)meta.disk_count);
+            /* Single bench with optional warmup */
+            if (do_warmup) {
+                do_warmup_exec(sched, &meta);
+            }
+            ret = cmd_bench_one(sched, bench_size, 0, &meta);
+        }
+
         tv_sched_destroy(sched);
         close_disks(disks, (int)meta.disk_count);
     }

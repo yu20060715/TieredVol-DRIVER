@@ -3,7 +3,13 @@
 
 #include <stdint.h>
 #include <unistd.h>
+#include <signal.h>
 #include <liburing.h>
+
+/* Checked by tv_write/tv_flush to allow graceful SIGTERM shutdown.
+ * Defined in tiered_io.c, referenced here so the scheduler core
+ * can bail out without touching any io_uring primitives. */
+extern volatile sig_atomic_t g_shutdown_requested;
 
 #define TV_MAX_DISKS    16
 #define TV_MAX_SEGS     16
@@ -76,6 +82,7 @@ TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta);
 int       tv_write(TV_SCHED *sched, const void *buf, uint64_t len);
 int       tv_read(TV_SCHED *sched, void *buf, uint64_t len, uint64_t offset);
 int       tv_flush(TV_SCHED *sched);
+void      tv_sched_reset(TV_SCHED *sched);
 void      tv_sched_destroy(TV_SCHED *sched);
 
 int  tv_metadata_save(TV_METADATA *meta, const char *path);
