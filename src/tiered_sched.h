@@ -82,6 +82,7 @@ TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta);
 int       tv_write(TV_SCHED *sched, const void *buf, uint64_t len);
 int       tv_read(TV_SCHED *sched, void *buf, uint64_t len, uint64_t offset);
 int       tv_flush(TV_SCHED *sched);
+int       tv_sched_seek(TV_SCHED *sched, uint64_t offset);
 void      tv_sched_destroy(TV_SCHED *sched);
 
 int  tv_metadata_save(TV_METADATA *meta, const char *path);

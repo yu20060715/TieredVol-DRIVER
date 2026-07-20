@@ -188,6 +188,12 @@ static int cmd_write(TV_SCHED *sched, uint64_t offset, uint64_t len) {
     fprintf(stderr, "Writing %lu bytes to offset %lu...\n",
             (unsigned long)total, (unsigned long)offset);
 
+    if (tv_sched_seek(sched, offset) < 0) {
+        fprintf(stderr, "Error: tv_sched_seek failed\n");
+        free(buf);
+        return -1;
+    }
+
     int ret = tv_write(sched, buf, total);
     if (ret < 0) {
         fprintf(stderr, "Error: tv_write failed\n");

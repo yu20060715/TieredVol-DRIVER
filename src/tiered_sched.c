@@ -208,11 +208,14 @@ int tv_flush(TV_SCHED *sched) {
     while (sched->inflight > 0) {
         if (g_shutdown_requested) return -1;
         struct io_uring_cqe *cqe = NULL;
-        struct __kernel_timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
+        struct __kernel_timespec ts = { .tv_sec = 5, .tv_nsec = 0 };
         int ret = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
         if (ret == -ETIME) {
-            /* CQE lost (dm-linear bug). I/O already submitted — kernel will complete it. */
-            fprintf(stderr, "tv_flush: CQE wait timed out, %d I/O(s) still pending (OK — kernel handles it)\n",
+            /* Drain any CQEs that arrived during the timeout window */
+            struct io_uring_cqe *tmp;
+            while (io_uring_peek_cqe(&sched->ring, &tmp) == 0 && tmp)
+                io_uring_cqe_seen(&sched->ring, tmp);
+            fprintf(stderr, "tv_flush: CQE wait timed out (%d in-flight assumed done)\n",
                     sched->inflight);
             sched->inflight = 0;
             break;
@@ -234,11 +237,17 @@ int tv_flush(TV_SCHED *sched) {
                 sched->sbuf[buf_idx].in_flight = 0;
                 sched->inflight--;
             }
-        } else {
-            fprintf(stderr, "tv_flush: CQE for buf[%d] not matched (res=%d)\n", buf_idx, res);
         }
     }
 
+    return 0;
+}
+
+int tv_sched_seek(TV_SCHED *sched, uint64_t offset) {
+    if (!sched) return -1;
+    if (tv_flush(sched) < 0) return -1;
+    sched->sbuf_logical = offset;
+    sched->sbuf_used = 0;
     return 0;
 }
 
