@@ -93,7 +93,7 @@ static void test_write_read_verify(const char *devpath) {
     if (!sched) { close(fd); return; }
 
     uint64_t len = 4096;
-    uint8_t *wbuf, *rbuf;
+    uint8_t *wbuf = NULL, *rbuf = NULL;
     int ok = 1;
     ok = ok && (posix_memalign((void **)&wbuf, 512, len) == 0);
     ok = ok && (posix_memalign((void **)&rbuf, 512, len) == 0);

@@ -168,7 +168,7 @@ sudo pacman -S lvm2 gcc make liburing
 
 ```bash
 make              # 編譯 tiered_setup + tiered_io
-make test         # 執行所有測試（108 個 assertions，6 個 test suite）
+make test         # 執行所有測試（105 個 assertions，6 個 test suite）
 make clean        # 刪除所有編譯产物
 sudo make install # 安裝到 /usr/local/bin/
 ```
