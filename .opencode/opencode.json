@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "tieredvol-dev": {
+      "description": "B85 Linux agent: code modification, compilation, testing, benchmarking",
+      "mode": "primary",
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "make *": "allow",
+          "sudo make *": "allow",
+          "git *": "allow",
+          "mkdir *": "allow",
+          "cat *": "allow",
+          "ls *": "allow",
+          "./tiered_io *": "allow",
+          "./tiered_setup *": "allow",
+          "sudo ./tiered_*": "allow",
+          "*": "ask"
+        }
+      }
+    }
+  }
+}
