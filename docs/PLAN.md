@@ -82,7 +82,6 @@
 - **做法**：TieredVol 自己做 I/O Scheduler（io_uring），按速度比例直接 dispatch
 - **演算法**：詳見 [PARTITION_SPLITTING.md](PARTITION_SPLITTING.md)（切塊計算）
 - **實作**：詳見 [WEIGHTED_IO_SCHEDULER.md](WEIGHTED_IO_SCHEDULER.md)（I/O dispatch）
-- **實作指南**：詳見 [AGENTS.md](../AGENTS.md)（完整程式碼 + 實作順序）
 - **難度**：高（~20 小時，需要 io_uring dispatch、stripe buffer、offset 映射、7 個新 .c 檔案）
 
 ### 11. Stripe Size 智慧選擇
