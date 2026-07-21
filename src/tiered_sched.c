@@ -96,11 +96,10 @@ int tv_write(TV_SCHED *sched, const void *buf, uint64_t len) {
                     reap_completed(sched);
                     if (sched->inflight >= TV_BUF_COUNT) {
                         struct io_uring_cqe *cqe = NULL;
-        struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
-        int r = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
+                        struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
+                        int r = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
                         if (r == -ETIME) {
-                            fprintf(stderr, "tv_write: CQE wait timed out (%ds)\n", TV_CQE_TIMEOUT_SEC);
-                            return -1;
+                            continue;
                         }
                         if (r == -EINTR) {
                             if (g_shutdown_requested) return -1;
@@ -207,21 +206,13 @@ int tv_flush(TV_SCHED *sched) {
     /* Wait for ALL in-flight I/Os */
     while (sched->inflight > 0) {
         if (g_shutdown_requested) return -1;
+        /* Drain any already-completed CQEs before blocking wait */
+        reap_completed(sched);
+        if (sched->inflight == 0) break;
         struct io_uring_cqe *cqe = NULL;
         struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
         int ret = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
         if (ret == -ETIME) {
-            /* Drain any CQEs that arrived during the timeout window */
-            struct io_uring_cqe *tmp;
-            int completed = 0;
-            while (io_uring_peek_cqe(&sched->ring, &tmp) == 0 && tmp) {
-                io_uring_cqe_seen(&sched->ring, tmp);
-                completed++;
-            }
-            fprintf(stderr, "tv_flush: CQE wait timed out (%d in-flight, %d drained)\n",
-                    sched->inflight, completed);
-            sched->inflight -= completed;
-            if (sched->inflight > 0) break;
             continue;
         }
         if (ret == -EINTR) {
@@ -233,7 +224,6 @@ int tv_flush(TV_SCHED *sched) {
             return -1;
         }
         int buf_idx = (int)(intptr_t)io_uring_cqe_get_data(cqe);
-        int res = cqe->res;
         io_uring_cqe_seen(&sched->ring, cqe);
         if (buf_idx >= 0 && buf_idx < TV_BUF_COUNT && sched->sbuf[buf_idx].in_flight) {
             sched->sbuf[buf_idx].cqes_pending--;

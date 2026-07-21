@@ -36,7 +36,7 @@ int tv_uring_read(struct io_uring *ring, int fd, void *buf, size_t len, off_t of
     if (!sqe) return -1;
 
     io_uring_prep_read(sqe, fd, buf, (unsigned)len, offset);
-    io_uring_sqe_set_data(sqe, NULL);
+    io_uring_sqe_set_data(sqe, (void *)(intptr_t)-1);
     return 0;
 }
 
@@ -51,10 +51,10 @@ int tv_uring_submit(struct io_uring *ring) {
 
 int tv_uring_wait(struct io_uring *ring) {
     struct io_uring_cqe *cqe = NULL;
-    struct __kernel_timespec ts = { .tv_sec = 5, .tv_nsec = 0 };
+    struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
     int ret = io_uring_wait_cqe_timeout(ring, &cqe, &ts);
     if (ret == -ETIME) {
-        fprintf(stderr, "io_uring_wait_cqe timed out (5s)\n");
+        fprintf(stderr, "io_uring_wait_cqe timed out (%ds)\n", TV_CQE_TIMEOUT_SEC);
         return -ETIME;
     }
     if (ret < 0) {
