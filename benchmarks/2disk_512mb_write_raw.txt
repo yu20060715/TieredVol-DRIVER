@@ -1,0 +1,59 @@
+
+--- Run 1 ---
+: 
+Loading metadata from /etc/tieredvol/testpool2.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Initializing scheduler...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+tv_flush: 6 CQEs slow, retrying (30s)
+tv_flush: 6 CQEs stuck (lost), recovering (CQEs lost, data already on disk)
+Benchmark: 536870912 bytes (512.0 MB) in 0.238 seconds
+Throughput: 2148.4 MB/s
+Stripes flushed: 128
+
+--- Run 2 ---
+: 
+Loading metadata from /etc/tieredvol/testpool2.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Initializing scheduler...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.226 seconds
+Throughput: 2267.9 MB/s
+Stripes flushed: 128
+
+--- Run 3 ---
+: 
+Loading metadata from /etc/tieredvol/testpool2.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Initializing scheduler...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.228 seconds
+Throughput: 2248.8 MB/s
+Stripes flushed: 128
+
+--- Run 4 ---
+: 
+Loading metadata from /etc/tieredvol/testpool2.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Initializing scheduler...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.224 seconds
+Throughput: 2288.7 MB/s
+Stripes flushed: 128
+
+--- Run 5 ---
+: 
+Loading metadata from /etc/tieredvol/testpool2.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Initializing scheduler...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+tv_flush: 8 CQEs slow, retrying (30s)
+tv_flush: 8 CQEs stuck (lost), recovering (CQEs lost, data already on disk)
+Benchmark: 536870912 bytes (512.0 MB) in 0.248 seconds
+Throughput: 2063.3 MB/s
+Stripes flushed: 128
