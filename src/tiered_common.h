@@ -3,10 +3,6 @@
 
 #include <string.h>
 
-#ifndef MAX_DISKS
-#define MAX_DISKS 16
-#endif
-
 static inline int tiered_is_valid_name(const char *name) {
     if (!name || !*name) return 0;
     for (const char *p = name; *p; p++) {

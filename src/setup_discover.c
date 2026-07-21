@@ -89,8 +89,8 @@ void find_mount_for_disk(const char *disk, char *mp, size_t mp_size) {
 }
 
 int cmd_list(void) {
-    disk_t info[MAX_DISKS];
-    int ninfo = load_all_disk_info(info, MAX_DISKS);
+    disk_t info[TV_MAX_DISKS];
+    int ninfo = load_all_disk_info(info, TV_MAX_DISKS);
 
     printf("%-12s %-8s %-28s %-12s %-8s %-8s\n",
            "DEVICE", "TYPE", "MODEL", "TRAN", "SIZE", "SPEED");

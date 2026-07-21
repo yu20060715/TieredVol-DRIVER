@@ -99,7 +99,7 @@ for i in 1 2 3 4 5; do
 done
 ```
 
-**Note**: The exact CLI flags depend on the current `tiered_io` implementation. Check `./tiered_io --help` first. The script `scripts/bench_stats.sh` may also be useful as a reference for the benchmark loop pattern.
+**Note**: The exact CLI flags depend on the current `tiered_io` implementation. Check `./tiered_io --help` first.
 
 After collecting raw data, compute statistics:
 

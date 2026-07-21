@@ -246,7 +246,7 @@ typedef struct { pid_t pid; int pipe_fd; int idx; } bench_child_t;
 
 int run_parallel_bench(disk_t *disks, int ndisks, int warmup,
     bench_interrupt_fn on_interrupt, void *interrupt_ctx) {
-    bench_child_t children[MAX_DISKS];
+    bench_child_t children[TV_MAX_DISKS];
     int nchildren = 0;
     for (int i = 0; i < ndisks; i++) {
         int pipefd[2];
@@ -339,13 +339,13 @@ int cmd_bench(int argc, char *argv[]) {
         return TV_ERR;
     }
 
-    char disks[MAX_DISKS][32];
+    char disks[TV_MAX_DISKS][32];
     int nd = 0;
     char buf[1024];
     strncpy(buf, disk_list, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = 0;
     char *tok = strtok(buf, ",");
-    while (tok && nd < MAX_DISKS) {
+    while (tok && nd < TV_MAX_DISKS) {
         if (!tiered_is_valid_name(tok)) {
             fprintf(stderr, "Error: invalid disk name '%s'\n", tok);
             return TV_ERR;
@@ -361,7 +361,7 @@ int cmd_bench(int argc, char *argv[]) {
         return TV_ERR;
     }
 
-    disk_t info[MAX_DISKS];
+    disk_t info[TV_MAX_DISKS];
     for (int i = 0; i < nd; i++) {
         memset(&info[i], 0, sizeof(disk_t));
         strncpy(info[i].disk, disks[i], 31);
@@ -369,8 +369,8 @@ int cmd_bench(int argc, char *argv[]) {
         info[i].size_gb = sysfs_size_gb(disks[i]);
     }
 
-    disk_t dinfo[MAX_DISKS];
-    int ninfo = load_all_disk_info(dinfo, MAX_DISKS);
+    disk_t dinfo[TV_MAX_DISKS];
+    int ninfo = load_all_disk_info(dinfo, TV_MAX_DISKS);
     for (int i = 0; i < nd; i++) {
         for (int j = 0; j < ninfo; j++) {
             if (strcmp(disks[i], dinfo[j].disk) == 0) {

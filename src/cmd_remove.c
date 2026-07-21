@@ -44,13 +44,13 @@ int cmd_remove(int argc, char *argv[]) {
         printf("  Detected weighted I/O scheduler volume\n");
 
         /* Read disk names from .scheduler metadata */
-        char targets[MAX_DISKS][64];
+        char targets[TV_MAX_DISKS][64];
         int ntargets = 0;
 
         TV_METADATA sched_meta;
         memset(&sched_meta, 0, sizeof(sched_meta));
         if (tv_metadata_load(&sched_meta, sched_path) == 0) {
-            for (uint32_t i = 0; i < sched_meta.disk_count && ntargets < MAX_DISKS; i++) {
+            for (uint32_t i = 0; i < sched_meta.disk_count && ntargets < TV_MAX_DISKS; i++) {
                 make_target(targets[ntargets], sizeof(targets[0]), sched_meta.disk_names[i]);
                 ntargets++;
             }
@@ -63,7 +63,7 @@ int cmd_remove(int argc, char *argv[]) {
             FILE *p = popen("sudo dmsetup ls 2>/dev/null", "r");
             if (p) {
                 char line[256];
-                while (fgets(line, sizeof(line), p) && ntargets < MAX_DISKS) {
+                while (fgets(line, sizeof(line), p) && ntargets < TV_MAX_DISKS) {
                     line[strcspn(line, "\n")] = 0;
                     char *tok = strtok(line, "\t ");
                     if (!tok) continue;
@@ -117,7 +117,7 @@ int cmd_remove(int argc, char *argv[]) {
 
     /* LVM volume path */
 
-    char targets[MAX_DISKS][64];
+    char targets[TV_MAX_DISKS][64];
     int ntargets = 0;
 
     char conf_path[256];
@@ -125,7 +125,7 @@ int cmd_remove(int argc, char *argv[]) {
     FILE *cf = fopen(conf_path, "r");
     if (cf) {
         char line[256];
-        while (fgets(line, sizeof(line), cf) && ntargets < MAX_DISKS) {
+        while (fgets(line, sizeof(line), cf) && ntargets < TV_MAX_DISKS) {
             if (strncmp(line, "device=", 7) == 0) {
                 char disk[32];
                 sscanf(line + 7, "%31s", disk);

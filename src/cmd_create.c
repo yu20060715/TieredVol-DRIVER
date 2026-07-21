@@ -110,13 +110,13 @@ int cmd_create(int argc, char *argv[]) {
         fprintf(stderr, "Warning: --fs and --mount are ignored with --scheduler\n");
     }
 
-    disk_t disks_arr[MAX_DISKS];
+    disk_t disks_arr[TV_MAX_DISKS];
     int nd = 0;
     char buf[1024];
     strncpy(buf, disk_spec, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = 0;
     char *tok = strtok(buf, ",");
-    while (tok && nd < MAX_DISKS) {
+    while (tok && nd < TV_MAX_DISKS) {
         memset(&disks_arr[nd], 0, sizeof(disk_t));
         char *colon = strchr(tok, ':');
         if (colon) {
@@ -146,11 +146,11 @@ int cmd_create(int argc, char *argv[]) {
 
     printf("=== TieredVol: Creating '%s' ===\n", name);
 
-    disk_t dinfo[MAX_DISKS];
-    int ninfo = load_all_disk_info(dinfo, MAX_DISKS);
+    disk_t dinfo[TV_MAX_DISKS];
+    int ninfo = load_all_disk_info(dinfo, TV_MAX_DISKS);
 
     int valid_disks = 0;
-    disk_t valid[MAX_DISKS];
+    disk_t valid[TV_MAX_DISKS];
 
     for (int i = 0; i < nd; i++) {
         sysfs_model(disks_arr[i].disk, disks_arr[i].model, sizeof(disks_arr[i].model));
