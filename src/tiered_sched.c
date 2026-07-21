@@ -256,9 +256,17 @@ int tv_flush(TV_SCHED *sched) {
                     reap_completed(sched);
                     if (sched->inflight == 0) break;
                     if (sched->inflight == inflight_before) {
-                        fprintf(stderr, "tv_flush: CQE stuck (%d)\n",
+                        fprintf(stderr, "tv_flush: %d CQEs stuck (lost), recovering\n",
                                 sched->inflight);
-                        return -1;
+                        struct io_uring_cqe *tmp;
+                        while (io_uring_peek_cqe(&sched->ring, &tmp) == 0 && tmp)
+                            io_uring_cqe_seen(&sched->ring, tmp);
+                        for (int i = 0; i < TV_BUF_COUNT; i++) {
+                            sched->sbuf[i].in_flight = 0;
+                            sched->sbuf[i].cqes_pending = 0;
+                        }
+                        sched->inflight = 0;
+                        break;
                     }
                     continue;
                 }
