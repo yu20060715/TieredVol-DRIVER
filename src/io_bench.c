@@ -225,6 +225,150 @@ int cmd_bench_all(TV_METADATA *meta) {
     return ret;
 }
 
+int cmd_bench_read_one(TV_SCHED *sched, uint64_t size, TV_METADATA *meta) {
+    uint64_t vol_size = meta->segments[meta->segment_count - 1].logical_end;
+    uint64_t remaining = vol_size - sched->sbuf_logical;
+    if (size > remaining) {
+        fprintf(stderr, "Warning: read bench size (%lu MB) exceeds remaining volume (%lu MB), capping\n",
+                (unsigned long)(size / 1048576), (unsigned long)(remaining / 1048576));
+        size = remaining;
+    }
+    if (size == 0) {
+        fprintf(stderr, "Warning: no space left in volume, skipping read bench\n");
+        return 0;
+    }
+
+    uint8_t *buf = NULL;
+    if (posix_memalign((void **)&buf, 512, (size_t)sched->stripe_size) != 0) {
+        fprintf(stderr, "Error: cannot allocate buffer\n");
+        return -1;
+    }
+    memset(buf, 0xAB, (size_t)sched->stripe_size);
+
+    /* First, write the data so there is something to read */
+    fprintf(stderr, "  Writing %lu MB to prepare for read...\n",
+            (unsigned long)(size / 1048576));
+
+    uint64_t written = 0;
+    while (written < size) {
+        if (g_shutdown_requested) {
+            fprintf(stderr, "\nShutdown requested\n");
+            free(buf);
+            return -1;
+        }
+        uint64_t chunk = sched->stripe_size;
+        if (written + chunk > size) chunk = size - written;
+        if (tv_write(sched, buf, chunk) < 0) {
+            fprintf(stderr, "Error: write failed during read bench prep\n");
+            free(buf);
+            return -1;
+        }
+        written += chunk;
+    }
+    if (tv_flush(sched) < 0) {
+        fprintf(stderr, "Warning: flush failed during read prep\n");
+    }
+    for (int i = 0; i < sched->ndisks; i++) {
+        if (sched->disks[i].fd >= 0) fsync(sched->disks[i].fd);
+    }
+
+    /* Flush page cache on block devices */
+    for (int i = 0; i < sched->ndisks; i++) {
+        if (sched->disks[i].fd >= 0) {
+            int dcfd = open("/proc/sys/vm/drop_caches", O_WRONLY);
+            if (dcfd >= 0) { (void)!write(dcfd, "3", 1); close(dcfd); }
+            break;
+        }
+    }
+
+    /* Seek back to 0 and read */
+    if (tv_sched_seek(sched, 0) < 0) {
+        fprintf(stderr, "Error: seek failed for read bench\n");
+        free(buf);
+        return -1;
+    }
+
+    fprintf(stderr, "  Reading %lu MB...\n", (unsigned long)(size / 1048576));
+
+    uint64_t read_total = 0;
+    struct timespec ts_start, ts_end;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
+    while (read_total < size) {
+        if (g_shutdown_requested) {
+            fprintf(stderr, "\nShutdown requested during read\n");
+            break;
+        }
+        uint64_t chunk = sched->stripe_size;
+        if (read_total + chunk > size) chunk = size - read_total;
+
+        int ret = tv_read(sched, buf, chunk, read_total);
+        if (ret < 0) {
+            fprintf(stderr, "Error: tv_read failed at %lu bytes\n",
+                    (unsigned long)read_total);
+            free(buf);
+            return -1;
+        }
+        read_total += chunk;
+
+        if (read_total % (64 * 1024 * 1024) == 0 || read_total == size) {
+            fprintf(stderr, "\r  progress: %lu / %lu MB",
+                    (unsigned long)(read_total / 1048576),
+                    (unsigned long)(size / 1048576));
+        }
+    }
+    fprintf(stderr, "\n");
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed = (ts_end.tv_sec - ts_start.tv_sec) +
+                     (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
+    double mb = (double)read_total / (1024.0 * 1024.0);
+    double mbps = mb / elapsed;
+
+    fprintf(stderr, "Read benchmark: %lu bytes (%.1f MB) in %.3f seconds\n",
+            (unsigned long)read_total, mb, elapsed);
+    fprintf(stderr, "Read throughput: %.1f MB/s\n", mbps);
+
+    free(buf);
+    return 0;
+}
+
+int cmd_bench_read_all(TV_METADATA *meta) {
+    uint64_t sizes[] = {
+        512ULL  * 1024 * 1024,
+        5120ULL * 1024 * 1024,
+        10240ULL * 1024 * 1024,
+    };
+    int nsizes = sizeof(sizes) / sizeof(sizes[0]);
+    int ret = 0;
+
+    TV_DISK disks[TV_MAX_DISKS];
+    if (open_disks(meta, disks, 1) < 0) return -1;
+
+    for (int i = 0; i < nsizes; i++) {
+        if (g_shutdown_requested) { ret = -1; break; }
+        fprintf(stderr, "\n=== Read Bench %luMB ===\n",
+                (unsigned long)(sizes[i] / 1048576));
+
+        discard_disks(disks, (int)meta->disk_count);
+
+        TV_SCHED *sched = tv_sched_init(disks, (int)meta->disk_count, meta);
+        if (!sched) {
+            fprintf(stderr, "Error: tv_sched_init failed\n");
+            ret = -1;
+            break;
+        }
+
+        if (cmd_bench_read_one(sched, sizes[i], meta) < 0) {
+            fprintf(stderr, "Warning: read bench failed, continuing\n");
+        }
+        tv_sched_destroy(sched);
+    }
+
+    close_disks(disks, (int)meta->disk_count);
+    return ret;
+}
+
 int cmd_bench_path(const char *path, uint64_t size, int warmup, int use_direct, int raw) {
     int fd;
     int is_file = !raw;

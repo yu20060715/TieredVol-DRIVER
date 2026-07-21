@@ -9,6 +9,8 @@ int discard_disks(TV_DISK *disks, int ndisks);
 
 int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA *meta);
 int cmd_bench_all(TV_METADATA *meta);
+int cmd_bench_read_one(TV_SCHED *sched, uint64_t size, TV_METADATA *meta);
+int cmd_bench_read_all(TV_METADATA *meta);
 int cmd_bench_path(const char *path, uint64_t size, int warmup, int use_direct, int raw);
 int cmd_bench_path_all(const char *path, int use_direct, int raw);
 int do_warmup_exec(TV_SCHED *sched, TV_METADATA *meta);

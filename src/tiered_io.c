@@ -27,7 +27,9 @@ static void usage(void) {
         "Benchmark options (both modes):\n"
         "  --bench --size <N>MB      Write benchmark (default: 64MB)\n"
         "  --bench --size <N>GB      Write benchmark in GB\n"
-        "  --bench-all               Run full benchmark suite (512MB/5120MB/10240MB)\n"
+        "  --bench-all               Run full write benchmark suite (512MB/5120MB/10240MB)\n"
+        "  --bench-read --size <N>MB Read benchmark (writes then reads back)\n"
+        "  --bench-read-all           Run full read benchmark suite (512MB/5120MB/10240MB)\n"
         "  --direct                  Use O_DIRECT (default for --bench)\n"
         "  --no-direct               Disable O_DIRECT for benchmark\n"
         "  --warmup                  SLC cache warm-up (sustained speed)\n"
@@ -37,6 +39,8 @@ static void usage(void) {
         "  # Scheduler (weighted striping)\n"
         "  tiered_io --name fastpool --bench --size 128MB\n"
         "  tiered_io --name fastpool --bench-all\n"
+        "  tiered_io --name fastpool --bench-read --size 128MB\n"
+        "  tiered_io --name fastpool --bench-read-all\n"
         "\n"
         "  # Direct path (LVM/filesystem, fair comparison)\n"
         "  tiered_io --path /mnt/test --bench --size 128MB\n"
@@ -173,6 +177,7 @@ int main(int argc, char *argv[]) {
     const char *name = NULL;
     const char *path = NULL;
     int do_info = 0, do_read = 0, do_write = 0, do_bench = 0, do_bench_all = 0;
+    int do_bench_read = 0, do_bench_read_all = 0;
     int use_direct = -1, do_warmup = 0, do_raw = 0;
     uint64_t offset = 0, len = 0, bench_size = 64 * 1024 * 1024;
 
@@ -187,6 +192,10 @@ int main(int argc, char *argv[]) {
             do_read = 1;
         } else if (strcmp(argv[i], "--write") == 0) {
             do_write = 1;
+        } else if (strcmp(argv[i], "--bench-read-all") == 0) {
+            do_bench_read_all = 1;
+        } else if (strcmp(argv[i], "--bench-read") == 0) {
+            do_bench_read = 1;
         } else if (strcmp(argv[i], "--bench-all") == 0) {
             do_bench_all = 1;
         } else if (strcmp(argv[i], "--bench") == 0) {
@@ -212,7 +221,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* --bench defaults to O_DIRECT unless --no-direct is specified */
-    if (use_direct < 0) use_direct = do_bench ? 1 : 0;
+    if (use_direct < 0) use_direct = (do_bench || do_bench_read) ? 1 : 0;
 
     /* Direct path mode */
     if (path) {
@@ -234,8 +243,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (!do_info && !do_read && !do_write && !do_bench && !do_bench_all) {
-        fprintf(stderr, "Error: specify --info, --read, --write, --bench, or --bench-all\n");
+    if (!do_info && !do_read && !do_write && !do_bench && !do_bench_all
+        && !do_bench_read && !do_bench_read_all) {
+        fprintf(stderr, "Error: specify --info, --read, --write, --bench, --bench-all, --bench-read, or --bench-read-all\n");
         usage();
         return 1;
     }
@@ -260,7 +270,9 @@ int main(int argc, char *argv[]) {
     }
 
     int ret = 0;
-    if (do_bench_all) {
+    if (do_bench_read_all) {
+        ret = cmd_bench_read_all(&meta);
+    } else if (do_bench_all) {
         /* bench-all manages its own scheduler lifecycle */
         ret = cmd_bench_all(&meta);
     } else {
@@ -279,7 +291,10 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        if (do_read) {
+        if (do_bench_read) {
+            discard_disks(disks, (int)meta.disk_count);
+            ret = cmd_bench_read_one(sched, bench_size, &meta);
+        } else if (do_read) {
             if (len == 0) {
                 fprintf(stderr, "Error: --read requires --len\n");
                 ret = 1;
