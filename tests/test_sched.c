@@ -1,19 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../src/tiered_sched.h"
-
-static int tests_run = 0;
-static int tests_passed = 0;
-
-static void check(int cond, const char *name) {
-    tests_run++;
-    if (cond) {
-        tests_passed++;
-        printf("  PASS  %s\n", name);
-    } else {
-        printf("  FAIL  %s\n", name);
-    }
-}
+#include "test_common.h"
 
 static void test_init_null(void) {
     printf("\n[TEST] tv_sched_init with NULL args\n");

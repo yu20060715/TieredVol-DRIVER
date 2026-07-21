@@ -13,6 +13,7 @@
 #include "version.h"
 #include "setup_discover.h"
 #include "setup_bench.h"
+#include "exec_helper.h"
 
 static void print_usage(const char *prog) {
     printf("TieredVol — Tiered Storage Volume Manager v%s\n\n", VERSION);
@@ -343,43 +344,13 @@ static int cmd_create(int argc, char *argv[]) {
             cleanup_create(name, valid, i);
             return 1;
         }
-        int pfd[2];
-        if (pipe(pfd) < 0) { fprintf(stderr, "Error: pipe failed\n"); cleanup_create(name, valid, i); return 1; }
-        pid_t pid = fork();
-        if (pid < 0) {
-            close(pfd[0]); close(pfd[1]);
-            fprintf(stderr, "Error: fork failed\n");
+        char *dm_argv[] = {"sudo", "dmsetup", "create", target, NULL};
+        int dm_ret = tv_exec_with_stdin("sudo", dm_argv, table);
+        if (dm_ret != 0) {
+            fprintf(stderr, "Error: dmsetup create failed for %s (exit=%d)\n", valid[i].disk, dm_ret);
             cleanup_create(name, valid, i);
             return 1;
         }
-        if (pid == 0) {
-            close(pfd[1]);
-            dup2(pfd[0], STDIN_FILENO);
-            close(pfd[0]);
-            char *dm_argv[] = {"sudo", "dmsetup", "create", target, NULL};
-            execvp("sudo", dm_argv);
-            _exit(127);
-        }
-        close(pfd[0]);
-        {
-            const char *wp = table;
-            size_t remaining = tlen;
-            while (remaining > 0) {
-                ssize_t nw = write(pfd[1], wp, remaining);
-                if (nw <= 0) break;
-                wp += nw;
-                remaining -= nw;
-            }
-            close(pfd[1]);
-            if (remaining > 0) {
-                fprintf(stderr, "Error: failed to write dm table for %s\n", valid[i].disk);
-                cleanup_create(name, valid, i);
-                return 1;
-            }
-        }
-        int status;
-        waitpid(pid, &status, 0);
-
         char devpath[128];
         snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", target);
         struct stat st;

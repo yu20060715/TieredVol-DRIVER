@@ -17,6 +17,8 @@
 #include "tiered_types.h"
 #include "setup_discover.h"
 #include "setup_bench.h"
+#include "exec_helper.h"
+#include "warmup.h"
 
 static volatile sig_atomic_t bench_interrupted = 0;
 
@@ -26,96 +28,6 @@ static void bench_signal_handler(int sig) {
 }
 
 typedef struct { int ret; double w; double r; } bench_result_t;
-
-int safe_execvp(const char *path, char *const argv[]) {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        execvp(path, argv);
-        _exit(127);
-    }
-    int status;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-int run_quiet(const char *path, char *const argv[]) {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
-        execvp(path, argv);
-        _exit(127);
-    }
-    int status;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-int run_capture(const char *path, char *const argv[], char *out, size_t outsize) {
-    int pfd[2];
-    if (pipe(pfd) < 0) return -1;
-    pid_t pid = fork();
-    if (pid < 0) { close(pfd[0]); close(pfd[1]); return -1; }
-    if (pid == 0) {
-        close(pfd[0]);
-        dup2(pfd[1], STDOUT_FILENO);
-        int dn = open("/dev/null", O_WRONLY);
-        if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
-        close(pfd[1]);
-        execvp(path, argv);
-        _exit(127);
-    }
-    close(pfd[1]);
-    size_t total = 0;
-    while (total < outsize - 1) {
-        ssize_t n = read(pfd[0], out + total, outsize - 1 - total);
-        if (n <= 0) break;
-        total += n;
-    }
-    close(pfd[0]);
-    out[total] = 0;
-    int status;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-int run_sudo_argv(char *const argv[]) {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        char *sudo_argv[64];
-        sudo_argv[0] = "sudo";
-        int i = 1;
-        for (char *const *a = argv; *a && i < 62; a++) sudo_argv[i++] = *a;
-        sudo_argv[i] = NULL;
-        execvp("sudo", sudo_argv);
-        _exit(127);
-    }
-    int status;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-int run_sudo_quiet(char *const argv[]) {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
-        char *sudo_argv[64];
-        sudo_argv[0] = "sudo";
-        int i = 1;
-        for (char *const *a = argv; *a && i < 62; a++) sudo_argv[i++] = *a;
-        sudo_argv[i] = NULL;
-        execvp("sudo", sudo_argv);
-        _exit(127);
-    }
-    int status;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
 
 static int bench_disk(const char *disk, double *write_spd, double *read_spd, int warmup) {
     *write_spd = *read_spd = 0;
@@ -143,17 +55,17 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd, int
         mkdir(mp, 0755);
         char devpath_b[64];
         snprintf(devpath_b, sizeof(devpath_b), "/dev/%s", disk);
-        char *mount_argv[] = {"sudo", "mount", devpath_b, mp, NULL};
-        int mret = run_quiet("sudo", mount_argv);
+        char *mount_argv[] = {"mount", devpath_b, mp, NULL};
+        int mret = tv_exec_sudo(mount_argv, 1);
         if (mret == 0) {
-            char *chmod_argv[] = {"sudo", "chmod", "0755", mp, NULL};
-            (void)run_quiet("sudo", chmod_argv);
+            char *chmod_argv[] = {"chmod", "0755", mp, NULL};
+            (void)tv_exec_sudo(chmod_argv, 1);
         }
         if (mret != 0) {
             fprintf(stderr, "    mount failed (exit=%d), trying udisksctl...\n", mret);
             char *udisks_argv[] = {"udisksctl", "mount", "-b", devpath_b, NULL};
             char uout[512] = "";
-            run_capture("udisksctl", udisks_argv, uout, sizeof(uout));
+            tv_exec_capture("udisksctl", udisks_argv, uout, sizeof(uout));
             char *at = strstr(uout, "at ");
             if (at) {
                 at += 3;
@@ -197,27 +109,8 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd, int
         if (warmup) {
             char warmup_path[PATH_MAX];
             snprintf(warmup_path, sizeof(warmup_path), "%s/.bench_warmup_%s", mp, disk);
-            int wfd = open(warmup_path, O_RDWR | O_CREAT | O_DIRECT, 0644);
-            if (wfd < 0) wfd = open(warmup_path, O_RDWR | O_CREAT, 0644);
-            if (wfd >= 0) {
-                void *wbuf = NULL;
-                if (posix_memalign(&wbuf, 4096, block_size) == 0 && wbuf) {
-                    memset(wbuf, 0xAB, block_size);
-                    fprintf(stderr, "  Warming up SLC cache (2GB)...\n");
-                    long long warmup_target = 2LL * 1024 * 1024 * 1024;
-                    long long warmup_written = 0;
-                    while (warmup_written < warmup_target && !bench_interrupted) {
-                        ssize_t n = pwrite(wfd, wbuf, block_size, warmup_written);
-                        if (n <= 0) break;
-                        warmup_written += n;
-                    }
-                    fdatasync(wfd);
-                    free(wbuf);
-                    fprintf(stderr, "  Warm-up complete, starting benchmark...\n");
-                }
-                close(wfd);
-                unlink(warmup_path);
-            }
+            tv_warmup_device(warmup_path, 2LL * 1024 * 1024 * 1024);
+            unlink(warmup_path);
         }
 
         int completed = 0;
@@ -311,8 +204,8 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd, int
     }
 
     if (need_unmount && mp[0]) {
-        char *umount_argv[] = {"sudo", "umount", mp, NULL};
-        (void)run_sudo_argv(umount_argv);
+        char *umount_argv[] = {"umount", mp, NULL};
+        (void)tv_exec_sudo(umount_argv, 0);
         rmdir(mp);
         mp[0] = 0;
     }
@@ -322,8 +215,8 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd, int
 cleanup:
     if (cleanup_path[0]) unlink(cleanup_path);
     if (need_unmount && mp[0] && result != 0) {
-        char *umount_argv[] = {"sudo", "umount", mp, NULL};
-        (void)run_sudo_argv(umount_argv);
+        char *umount_argv[] = {"umount", mp, NULL};
+        (void)tv_exec_sudo(umount_argv, 0);
         rmdir(mp);
     }
     sigaction(SIGINT, &sa_old_int, NULL);

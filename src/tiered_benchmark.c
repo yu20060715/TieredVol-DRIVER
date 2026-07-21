@@ -7,11 +7,11 @@
 #include <time.h>
 #include <errno.h>
 #include "tiered_types.h"
+#include "warmup.h"
 
 #define BENCH_SIZE      (32 * 1024 * 1024)
 #define BENCH_RUNS      3
 #define BENCH_BLOCK     512
-#define WARMUP_SIZE     (2LL * 1024 * 1024 * 1024)  /* 2GB */
 
 int tv_benchmark(const char *disk_path, uint64_t *speed_out, int warmup) {
     if (!disk_path || !speed_out) return -1;

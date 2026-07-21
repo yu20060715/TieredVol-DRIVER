@@ -10,6 +10,7 @@
 #include <linux/fs.h>
 #include "tiered_sched.h"
 #include "io_bench.h"
+#include "warmup.h"
 
 int open_disks(TV_METADATA *meta, TV_DISK *disks, int use_direct) {
     int flags = O_RDWR | (use_direct ? O_DIRECT : 0);
