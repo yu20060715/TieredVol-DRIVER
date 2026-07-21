@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,12 +27,9 @@ static void print_summary(void) {
 }
 
 static int open_disk(const char *path) {
-    int fd = open(path, O_RDWR | O_DIRECT | O_SYNC);
+    int fd = open(path, O_RDWR | O_DIRECT);
     if (fd < 0) {
-        fd = open(path, O_RDWR | O_DIRECT);
-    }
-    if (fd < 0) {
-        fprintf(stderr, "  WARN: cannot open %s (O_DIRECT): %m, trying non-direct\n", path);
+        fprintf(stderr, "  WARN: cannot open %s with O_DIRECT, trying non-direct\n", path);
         fd = open(path, O_RDWR);
     }
     return fd;
