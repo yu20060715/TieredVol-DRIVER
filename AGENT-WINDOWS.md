@@ -1,92 +1,131 @@
-# TieredVol — Windows 報告 Agent
+# TieredVol — Windows 報告 Agent（v2）
 
 > 在 Windows 的 tieredvol-thesis 目錄啟動 opencode，把 prompt 貼進去
-> 前提：B85 已經跑完 benchmark 並 push，這邊已經 pull TieredVol 最新數據
+> 前提：B85 已跑完 benchmark，BENCHMARK-RESULTS.md 已在 TieredVol 目錄
+
+---
+
+## 重要：2-disk outlier 處理
+
+2-disk 的 Run3 數據異常高（write 2139、read 1421），是 SLC cache burst 造成的 outlier。
+**論文裡不要用 mean，改用 median（中位數）。**
+5 筆排序後取第 3 筆，天然忽略極端值。
+
+| 場景 | Sorted | Median |
+|------|--------|--------|
+| 2-disk write | 1477.8, 1484.3, 1485.7, 1490.9, 2139.0* | **1485.7** |
+| 2-disk read | 993.6, 1071.1, 1181.4, 1216.1, 1421.9* | **1181.4** |
 
 ---
 
 ## Prompt — 完整貼入 opencode
 
 ```
-幫我完成以下 3 項任務。先從 TieredVol/BENCHMARK-RESULTS.md 讀取 benchmark 數據。
+幫我完成以下 4 項任務。所有 benchmark 數據從 C:\Users\yu\Desktop\TieredVol\BENCHMARK-RESULTS.md 讀取。
 
 === #6：Pandoc HTML Build 測試 ===
 
 1. 確認 Pandoc 是否安裝：pandoc --version
-2. 如果沒安裝，跳過此項並報告
-3. 如果有安裝，在 tieredvol-thesis 目錄執行：
+2. 如果沒安裝，跳過此項並報告 "Pandoc not installed"
+3. 如果有安裝，執行：
    pandoc thesis.md -o test_output.html --toc --toc-depth 2 --standalone
 4. 檢查 test_output.html：
-   - 是否只有一份 TOC（不該有手寫 + Pandoc 自動生成的兩份）
-   - Chapter 5 是否有 Generality（§5.5）和 Lessons Learned（§5.7）sections
-   - Appendix C (Glossary) 和 D (References) 是否在 TOC 裡出現
-   - 有無 broken links（搜尋 href="#..." 但找不到對應 id 的）
-5. 刪除 test_output.html
-6. 回報檢查結果
+   - 是否只有一份 TOC（不該有兩份）
+   - Chapter 5 是否有 §5.5 Generality 和 §5.7 Lessons Learned
+   - Appendix C 和 D 是否在 TOC 裡
+   - 有無 broken links
+5. 刪除 test_output.html，回報結果
 
 === #3：SPA Content 同步 ===
 
-1. diff 比對以下檔案對，確認差異：
+1. diff 比對以下 6 組檔案：
    - chapters/05-discussion.md vs spa/src/content/en/chapters/05-discussion.md
    - zh/chapters/05-discussion.md vs spa/src/content/cn/chapters/05-discussion.md
    - appendices/C-glossary.md vs spa/src/content/en/appendices/C-glossary.md
    - appendices/D-references.md vs spa/src/content/en/appendices/D-references.md
    - zh/appendices/C-glossary.md vs spa/src/content/cn/appendices/C-glossary.md
    - zh/appendices/D-references.md vs spa/src/content/cn/appendices/D-references.md
-
-2. 如果有差異，用 chapters/ 或 zh/ 的最新版本覆蓋到 spa/src/content/ 對應位置
-
-3. 回報哪些檔案有更新、哪些已經同步
+2. 有差異的用 chapters/ 或 zh/ 的最新版覆蓋到 spa/src/content/
+3. 回報哪些已更新
 
 === #7：Quantization Error Sensitivity Analysis ===
 
 1. 先讀取 chapters/05-discussion.md 的 §5.1 Quantization Error 段落
 
-2. 在 §5.1 現有內容之後、§5.2 之前，新增一小段：
+2. 在 §5.1 末尾（§5.2 之前）新增：
 
    ### Chunk Size Sensitivity
 
-   The choice of chunk size affects stripe granularity but has minimal impact on
-   quantization accuracy, as the error is bounded by integer weight assignment.
+   | Chunk Size | Stripe Size (2-disk) | Error (2-disk) | Stripe Size (3-disk) | Error (3-disk) |
+   |-----------|---------------------|----------------|---------------------|----------------|
+   | 256 KB | ... | ... | ... | ... |
+   | 512 KB | ... | ... | ... | ... |
+   | 1 MB | ... | ... | ... | ... |
+   | 2 MB | ... | ... | ... | ... |
 
-   | Chunk Size | Stripe Size (2-disk [2,1]) | Error (2-disk) | Stripe Size (3-disk [2,1,1]) | Error (3-disk) |
-   |-----------|--------------------------|----------------|-----------------------------|----------------|
-   | 256 KB | 768 KB | 10.0% | 1 MB | 12.5% |
-   | 512 KB | 1.5 MB | 10.0% | 2 MB | 12.5% |
-   | 1 MB | 3 MB | 10.0% | 4 MB | 12.5% |
-   | 2 MB | 6 MB | 10.0% | 8 MB | 12.5% |
-
-   計算說明（用 BENCHMARK-RESULTS.md 裡的碟速度）：
-   - true_ratio = NVMe_speed / SATA_speed
+   計算規則：
+   - 從 BENCHMARK-RESULTS.md 的 Integration Test 段落找碟的單碟速度（如果有）
+   - 如果沒有單碟速度，用 write throughput 反推：
+     2-disk weights=[2,1] → true_ratio = NVMe/SATA ≈ 1000/450 ≈ 2.22
+     3-disk weights=[2,1,1] → true_ratio 同上
    - assigned_weight = round(true_ratio)
    - error = |true_ratio - assigned_weight| / true_ratio
-   - 2-disk weights = [2, 1]
-   - 3-disk weights = [2, 1, 1]
+   - Stripe size = chunk_size × sum(weights)
+   - **用實際計算值填入，不要用 placeholder**
 
-   **注意：請先從 BENCHMARK-RESULTS.md 讀取實際的碟速度，用實際數據計算，不要用上面的假設值。上面的 10.0% 和 12.5% 是 placeholder，請替換為真實計算結果。**
+   表格後加：
+   "Quantization error is bounded by integer weight assignment and remains
+   constant across chunk sizes. A 1 MB chunk balances I/O granularity with
+   memory overhead (TV_BUF_COUNT × stripe_size)."
 
-3. 在表格之後加一句：
-   "Smaller chunk sizes reduce stripe granularity but do not significantly improve
-   quantization accuracy, as the error is bounded by the integer weight assignment
-   rather than the chunk size. A 1 MB chunk provides a practical balance between
-   I/O granularity and memory overhead."
+3. 同步更新 thesis_zh.md 的 §5.1 對應段落（中文翻譯）
 
-4. 同步更新 thesis_zh.md 的 §5.1 對應段落（中文翻譯）
+=== #8：Benchmark 數據更新到論文 ===
+
+讀取 TieredVol/BENCHMARK-RESULTS.md 的數據，更新以下內容：
+
+1. chapters/04-experiments.md — 更新 §4.3 和 §4.4 的表格：
+   - 用 **median** 而非 mean（2-disk 有 SLC burst outlier）
+   - 3-disk 數據用原始 mean（無 outlier）
+
+   數據來源：
+
+   2-disk（用 median，排除 Run3 outlier）：
+   - Write: 1485.7 MB/s（sorted: 1477.8, 1484.3, 1485.7, 1490.9, 2139.0*）
+   - Read: 1181.4 MB/s（sorted: 993.6, 1071.1, 1181.4, 1216.1, 1421.9*）
+
+   3-disk（用 mean）：
+   - Write: 1788.8 ± 73.6 MB/s
+   - Read: 1280.9 ± 50.9 MB/s
+
+   3-disk large transfer：
+   - Write 5GB: 1285.6, 10GB: 1228.6
+   - Read 5GB: 1240.5, 10GB: 1318.0
+
+   LVM control（sdb+sdc, stripe=1M）：
+   - Write: 398.3 MB/s, Read: 432.0 MB/s
+
+2. thesis.md 和 thesis_zh.md — 同步更新 Chapter 4 的數據
+
+3. 注意事項：
+   - 不要改動 headline 數字（1467, 1861 等）如果它們跟之前的 commit 一致
+   - 如果新數據跟舊數據不同，在表格旁加腳註說明 "measured on B85 platform with PCIe 2.0x4 NVMe"
+   - 3-disk 10GB read (1318.0) 比 5GB read (1240.5) 還高，這是正常的（NVMe steady-state），不需額外解釋
 
 === 完成後 ===
 
-回報三項的完成狀態：
-#6 Pandoc: PASS/FAIL（附原因）
+回報：
+#6 Pandoc: PASS/FAIL
 #3 SPA: X 個檔案已更新
-#7 Quantization: 表格已加入 + thesis_zh 已同步
+#7 Quantization: 表格已加入
+#8 Benchmark: 數據已更新到 Chapter 4
 ```
 
 ---
 
 ## 注意事項
 
-- 確認已從 TieredVol pull 最新數據再開始
-- #7 的表格數值必須用 BENCHMARK-RESULTS.md 的實際碟速度計算
-- 如果 Pandoc 沒裝就跳過 #6，不影響其他項
-- SPA 同步是 copy 操作，不會丟資料
+- #7 和 #8 的數值必須從 BENCHMARK-RESULTS.md 讀取，不要猜
+- 2-disk 數據有 outlier，一律用 median
+- 3-disk 數據正常，用 mean ± stddev
 - 所有改動完成後在 tieredvol-thesis 目錄 git commit + push
