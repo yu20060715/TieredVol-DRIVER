@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "tiered_sched.h"
+#include "tiered_io_uring.h"
 
 volatile sig_atomic_t g_shutdown_requested = 0;
 

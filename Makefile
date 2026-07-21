@@ -4,7 +4,7 @@ PREFIX=/usr/local
 
 SCHED_OBJS=src/tiered_sched.o src/tiered_partition.o src/tiered_mapper.o \
            src/tiered_io_uring.o src/tiered_metadata.o \
-           src/tiered_benchmark.o
+           src/tiered_benchmark.o src/warmup.o
 
 SETUP_OBJS=src/setup_discover.o src/setup_bench.o src/cmd_create.o src/cmd_remove.o
 IO_OBJS=src/io_bench.o
@@ -33,6 +33,9 @@ src/tiered_metadata.o: src/tiered_metadata.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/tiered_benchmark.o: src/tiered_benchmark.c src/tiered_types.h src/warmup.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/warmup.o: src/warmup.c src/warmup.h src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/setup_discover.o: src/setup_discover.c src/setup_discover.h
