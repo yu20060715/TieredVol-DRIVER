@@ -257,18 +257,9 @@ int tv_flush(TV_SCHED *sched) {
                     reap_completed(sched);
                     if (sched->inflight == 0) break;
                     if (sched->inflight == inflight_before) {
-                        fprintf(stderr, "tv_flush: %d CQEs stuck (lost), recovering "
-                                "(CQEs lost, data already on disk)\n",
+                        fprintf(stderr, "tv_flush: %d CQEs stuck, data may be lost\n",
                                 sched->inflight);
-                        struct io_uring_cqe *tmp;
-                        while (io_uring_peek_cqe(&sched->ring, &tmp) == 0 && tmp)
-                            io_uring_cqe_seen(&sched->ring, tmp);
-                        for (int i = 0; i < TV_BUF_COUNT; i++) {
-                            sched->sbuf[i].in_flight = 0;
-                            sched->sbuf[i].cqes_pending = 0;
-                        }
-                        sched->inflight = 0;
-                        break;
+                        return TV_ERR;
                     }
                     continue;
                 }

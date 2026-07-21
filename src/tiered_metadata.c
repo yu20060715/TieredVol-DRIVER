@@ -83,8 +83,18 @@ int tv_metadata_load(TV_METADATA *meta, const char *path) {
             meta->chunk_size = (uint32_t)strtoul(val, NULL, 10);
         } else if (strcmp(key, "segment_count") == 0) {
             meta->segment_count = (uint32_t)strtoul(val, NULL, 10);
+            if (meta->segment_count > TV_MAX_SEGS) {
+                fprintf(stderr, "metadata: segment_count %u exceeds max %d\n",
+                        meta->segment_count, TV_MAX_SEGS);
+                fclose(f); return TV_ERR;
+            }
         } else if (strcmp(key, "disk_count") == 0) {
             meta->disk_count = (uint32_t)strtoul(val, NULL, 10);
+            if (meta->disk_count > TV_MAX_DISKS) {
+                fprintf(stderr, "metadata: disk_count %u exceeds max %d\n",
+                        meta->disk_count, TV_MAX_DISKS);
+                fclose(f); return TV_ERR;
+            }
         } else if (strncmp(key, "disk", 4) == 0 && strstr(key, "_name")) {
             /* disk0_name=... */
             char *endp;

@@ -25,7 +25,7 @@ void cleanup_create(const char *name, disk_t *valid, int valid_disks) {
     {
         char umount_lv[256];
         snprintf(umount_lv, sizeof(umount_lv), "/dev/mapper/tv_vg_%s-tv_lv_%s", name, name);
-        char *umount_argv[] = {"sudo", "umount", umount_lv, NULL};
+        char *umount_argv[] = {"umount", umount_lv, NULL};
         (void)tv_exec_quiet("sudo", umount_argv);
     }
     {
