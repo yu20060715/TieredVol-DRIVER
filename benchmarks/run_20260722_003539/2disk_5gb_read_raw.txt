@@ -1,0 +1,10 @@
+--- T2 Run 1 ---
+950715 | sudo -S ./tiered_io --name tv_test_2d --bench-read --size 5GB
+--- T2 Run 2 ---
+950715 | sudo -S ./tiered_io --name tv_test_2d --bench-read --size 5GB
+--- T2 Run 3 ---
+950715 | sudo -S ./tiered_io --name tv_test_2d --bench-read --size 5GB
+--- T2 Run 4 ---
+950715 | sudo -S ./tiered_io --name tv_test_2d --bench-read --size 5GB
+--- T2 Run 5 ---
+950715 | sudo -S ./tiered_io --name tv_test_2d --bench-read --size 5GB

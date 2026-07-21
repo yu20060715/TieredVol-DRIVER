@@ -1,0 +1,1 @@
+950715 | sudo -S perf stat -e syscalls:sys_enter_io_uring_enter,syscalls:sys_exit_io_uring_enter ./tiered_io --name tv_test_3d --bench --size 5GB

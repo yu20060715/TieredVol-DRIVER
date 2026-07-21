@@ -1,0 +1,25 @@
+--- L3 Run 1 ---
+Raw device: /dev/tv_lvm_vg/lvm_bench_2d [O_DIRECT]
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.716 seconds
+Throughput: 715.4 MB/s
+--- L3 Run 2 ---
+Raw device: /dev/tv_lvm_vg/lvm_bench_2d [O_DIRECT]
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.802 seconds
+Throughput: 638.3 MB/s
+--- L3 Run 3 ---
+Raw device: /dev/tv_lvm_vg/lvm_bench_2d [O_DIRECT]
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.765 seconds
+Throughput: 669.2 MB/s
+--- L3 Run 4 ---
+Raw device: /dev/tv_lvm_vg/lvm_bench_2d [O_DIRECT]
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.767 seconds
+Throughput: 667.3 MB/s
+--- L3 Run 5 ---
+Raw device: /dev/tv_lvm_vg/lvm_bench_2d [O_DIRECT]
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Benchmark: 536870912 bytes (512.0 MB) in 0.793 seconds
+Throughput: 645.8 MB/s

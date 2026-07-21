@@ -1,0 +1,69 @@
+    /dev/nvme0n1 is not mounted, attempting to mount...
+    /dev/sdb is not mounted, attempting to mount...
+    /dev/sdc is not mounted, attempting to mount...
+    mount failed (exit=32), trying udisksctl...
+    mount failed (exit=32), trying udisksctl...
+    /dev/sdb has no filesystem, using raw device benchmark
+    /dev/sdc has no filesystem, using raw device benchmark
+  Warming up SLC cache (2GB)...
+  Warming up /dev/sdb (2048MB)...
+    mount failed (exit=32), trying udisksctl...
+  Warming up SLC cache (2GB)...
+  Warming up /dev/sdc (2048MB)...
+    /dev/nvme0n1 has no filesystem, using raw device benchmark
+  Warming up SLC cache (2GB)...
+  Warming up /dev/nvme0n1 (2048MB)...
+  Warm-up complete.
+  Warm-up complete, starting benchmark...
+  Warm-up complete.
+  Warm-up complete, starting benchmark...
+  Warm-up complete.
+  Warm-up complete, starting benchmark...
+=== TieredVol: Creating 'tv_test_3d' ===
+  Benchmarking 3 disks in parallel...
+  Started benchmark for /dev/nvme0n1
+  Started benchmark for /dev/sdb
+  Started benchmark for /dev/sdc
+  /dev/nvme0n1: Write 825 MB/s  Read 825 MB/s
+  /dev/sdc: Write 412 MB/s  Read 412 MB/s
+  /dev/sdb: Write 466 MB/s  Read 466 MB/s
+
+Configuration:
+  Name: tv_test_3d
+  Disks: 3 (usable)
+  Total: 300GB
+  Filesystem: ext4
+  Stripesize: 512KB
+
+  DEVICE       CARVE      REMAIN     SPEED    TIER       RATIO     
+  ------------ ---------- ---------- -------- ---------- ----------
+  nvme0n1      100     GB 831     GB 825      FAST       48.4      %
+  sdb          100     GB 365     GB 466      MED        27.4      %
+  sdc          100     GB 132     GB 412      SLOW       24.2      %
+  Total theoretical speed: 1703 MB/s
+  Estimated actual: ~1601 MB/s
+
+  ================================================================
+  WARNING: The following disks will have their beginning sectors
+           overwritten. Any data on the carved portion will be
+           PERMANENTLY LOST.
+  ================================================================
+    /dev/nvme0n1  — carving 100GB of 931GB
+    /dev/sdb  — carving 100GB of 465GB
+    /dev/sdc  — carving 100GB of 232GB
+
+  Please back up your data before proceeding.
+
+Step 1: Cleaning up old targets...
+Step 2: Creating carved targets...
+  Created tv_nvme0n1_carve (100GB)
+  Created tv_sdb_carve (100GB)
+  Created tv_sdc_carve (100GB)
+Step 3: Building weighted segments...
+  Segments: 1
+  Segment 0: 0 - 107374182400 (3 disks, stripe=2048KB)
+  Metadata saved to /etc/tieredvol/tv_test_3d.scheduler
+
+=== Weighted I/O Scheduler volume 'tv_test_3d' created ===
+  Use tiered_io to manage this volume.
+  NOTE: This volume uses the weighted I/O scheduler, not LVM striping.

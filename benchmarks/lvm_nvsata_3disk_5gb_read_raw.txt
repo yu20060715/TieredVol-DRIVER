@@ -1,0 +1,175 @@
+--- L5 Run 1 ---
+Error: --path requires --bench or --bench-all
+Usage:
+  tiered_io --name <vol> [options]    # Scheduler mode
+  tiered_io --path <dir> [options]    # Direct path mode (for LVM/filesystem)
+
+Scheduler mode options:
+  --info                    Show metadata and segment info
+  --read  --offset <N> --len <N>   Read bytes (output to stdout)
+  --write --offset <N> --len <N>   Write bytes (input from stdin)
+
+Benchmark options (both modes):
+  --bench --size <N>MB      Write benchmark (default: 64MB)
+  --bench --size <N>GB      Write benchmark in GB
+  --bench-all               Run full write benchmark suite (512MB/5120MB/10240MB)
+  --bench-read --size <N>MB Read benchmark (writes then reads back)
+  --bench-read-all           Run full read benchmark suite (512MB/5120MB/10240MB)
+  --direct                  Use O_DIRECT (default for --bench)
+  --no-direct               Disable O_DIRECT for benchmark
+  --warmup                  SLC cache warm-up (sustained speed)
+  --raw                     Write directly to block device (bypass filesystem)
+
+Examples:
+  # Scheduler (weighted striping)
+  tiered_io --name fastpool --bench --size 128MB
+  tiered_io --name fastpool --bench-all
+  tiered_io --name fastpool --bench-read --size 128MB
+  tiered_io --name fastpool --bench-read-all
+
+  # Direct path (LVM/filesystem, fair comparison)
+  tiered_io --path /mnt/test --bench --size 128MB
+  tiered_io --path /mnt/test --bench-all
+
+  # Raw device (bypass filesystem, fair comparison with scheduler)
+  tiered_io --path /dev/mapper/tv_vg_testpool2-tv_lv_testpool2 --bench-all --raw
+--- L5 Run 2 ---
+Error: --path requires --bench or --bench-all
+Usage:
+  tiered_io --name <vol> [options]    # Scheduler mode
+  tiered_io --path <dir> [options]    # Direct path mode (for LVM/filesystem)
+
+Scheduler mode options:
+  --info                    Show metadata and segment info
+  --read  --offset <N> --len <N>   Read bytes (output to stdout)
+  --write --offset <N> --len <N>   Write bytes (input from stdin)
+
+Benchmark options (both modes):
+  --bench --size <N>MB      Write benchmark (default: 64MB)
+  --bench --size <N>GB      Write benchmark in GB
+  --bench-all               Run full write benchmark suite (512MB/5120MB/10240MB)
+  --bench-read --size <N>MB Read benchmark (writes then reads back)
+  --bench-read-all           Run full read benchmark suite (512MB/5120MB/10240MB)
+  --direct                  Use O_DIRECT (default for --bench)
+  --no-direct               Disable O_DIRECT for benchmark
+  --warmup                  SLC cache warm-up (sustained speed)
+  --raw                     Write directly to block device (bypass filesystem)
+
+Examples:
+  # Scheduler (weighted striping)
+  tiered_io --name fastpool --bench --size 128MB
+  tiered_io --name fastpool --bench-all
+  tiered_io --name fastpool --bench-read --size 128MB
+  tiered_io --name fastpool --bench-read-all
+
+  # Direct path (LVM/filesystem, fair comparison)
+  tiered_io --path /mnt/test --bench --size 128MB
+  tiered_io --path /mnt/test --bench-all
+
+  # Raw device (bypass filesystem, fair comparison with scheduler)
+  tiered_io --path /dev/mapper/tv_vg_testpool2-tv_lv_testpool2 --bench-all --raw
+--- L5 Run 3 ---
+Error: --path requires --bench or --bench-all
+Usage:
+  tiered_io --name <vol> [options]    # Scheduler mode
+  tiered_io --path <dir> [options]    # Direct path mode (for LVM/filesystem)
+
+Scheduler mode options:
+  --info                    Show metadata and segment info
+  --read  --offset <N> --len <N>   Read bytes (output to stdout)
+  --write --offset <N> --len <N>   Write bytes (input from stdin)
+
+Benchmark options (both modes):
+  --bench --size <N>MB      Write benchmark (default: 64MB)
+  --bench --size <N>GB      Write benchmark in GB
+  --bench-all               Run full write benchmark suite (512MB/5120MB/10240MB)
+  --bench-read --size <N>MB Read benchmark (writes then reads back)
+  --bench-read-all           Run full read benchmark suite (512MB/5120MB/10240MB)
+  --direct                  Use O_DIRECT (default for --bench)
+  --no-direct               Disable O_DIRECT for benchmark
+  --warmup                  SLC cache warm-up (sustained speed)
+  --raw                     Write directly to block device (bypass filesystem)
+
+Examples:
+  # Scheduler (weighted striping)
+  tiered_io --name fastpool --bench --size 128MB
+  tiered_io --name fastpool --bench-all
+  tiered_io --name fastpool --bench-read --size 128MB
+  tiered_io --name fastpool --bench-read-all
+
+  # Direct path (LVM/filesystem, fair comparison)
+  tiered_io --path /mnt/test --bench --size 128MB
+  tiered_io --path /mnt/test --bench-all
+
+  # Raw device (bypass filesystem, fair comparison with scheduler)
+  tiered_io --path /dev/mapper/tv_vg_testpool2-tv_lv_testpool2 --bench-all --raw
+--- L5 Run 4 ---
+Error: --path requires --bench or --bench-all
+Usage:
+  tiered_io --name <vol> [options]    # Scheduler mode
+  tiered_io --path <dir> [options]    # Direct path mode (for LVM/filesystem)
+
+Scheduler mode options:
+  --info                    Show metadata and segment info
+  --read  --offset <N> --len <N>   Read bytes (output to stdout)
+  --write --offset <N> --len <N>   Write bytes (input from stdin)
+
+Benchmark options (both modes):
+  --bench --size <N>MB      Write benchmark (default: 64MB)
+  --bench --size <N>GB      Write benchmark in GB
+  --bench-all               Run full write benchmark suite (512MB/5120MB/10240MB)
+  --bench-read --size <N>MB Read benchmark (writes then reads back)
+  --bench-read-all           Run full read benchmark suite (512MB/5120MB/10240MB)
+  --direct                  Use O_DIRECT (default for --bench)
+  --no-direct               Disable O_DIRECT for benchmark
+  --warmup                  SLC cache warm-up (sustained speed)
+  --raw                     Write directly to block device (bypass filesystem)
+
+Examples:
+  # Scheduler (weighted striping)
+  tiered_io --name fastpool --bench --size 128MB
+  tiered_io --name fastpool --bench-all
+  tiered_io --name fastpool --bench-read --size 128MB
+  tiered_io --name fastpool --bench-read-all
+
+  # Direct path (LVM/filesystem, fair comparison)
+  tiered_io --path /mnt/test --bench --size 128MB
+  tiered_io --path /mnt/test --bench-all
+
+  # Raw device (bypass filesystem, fair comparison with scheduler)
+  tiered_io --path /dev/mapper/tv_vg_testpool2-tv_lv_testpool2 --bench-all --raw
+--- L5 Run 5 ---
+Error: --path requires --bench or --bench-all
+Usage:
+  tiered_io --name <vol> [options]    # Scheduler mode
+  tiered_io --path <dir> [options]    # Direct path mode (for LVM/filesystem)
+
+Scheduler mode options:
+  --info                    Show metadata and segment info
+  --read  --offset <N> --len <N>   Read bytes (output to stdout)
+  --write --offset <N> --len <N>   Write bytes (input from stdin)
+
+Benchmark options (both modes):
+  --bench --size <N>MB      Write benchmark (default: 64MB)
+  --bench --size <N>GB      Write benchmark in GB
+  --bench-all               Run full write benchmark suite (512MB/5120MB/10240MB)
+  --bench-read --size <N>MB Read benchmark (writes then reads back)
+  --bench-read-all           Run full read benchmark suite (512MB/5120MB/10240MB)
+  --direct                  Use O_DIRECT (default for --bench)
+  --no-direct               Disable O_DIRECT for benchmark
+  --warmup                  SLC cache warm-up (sustained speed)
+  --raw                     Write directly to block device (bypass filesystem)
+
+Examples:
+  # Scheduler (weighted striping)
+  tiered_io --name fastpool --bench --size 128MB
+  tiered_io --name fastpool --bench-all
+  tiered_io --name fastpool --bench-read --size 128MB
+  tiered_io --name fastpool --bench-read-all
+
+  # Direct path (LVM/filesystem, fair comparison)
+  tiered_io --path /mnt/test --bench --size 128MB
+  tiered_io --path /mnt/test --bench-all
+
+  # Raw device (bypass filesystem, fair comparison with scheduler)
+  tiered_io --path /dev/mapper/tv_vg_testpool2-tv_lv_testpool2 --bench-all --raw

@@ -1,0 +1,1 @@
+950715 | sudo -S strace -e trace=io_uring_enter -c ./tiered_io --name tv_test_3d --bench --size 5GB
