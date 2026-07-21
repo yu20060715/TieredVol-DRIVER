@@ -78,7 +78,7 @@ sudo tiered_io --name fastpool --bench --size 128MB --warmup  # 持久
 詳細實作見：
 - [PARTITION_SPLITTING.md](docs/PARTITION_SPLITTING.md) — Weight 計算、容量分段、Offset Mapping
 - [WEIGHTED_IO_SCHEDULER.md](docs/WEIGHTED_IO_SCHEDULER.md) — 三層架構、io_uring dispatch、stripe buffer
-- [AGENTS.md](AGENTS.md) — 完整實作指南，包含每個模組的程式碼
+- [AGENTS.md](../AGENTS.md) — 完整實作指南，包含每個模組的程式碼
 
 ---
 

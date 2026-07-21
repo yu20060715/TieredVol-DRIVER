@@ -96,10 +96,10 @@ int tv_write(TV_SCHED *sched, const void *buf, uint64_t len) {
                     reap_completed(sched);
                     if (sched->inflight >= TV_BUF_COUNT) {
                         struct io_uring_cqe *cqe = NULL;
-        struct __kernel_timespec ts = { .tv_sec = 5, .tv_nsec = 0 };
+        struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
         int r = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
                         if (r == -ETIME) {
-                            fprintf(stderr, "tv_write: CQE wait timed out (5s)\n");
+                            fprintf(stderr, "tv_write: CQE wait timed out (%ds)\n", TV_CQE_TIMEOUT_SEC);
                             return -1;
                         }
                         if (r == -EINTR) {
@@ -208,17 +208,21 @@ int tv_flush(TV_SCHED *sched) {
     while (sched->inflight > 0) {
         if (g_shutdown_requested) return -1;
         struct io_uring_cqe *cqe = NULL;
-        struct __kernel_timespec ts = { .tv_sec = 5, .tv_nsec = 0 };
+        struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
         int ret = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
         if (ret == -ETIME) {
             /* Drain any CQEs that arrived during the timeout window */
             struct io_uring_cqe *tmp;
-            while (io_uring_peek_cqe(&sched->ring, &tmp) == 0 && tmp)
+            int completed = 0;
+            while (io_uring_peek_cqe(&sched->ring, &tmp) == 0 && tmp) {
                 io_uring_cqe_seen(&sched->ring, tmp);
-            fprintf(stderr, "tv_flush: CQE wait timed out (%d in-flight assumed done)\n",
-                    sched->inflight);
-            sched->inflight = 0;
-            break;
+                completed++;
+            }
+            fprintf(stderr, "tv_flush: CQE wait timed out (%d in-flight, %d drained)\n",
+                    sched->inflight, completed);
+            sched->inflight -= completed;
+            if (sched->inflight > 0) break;
+            continue;
         }
         if (ret == -EINTR) {
             if (g_shutdown_requested) return -1;

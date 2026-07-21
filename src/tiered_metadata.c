@@ -105,13 +105,13 @@ int tv_metadata_load(TV_METADATA *meta, const char *path) {
             TV_SEGMENT *seg = &meta->segments[idx];
 
             if (strcmp(endp, "_begin") == 0) {
-                seg->logical_begin = strtoul(val, NULL, 10);
+                seg->logical_begin = strtoull(val, NULL, 10);
             } else if (strcmp(endp, "_end") == 0) {
-                seg->logical_end = strtoul(val, NULL, 10);
+                seg->logical_end = strtoull(val, NULL, 10);
             } else if (strcmp(endp, "_count") == 0) {
                 seg->disk_count = (uint32_t)strtoul(val, NULL, 10);
             } else if (strcmp(endp, "_stripe") == 0) {
-                seg->stripe_size = strtoul(val, NULL, 10);
+                seg->stripe_size = strtoull(val, NULL, 10);
             } else if (strcmp(endp, "_disks") == 0) {
                 char *t = strtok(val, ",");
                 int j = 0;

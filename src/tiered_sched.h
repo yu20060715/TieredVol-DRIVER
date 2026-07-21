@@ -16,6 +16,7 @@ extern volatile sig_atomic_t g_shutdown_requested;
 #define TV_MAX_WEIGHT   16
 #define TV_CHUNK_SIZE   (1024 * 1024)   /* 1MB base unit */
 #define TV_BUF_COUNT    64  /* stripe buffer pool size for pipelining */
+#define TV_CQE_TIMEOUT_SEC  5   /* io_uring wait timeout before drain */
 
 typedef struct {
     int      id;
