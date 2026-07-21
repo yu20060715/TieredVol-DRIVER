@@ -6,12 +6,12 @@ SCHED_OBJS=src/tiered_sched.o src/tiered_partition.o src/tiered_mapper.o \
            src/tiered_io_uring.o src/tiered_metadata.o \
            src/tiered_benchmark.o
 
-SETUP_OBJS=src/setup_discover.o src/setup_bench.o
+SETUP_OBJS=src/setup_discover.o src/setup_bench.o src/cmd_create.o src/cmd_remove.o
 IO_OBJS=src/io_bench.o
 
 all: tiered_setup tiered_io
 
-tiered_setup: src/tiered_setup.c src/tiered_common.h src/tiered_sched.h src/version.h src/setup_discover.h src/setup_bench.h $(SCHED_OBJS) $(SETUP_OBJS)
+tiered_setup: src/tiered_setup.c src/tiered_common.h src/tiered_types.h src/version.h src/setup_discover.h src/setup_bench.h src/exec_helper.h src/cmd_create.h src/cmd_remove.h $(SCHED_OBJS) $(SETUP_OBJS)
 	$(CC) $(CFLAGS) -o $@ src/tiered_setup.c $(SCHED_OBJS) $(SETUP_OBJS) -lm -luring
 
 tiered_io: src/tiered_io.c src/tiered_sched.h src/io_bench.h $(SCHED_OBJS) $(IO_OBJS)
@@ -39,6 +39,12 @@ src/setup_discover.o: src/setup_discover.c src/setup_discover.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/setup_bench.o: src/setup_bench.c src/setup_bench.h src/setup_discover.h src/tiered_sched.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/cmd_create.o: src/cmd_create.c src/cmd_create.h src/tiered_sched.h src/setup_discover.h src/setup_bench.h src/exec_helper.h src/tiered_types.h src/version.h src/tiered_common.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/cmd_remove.o: src/cmd_remove.c src/cmd_remove.h src/cmd_create.h src/tiered_sched.h src/setup_discover.h src/exec_helper.h src/tiered_types.h src/tiered_common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/io_bench.o: src/io_bench.c src/io_bench.h src/tiered_sched.h

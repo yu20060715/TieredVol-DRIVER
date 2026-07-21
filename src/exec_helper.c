@@ -42,7 +42,7 @@ int tv_exec_sudo(char *const argv[], int quiet) {
     if (pid == 0) {
         if (quiet) {
             int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+            if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
         }
         int i = 0;
         char *sudo_argv[64];
