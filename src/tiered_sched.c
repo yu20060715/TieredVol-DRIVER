@@ -99,6 +99,15 @@ int tv_write(TV_SCHED *sched, const void *buf, uint64_t len) {
                         struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
                         int r = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
                         if (r == -ETIME) {
+                            /* Drain any CQEs that arrived but weren't peeked */
+                            int inflight_before = sched->inflight;
+                            reap_completed(sched);
+                            if (sched->inflight == 0) break;
+                            if (sched->inflight == inflight_before) {
+                                fprintf(stderr, "tv_write: CQE stuck (%d in-flight)\n",
+                                        sched->inflight);
+                                return -1;
+                            }
                             continue;
                         }
                         if (r == -EINTR) {
