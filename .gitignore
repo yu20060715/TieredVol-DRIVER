@@ -17,3 +17,10 @@ test_common
 # OS
 .DS_Store
 Thumbs.db
+
+# Test binaries
+test_mapper
+test_partition
+test_metadata
+test_sched
+test_integrity

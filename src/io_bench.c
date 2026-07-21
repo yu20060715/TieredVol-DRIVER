@@ -107,8 +107,8 @@ int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA *meta)
         return 0;
     }
 
-    uint8_t *buf = malloc((size_t)(sched->stripe_size));
-    if (!buf) {
+    uint8_t *buf = NULL;
+    if (posix_memalign((void **)&buf, 4096, (size_t)(sched->stripe_size)) != 0) {
         fprintf(stderr, "Error: cannot allocate buffer\n");
         return TV_ERR;
     }

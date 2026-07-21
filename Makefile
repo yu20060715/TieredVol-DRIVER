@@ -20,19 +20,19 @@ tiered_io: src/tiered_io.c src/tiered_sched.h src/io_bench.h $(SCHED_OBJS) $(IO_
 src/tiered_sched.o: src/tiered_sched.c src/tiered_sched.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/tiered_partition.o: src/tiered_partition.c src/tiered_sched.h
+src/tiered_partition.o: src/tiered_partition.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/tiered_mapper.o: src/tiered_mapper.c src/tiered_sched.h
+src/tiered_mapper.o: src/tiered_mapper.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/tiered_io_uring.o: src/tiered_io_uring.c src/tiered_sched.h
+src/tiered_io_uring.o: src/tiered_io_uring.c src/tiered_io_uring.h src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/tiered_metadata.o: src/tiered_metadata.c src/tiered_sched.h
+src/tiered_metadata.o: src/tiered_metadata.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/tiered_benchmark.o: src/tiered_benchmark.c src/tiered_sched.h
+src/tiered_benchmark.o: src/tiered_benchmark.c src/tiered_types.h src/warmup.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/setup_discover.o: src/setup_discover.c src/setup_discover.h

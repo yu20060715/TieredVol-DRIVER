@@ -1,19 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../src/tiered_common.h"
-
-static int tests_run = 0;
-static int tests_passed = 0;
-
-static void check(int cond, const char *name) {
-    tests_run++;
-    if (cond) {
-        tests_passed++;
-        printf("  PASS  %s\n", name);
-    } else {
-        printf("  FAIL  %s\n", name);
-    }
-}
+#include "test_common.h"
 
 static void test_valid_name(void) {
     printf("\n[TEST] tiered_is_valid_name\n");
