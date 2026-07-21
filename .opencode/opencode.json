@@ -1,5 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "references": {
+    "tieredvol-thesis": {
+      "path": "../tieredvol-thesis",
+      "description": "Thesis document repo. Chapters reference benchmark data from this repo."
+    }
+  },
   "agent": {
     "tieredvol-dev": {
       "description": "B85 Linux agent: code modification, compilation, testing, benchmarking",
@@ -16,6 +22,41 @@
           "./tiered_io *": "allow",
           "./tiered_setup *": "allow",
           "sudo ./tiered_*": "allow",
+          "*": "ask"
+        }
+      }
+    },
+    "benchmark-runner": {
+      "description": "B85 benchmark agent: run full TieredVol vs LVM comparison suite on same disk config, save to benchmarks/, push to git",
+      "mode": "primary",
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "echo * | sudo -S *": "allow",
+          "sudo -S *": "allow",
+          "make *": "allow",
+          "./tiered_io *": "allow",
+          "./tiered_setup *": "allow",
+          "git *": "allow",
+          "mkdir *": "allow",
+          "ls *": "allow",
+          "cat *": "allow",
+          "cp *": "allow",
+          "strace *": "allow",
+          "perf *": "allow",
+          "sed *": "allow",
+          "grep *": "allow",
+          "awk *": "allow",
+          "sleep *": "allow",
+          "date *": "allow",
+          "df *": "allow",
+          "dmesg *": "allow",
+          "lvs *": "allow",
+          "mkfs.ext4 *": "allow",
+          "mount *": "allow",
+          "umount *": "allow",
+          "tee *": "allow",
+          "sync": "allow",
           "*": "ask"
         }
       }
