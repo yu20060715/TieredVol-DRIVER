@@ -1,0 +1,30 @@
+
+--- Run 1 ---
+: 
+5120+0 records in
+5120+0 records out
+5368709120 bytes (5.4 GB, 5.0 GiB) copied, 10.565 s, 508 MB/s
+
+--- Run 2 ---
+: 
+5120+0 records in
+5120+0 records out
+5368709120 bytes (5.4 GB, 5.0 GiB) copied, 10.8795 s, 493 MB/s
+
+--- Run 3 ---
+: 
+5120+0 records in
+5120+0 records out
+5368709120 bytes (5.4 GB, 5.0 GiB) copied, 10.3146 s, 520 MB/s
+
+--- Run 4 ---
+: 
+5120+0 records in
+5120+0 records out
+5368709120 bytes (5.4 GB, 5.0 GiB) copied, 11.0838 s, 484 MB/s
+
+--- Run 5 ---
+: 
+5120+0 records in
+5120+0 records out
+5368709120 bytes (5.4 GB, 5.0 GiB) copied, 10.984 s, 489 MB/s

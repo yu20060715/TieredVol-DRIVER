@@ -1,0 +1,65 @@
+
+--- Run 1 ---
+: 
+Loading metadata from /etc/tieredvol/testpool3.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
+Initializing scheduler...
+  Writing 512 MB to prepare for read...
+  Reading 512 MB...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Read benchmark: 536870912 bytes (512.0 MB) in 0.369 seconds
+Read throughput: 1388.6 MB/s
+
+--- Run 2 ---
+: 
+Loading metadata from /etc/tieredvol/testpool3.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
+Initializing scheduler...
+  Writing 512 MB to prepare for read...
+  Reading 512 MB...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Read benchmark: 536870912 bytes (512.0 MB) in 0.361 seconds
+Read throughput: 1417.1 MB/s
+
+--- Run 3 ---
+: 
+Loading metadata from /etc/tieredvol/testpool3.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
+Initializing scheduler...
+  Writing 512 MB to prepare for read...
+  Reading 512 MB...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Read benchmark: 536870912 bytes (512.0 MB) in 0.362 seconds
+Read throughput: 1412.7 MB/s
+
+--- Run 4 ---
+: 
+Loading metadata from /etc/tieredvol/testpool3.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
+Initializing scheduler...
+  Writing 512 MB to prepare for read...
+  Reading 512 MB...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Read benchmark: 536870912 bytes (512.0 MB) in 0.353 seconds
+Read throughput: 1451.8 MB/s
+
+--- Run 5 ---
+: 
+Loading metadata from /etc/tieredvol/testpool3.scheduler...
+Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
+Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
+Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
+Initializing scheduler...
+  Writing 512 MB to prepare for read...
+  Reading 512 MB...
+  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
+Read benchmark: 536870912 bytes (512.0 MB) in 0.375 seconds
+Read throughput: 1366.9 MB/s
