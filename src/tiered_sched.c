@@ -99,14 +99,33 @@ int tv_write(TV_SCHED *sched, const void *buf, uint64_t len) {
                         struct __kernel_timespec ts = { .tv_sec = TV_CQE_TIMEOUT_SEC, .tv_nsec = 0 };
                         int r = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
                         if (r == -ETIME) {
-                            /* Drain any CQEs that arrived but weren't peeked */
                             int inflight_before = sched->inflight;
                             reap_completed(sched);
                             if (sched->inflight == 0) break;
                             if (sched->inflight == inflight_before) {
-                                fprintf(stderr, "tv_write: CQE stuck (%d in-flight)\n",
-                                        sched->inflight);
-                                return -1;
+                                fprintf(stderr, "tv_write: %d CQEs slow, retrying (%ds)\n",
+                                        sched->inflight, TV_CQE_RETRY_SEC);
+                                ts.tv_sec = TV_CQE_RETRY_SEC;
+                                int r2 = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
+                                if (r2 == -ETIME) {
+                                    reap_completed(sched);
+                                    if (sched->inflight == 0) break;
+                                    if (sched->inflight == inflight_before) {
+                                        fprintf(stderr, "tv_write: CQE stuck (%d)\n",
+                                                sched->inflight);
+                                        return -1;
+                                    }
+                                    continue;
+                                }
+                                if (r2 == -EINTR) {
+                                    if (g_shutdown_requested) return -1;
+                                    continue;
+                                }
+                                if (r2 < 0) {
+                                    fprintf(stderr, "tv_write: wait_cqe failed: %s\n", strerror(-r2));
+                                    return -1;
+                                }
+                                goto w_process;
                             }
                             continue;
                         }
@@ -118,6 +137,8 @@ int tv_write(TV_SCHED *sched, const void *buf, uint64_t len) {
                             fprintf(stderr, "tv_write: wait_cqe failed: %s\n", strerror(-r));
                             return -1;
                         }
+w_process:
+                        {
                         int buf_idx = (int)(intptr_t)io_uring_cqe_get_data(cqe);
                         if (cqe->res < 0)
                             fprintf(stderr, "tv_write: I/O error res=%d\n", cqe->res);
@@ -128,6 +149,7 @@ int tv_write(TV_SCHED *sched, const void *buf, uint64_t len) {
                                 sched->sbuf[buf_idx].in_flight = 0;
                                 sched->inflight--;
                             }
+                        }
                         }
                     }
                 }
@@ -226,9 +248,29 @@ int tv_flush(TV_SCHED *sched) {
             reap_completed(sched);
             if (sched->inflight == 0) break;
             if (sched->inflight == inflight_before) {
-                fprintf(stderr, "tv_flush: CQE stuck (%d in-flight)\n",
-                        sched->inflight);
-                return -1;
+                fprintf(stderr, "tv_flush: %d CQEs slow, retrying (%ds)\n",
+                        sched->inflight, TV_CQE_RETRY_SEC);
+                ts.tv_sec = TV_CQE_RETRY_SEC;
+                int r2 = io_uring_wait_cqe_timeout(&sched->ring, &cqe, &ts);
+                if (r2 == -ETIME) {
+                    reap_completed(sched);
+                    if (sched->inflight == 0) break;
+                    if (sched->inflight == inflight_before) {
+                        fprintf(stderr, "tv_flush: CQE stuck (%d)\n",
+                                sched->inflight);
+                        return -1;
+                    }
+                    continue;
+                }
+                if (r2 == -EINTR) {
+                    if (g_shutdown_requested) return -1;
+                    continue;
+                }
+                if (r2 < 0) {
+                    fprintf(stderr, "tv_flush: wait_cqe failed: %s\n", strerror(-r2));
+                    return -1;
+                }
+                goto process_cqe;
             }
             continue;
         }
@@ -240,6 +282,8 @@ int tv_flush(TV_SCHED *sched) {
             fprintf(stderr, "tv_flush: wait_cqe failed: %s\n", strerror(-ret));
             return -1;
         }
+process_cqe:
+        {
         int buf_idx = (int)(intptr_t)io_uring_cqe_get_data(cqe);
         io_uring_cqe_seen(&sched->ring, cqe);
         if (buf_idx >= 0 && buf_idx < TV_BUF_COUNT && sched->sbuf[buf_idx].in_flight) {
@@ -248,6 +292,7 @@ int tv_flush(TV_SCHED *sched) {
                 sched->sbuf[buf_idx].in_flight = 0;
                 sched->inflight--;
             }
+        }
         }
     }
 
