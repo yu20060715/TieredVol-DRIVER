@@ -71,11 +71,11 @@ test: test_common test_mapper test_partition test_metadata test_sched test_integ
 
 test-full:
 	$(MAKE) test
-	sudo losetup -d /dev/loop0 2>/dev/null; true
+	-sudo losetup -d /dev/loop0
 	sudo dd if=/dev/zero of=/tmp/tv_test.img bs=1M count=100
-	sudo losetup /dev/loop0 /tmp/tv_test.img
-	./test_integrity /dev/loop0
-	sudo losetup -d /dev/loop0
+	DEV=$$(sudo losetup -f --show /tmp/tv_test.img); \
+	./test_integrity $$DEV; \
+	sudo losetup -d $$DEV
 	sudo rm -f /tmp/tv_test.img
 
 install: all
