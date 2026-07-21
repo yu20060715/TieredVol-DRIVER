@@ -87,7 +87,7 @@ static int cmd_info(TV_METADATA *meta) {
 
 static int cmd_read(TV_SCHED *sched, uint64_t offset, uint64_t len) {
     uint8_t *buf = NULL;
-    if (posix_memalign((void **)&buf, 512, (size_t)len) != 0) {
+    if (posix_memalign((void **)&buf, TV_ALLOC_ALIGNMENT, (size_t)len) != 0) {
         fprintf(stderr, "Error: cannot allocate %lu bytes\n", (unsigned long)len);
         return TV_ERR;
     }
@@ -122,7 +122,7 @@ static int cmd_read(TV_SCHED *sched, uint64_t offset, uint64_t len) {
 
 static int cmd_write(TV_SCHED *sched, uint64_t offset, uint64_t len) {
     uint8_t *buf = NULL;
-    if (posix_memalign((void **)&buf, 4096, (size_t)len) != 0) {
+    if (posix_memalign((void **)&buf, TV_DIRECT_ALIGNMENT, (size_t)len) != 0) {
         fprintf(stderr, "Error: cannot allocate %lu bytes\n", (unsigned long)len);
         return TV_ERR;
     }
@@ -257,7 +257,7 @@ int main(int argc, char *argv[]) {
     /* Load metadata */
     TV_METADATA meta;
     char config_path[256];
-    snprintf(config_path, sizeof(config_path), "/etc/tieredvol/%s.scheduler", name);
+    snprintf(config_path, sizeof(config_path), TV_CONFIG_DIR "%s.scheduler", name);
 
     fprintf(stderr, "Loading metadata from %s...\n", config_path);
     if (tv_metadata_load(&meta, config_path) < 0) {

@@ -22,13 +22,13 @@ TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta) {
     sched->meta = meta;
     sched->stripe_size = meta->segments[0].stripe_size;
 
-    if (tv_uring_init(&sched->ring, 256) < 0) {
+    if (tv_uring_init(&sched->ring, TV_URING_QUEUE_DEPTH) < 0) {
         free(sched);
         return NULL;
     }
 
     for (int i = 0; i < TV_BUF_COUNT; i++) {
-        sched->sbuf[i].data = aligned_alloc(512, (size_t)sched->stripe_size);
+        sched->sbuf[i].data = aligned_alloc(TV_ALLOC_ALIGNMENT, (size_t)sched->stripe_size);
         if (!sched->sbuf[i].data) {
             for (int j = 0; j < i; j++) free(sched->sbuf[j].data);
             tv_uring_destroy(&sched->ring);

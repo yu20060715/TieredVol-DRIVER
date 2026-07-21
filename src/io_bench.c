@@ -140,7 +140,7 @@ int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA *meta)
 
         written += chunk;
 
-        if (written % (64 * 1024 * 1024) == 0 || written == size) {
+        if (written % TV_PROGRESS_INTERVAL == 0 || written == size) {
             fprintf(stderr, "\r  progress: %lu / %lu MB",
                     (unsigned long)(written / 1048576),
                     (unsigned long)(size / 1048576));
@@ -311,7 +311,7 @@ int cmd_bench_read_one(TV_SCHED *sched, uint64_t size, TV_METADATA *meta) {
         }
         read_total += chunk;
 
-        if (read_total % (64 * 1024 * 1024) == 0 || read_total == size) {
+        if (read_total % TV_PROGRESS_INTERVAL == 0 || read_total == size) {
             fprintf(stderr, "\r  progress: %lu / %lu MB",
                     (unsigned long)(read_total / 1048576),
                     (unsigned long)(size / 1048576));
@@ -439,7 +439,7 @@ int cmd_bench_path(const char *path, uint64_t size, int warmup, int use_direct, 
         }
         written += n;
 
-        if (written % (64 * 1024 * 1024) == 0 || written == size) {
+        if (written % TV_PROGRESS_INTERVAL == 0 || written == size) {
             fprintf(stderr, "\r  progress: %lu / %lu MB",
                     (unsigned long)(written / 1048576),
                     (unsigned long)(size / 1048576));

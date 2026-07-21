@@ -399,11 +399,10 @@ int cmd_create(int argc, char *argv[]) {
                    (unsigned long)(segs[i].stripe_size / 1024));
         }
 
-        char config_dir[] = "/etc/tieredvol";
-        mkdir(config_dir, 0755);
+        mkdir(TV_CONFIG_DIR, 0755);
 
         char config_path[256];
-        snprintf(config_path, sizeof(config_path), "/etc/tieredvol/%s.scheduler", name);
+        snprintf(config_path, sizeof(config_path), TV_CONFIG_DIR "%s.scheduler", name);
 
         if (tv_metadata_save(&meta, config_path) < 0) {
             fprintf(stderr, "Error: failed to save metadata to %s\n", config_path);
@@ -536,10 +535,10 @@ int cmd_create(int argc, char *argv[]) {
                             i, valid[i].disk, valid[i].carve_gb, valid[i].speed_write);
                 }
                 fclose(cf);
-                char *mkdir_argv[] = {"sudo", "mkdir", "-p", "/etc/tieredvol", NULL};
+                char *mkdir_argv[] = {"sudo", "mkdir", "-p", TV_CONFIG_DIR, NULL};
                 (void)tv_exec_sudo(mkdir_argv, 0);
                 char dest[512];
-                snprintf(dest, sizeof(dest), "/etc/tieredvol/%s.conf", name);
+                snprintf(dest, sizeof(dest), TV_CONFIG_DIR "%s.conf", name);
                 char *mv_argv[] = {"sudo", "mv", "-f", conf_path, dest, NULL};
                 int mv_ret = tv_exec_sudo(mv_argv, 0);
                 if (mv_ret != 0) {

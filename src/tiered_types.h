@@ -20,6 +20,11 @@ extern volatile sig_atomic_t g_shutdown_requested;
 
 #define TV_ESTIMATED_EFFICIENCY 0.94
 #define DEFAULT_STRIPE_SIZE_KB  512
+#define TV_URING_QUEUE_DEPTH    256
+#define TV_ALLOC_ALIGNMENT      512
+#define TV_DIRECT_ALIGNMENT     4096
+#define TV_CONFIG_DIR           "/etc/tieredvol/"
+#define TV_PROGRESS_INTERVAL    (64 * 1024 * 1024)
 
 typedef struct {
     int      id;

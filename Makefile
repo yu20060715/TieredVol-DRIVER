@@ -76,7 +76,8 @@ test: test_common test_mapper test_partition test_metadata test_sched test_integ
 	echo "=== test_mapper ===" && ./test_mapper && \
 	echo "=== test_partition ===" && ./test_partition && \
 	echo "=== test_metadata ===" && ./test_metadata && \
-	echo "=== test_sched ===" && ./test_sched
+	echo "=== test_sched ===" && ./test_sched && \
+	echo "=== test_integrity ===" && ./test_integrity
 
 test-full:
 	$(MAKE) test

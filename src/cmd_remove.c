@@ -37,7 +37,7 @@ int cmd_remove(int argc, char *argv[]) {
 
     /* Check for scheduler volume first */
     char sched_path[256];
-    snprintf(sched_path, sizeof(sched_path), "/etc/tieredvol/%s.scheduler", name);
+    snprintf(sched_path, sizeof(sched_path), TV_CONFIG_DIR "%s.scheduler", name);
     FILE *sf = fopen(sched_path, "r");
     if (sf) {
         fclose(sf);
@@ -102,12 +102,12 @@ int cmd_remove(int argc, char *argv[]) {
         }
         {
             char conf_path_cleanup[256];
-            snprintf(conf_path_cleanup, sizeof(conf_path_cleanup), "/etc/tieredvol/%s.conf", name);
+            snprintf(conf_path_cleanup, sizeof(conf_path_cleanup), TV_CONFIG_DIR "%s.conf", name);
             char *rm_argv[] = {"sudo", "rm", "-f", conf_path_cleanup, NULL};
             (void)tv_exec_sudo(rm_argv, 0);
         }
         {
-            char *rmdir_argv[] = {"sudo", "rmdir", "/etc/tieredvol", NULL};
+            char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL};
             (void)tv_exec_sudo(rmdir_argv, 0);
         }
 
@@ -121,7 +121,7 @@ int cmd_remove(int argc, char *argv[]) {
     int ntargets = 0;
 
     char conf_path[256];
-    snprintf(conf_path, sizeof(conf_path), "/etc/tieredvol/%s.conf", name);
+    snprintf(conf_path, sizeof(conf_path), TV_CONFIG_DIR "%s.conf", name);
     FILE *cf = fopen(conf_path, "r");
     if (cf) {
         char line[256];
@@ -215,7 +215,7 @@ int cmd_remove(int argc, char *argv[]) {
     {
         char *rm_argv[] = {"sudo", "rm", "-f", conf_path, NULL};
         (void)tv_exec_sudo(rm_argv, 0);
-        char *rmdir_argv[] = {"sudo", "rmdir", "/etc/tieredvol", NULL};
+        char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL};
         (void)tv_exec_sudo(rmdir_argv, 0);
     }
 
@@ -245,13 +245,13 @@ int cmd_status(void) {
 
     printf("\nSaved Configs:\n");
     {
-        DIR *d = opendir("/etc/tieredvol");
+        DIR *d = opendir(TV_CONFIG_DIR);
         if (d) {
             struct dirent *ent;
             int found = 0;
             while ((ent = readdir(d))) {
                 if (strstr(ent->d_name, ".conf") || strstr(ent->d_name, ".scheduler")) {
-                    printf("  /etc/tieredvol/%s\n", ent->d_name);
+                    printf("  " TV_CONFIG_DIR "%s\n", ent->d_name);
                     found = 1;
                 }
             }
