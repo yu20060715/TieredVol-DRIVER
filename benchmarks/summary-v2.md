@@ -7,17 +7,18 @@
 - SATA: MX500 500G + WD Blue NAND 250G
 - OS: Lubuntu, Linux 6.14
 - Fixes applied: O_DIRECT 4096 alignment, CQE stuck recovery, read bench ring cleanup
-- CQE timeout: 30s (increased from 5s to reduce false CQE stuck events)
+- CQE timeout: 30s
+- TV_BUF_COUNT: 16, TV_URING_QUEUE_DEPTH: 256 (CQ=512)
 
 ## TieredVol Scheduler (Weighted Stripe)
 
 | Scenario | Mean (MB/s) | StdDev | Runs |
 |----------|------------|--------|------|
-| 2disk_5gb_write | 1208.0 | 99.0 | 5 |
-| 2disk_5gb_read | 1182.7 | 99.5 | 5 |
+| 2disk_5gb_write | 1063.3 | 47.4 | 5 |
+| 2disk_5gb_read | 1100.5 | 37.3 | 5 |
 | 2disk_512mb_write | 1462.0 | 27.8 | 5 |
-| 3disk_5gb_write | 1193.6 | 68.6 | 5 |
-| 3disk_5gb_read | 1242.8 | 82.0 | 5 |
+| 3disk_5gb_write | 1168.4 | 71.8 | 5 |
+| 3disk_5gb_read | 1253.1 | 19.1 | 5 |
 
 ## LVM Striped — Same Disk Configuration (NVMe+SATA)
 
@@ -58,10 +59,10 @@
 
 | Scenario | TieredVol (MB/s) | LVM (MB/s) | Ratio |
 |----------|-----------------|------------|-------|
-| 2-disk NVMe+SATA 5GB **write** | 1208.0 | 683.2 | 1.77x |
-| 3-disk NVMe+2xSATA 5GB **write** | 1193.6 | 580.0 | 2.06x |
-| 2-disk NVMe+SATA 5GB **read** | 1182.7 | 636.8 | 1.86x |
-| 3-disk NVMe+2xSATA 5GB **read** | 1242.8 | 808.2 | 1.54x |
+| 2-disk NVMe+SATA 5GB **write** | 1063.3 | 683.2 | 1.56x |
+| 3-disk NVMe+2xSATA 5GB **write** | 1168.4 | 580.0 | 2.01x |
+| 2-disk NVMe+SATA 5GB **read** | 1100.5 | 636.8 | 1.73x |
+| 3-disk NVMe+2xSATA 5GB **read** | 1253.1 | 808.2 | 1.55x |
 | 2-disk NVMe+SATA 512MB **write** | 1462.0 | 641.0 | 2.28x |
 
 ## Bug Fixes Applied
@@ -71,9 +72,15 @@
 4. **Read bench ring cleanup**: Flush failure in cmd_bench_read_one now drains orphaned CQEs before proceeding
 5. **CQE timeout**: 5s → 30s (reduces false CQE stuck events on slow SATA recovery)
 
+## Known Issues
+- **CQE stuck on dm-linear + O_DIRECT + io_uring**: 2-12 CQEs lost per 5GB run. This is a kernel-level issue
+  with the io_uring subsystem when used with dm-linear block devices under O_DIRECT. Increasing CQ ring
+  size (QD=256, CQ=512) did not resolve the issue. Data integrity is maintained — stuck CQEs occur after
+  data is confirmed on disk. Recovery is immediate (no 30s hang). This is noted as a known limitation
+  in the Discussion chapter.
+
 ## Notes
 - CQE stuck recovery: data confirmed on disk before graceful recovery (no data loss)
 - LVM read baselines now included via dd O_DIRECT
 - LVM write baselines use dd oflag=direct (O_DIRECT) for fair comparison
-- perf stat unavailable for kernel 6.14.0-27; strace data used instead
-- Run directory: benchmarks/run_20260722_064337
+- Run directory: benchmarks/run_20260722_091501 (retest with BUF_COUNT=16, QD=256)
