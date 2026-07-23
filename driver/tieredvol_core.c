@@ -67,7 +67,16 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	return tieredvol_split_and_submit(bio, ctx, NULL);
+	{
+		int ret = tieredvol_split_and_submit(bio, ctx, NULL);
+
+		if (ret < 0) {
+			bio_io_error(bio);
+			return DM_MAPIO_SUBMITTED;
+		}
+
+		return DM_MAPIO_SUBMITTED;
+	}
 }
 
 static int tieredvol_ctr(struct dm_target *ti, unsigned int argc,

@@ -13,7 +13,9 @@
 #include "version.h"
 
 #define ALIGNMENT 4096
-#define BS_DEFAULT (1024 * 1024)
+#define BS_DEFAULT (16 * 1024 * 1024)
+#define BS_MIN     (4096)
+#define BS_MAX     (64 * 1024 * 1024)
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -40,7 +42,7 @@ static uint64_t get_device_size(int fd) {
     return 0;
 }
 
-static int bench_write(const char *path, uint64_t size, int use_direct) {
+static int bench_write(const char *path, uint64_t size, int use_direct, uint64_t bs) {
     int flags = O_WRONLY | O_CREAT | O_TRUNC;
     if (use_direct) flags |= O_DIRECT;
 
@@ -51,19 +53,19 @@ static int bench_write(const char *path, uint64_t size, int use_direct) {
     }
 
     uint8_t *buf;
-    if (posix_memalign((void **)&buf, ALIGNMENT, BS_DEFAULT) != 0) {
+    if (posix_memalign((void **)&buf, ALIGNMENT, bs) != 0) {
         fprintf(stderr, "Error: alloc failed\n");
         close(fd);
         return TV_ERR;
     }
-    memset(buf, 0xAB, BS_DEFAULT);
+    memset(buf, 0xAB, bs);
 
     uint64_t written = 0;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     while (written < size && !g_stop) {
-        ssize_t n = pwrite(fd, buf, BS_DEFAULT, (off_t)written);
+        ssize_t n = pwrite(fd, buf, bs, (off_t)written);
         if (n < 0) {
             if (errno == EINTR) continue;
             fprintf(stderr, "Error: pwrite failed at %lu: %s\n",
@@ -86,7 +88,7 @@ static int bench_write(const char *path, uint64_t size, int use_direct) {
     return 0;
 }
 
-static int bench_read(const char *path, uint64_t size, int use_direct) {
+static int bench_read(const char *path, uint64_t size, int use_direct, uint64_t bs) {
     int flags = O_RDONLY;
     if (use_direct) flags |= O_DIRECT;
 
@@ -100,7 +102,7 @@ static int bench_read(const char *path, uint64_t size, int use_direct) {
     if (size > dev_size) size = dev_size;
 
     uint8_t *buf;
-    if (posix_memalign((void **)&buf, ALIGNMENT, BS_DEFAULT) != 0) {
+    if (posix_memalign((void **)&buf, ALIGNMENT, bs) != 0) {
         fprintf(stderr, "Error: alloc failed\n");
         close(fd);
         return TV_ERR;
@@ -111,7 +113,7 @@ static int bench_read(const char *path, uint64_t size, int use_direct) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     while (total < size && !g_stop) {
-        ssize_t n = pread(fd, buf, BS_DEFAULT, (off_t)total);
+        ssize_t n = pread(fd, buf, bs, (off_t)total);
         if (n < 0) {
             if (errno == EINTR) continue;
             fprintf(stderr, "Error: pread failed at %lu: %s\n",
@@ -178,29 +180,32 @@ static void usage(void) {
         "  --bench-read --size <N>MB  Read benchmark\n"
         "  --bench-all             Write suite: 512MB, 5GB, 10GB\n"
         "  --bench-read-all        Read suite: 512MB, 5GB, 10GB\n"
+        "  --blocksize <N>         Block size (default: 16MB, min: 4K, max: 64MB)\n"
         "  --direct                Use O_DIRECT (default)\n"
         "  --no-direct             Disable O_DIRECT\n"
         "  --info                  Show device/volume info\n"
         "\nExamples:\n"
         "  sudo tiered_io --path /dev/mapper/myvol --bench --size 5GB\n"
+        "  sudo tiered_io --path /dev/mapper/myvol --bench --blocksize 32M\n"
         "  sudo tiered_io --path /dev/mapper/myvol --bench-all\n"
         "  sudo tiered_io --path /dev/mapper/myvol --bench-read-all\n"
         "  sudo tiered_io --name myvol --info\n"
     );
 }
 
-static int run_suite(const char *path, int do_read, int use_direct) {
+static int run_suite(const char *path, int do_read, int use_direct, uint64_t bs) {
     uint64_t sizes[] = { 512ULL * 1024 * 1024,
                          5ULL * 1024 * 1024 * 1024,
                          10ULL * 1024 * 1024 * 1024 };
     const char *labels[] = { "512MB", "5GB", "10GB" };
     int ret = 0;
     for (int i = 0; i < 3; i++) {
-        printf("--- %s %s ---\n", do_read ? "Read" : "Write", labels[i]);
+        printf("--- %s %s (bs=%luKB) ---\n", do_read ? "Read" : "Write", labels[i],
+               (unsigned long)(bs / 1024));
         if (do_read)
-            ret = bench_read(path, sizes[i], use_direct);
+            ret = bench_read(path, sizes[i], use_direct, bs);
         else
-            ret = bench_write(path, sizes[i], use_direct);
+            ret = bench_write(path, sizes[i], use_direct, bs);
         if (ret != 0 || g_stop) break;
         sleep(2);
     }
@@ -218,6 +223,7 @@ int main(int argc, char *argv[]) {
     int do_info = 0;
     int use_direct = -1;
     uint64_t bench_size = 64 * 1024 * 1024;
+    uint64_t block_size = BS_DEFAULT;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--path") == 0 && i + 1 < argc) path = argv[++i];
@@ -230,6 +236,13 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "--direct") == 0) use_direct = 1;
         else if (strcmp(argv[i], "--no-direct") == 0) use_direct = 0;
         else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) bench_size = parse_size(argv[++i]);
+        else if (strcmp(argv[i], "--blocksize") == 0 && i + 1 < argc) {
+            block_size = parse_size(argv[++i]);
+            if (block_size < BS_MIN || block_size > BS_MAX) {
+                fprintf(stderr, "Error: blocksize must be between 4K and 64M\n");
+                return 1;
+            }
+        }
         else { usage(); return 1; }
     }
 
@@ -243,10 +256,12 @@ int main(int argc, char *argv[]) {
 
     if (do_info) return cmd_info(path);
 
-    if (do_bench_all) return run_suite(path, 0, use_direct);
-    if (do_bench_read_all) return run_suite(path, 1, use_direct);
-    if (do_bench_read) return bench_read(path, bench_size, use_direct);
-    if (do_bench) return bench_write(path, bench_size, use_direct);
+    printf("Block size: %lu KB\n", (unsigned long)(block_size / 1024));
+
+    if (do_bench_all) return run_suite(path, 0, use_direct, block_size);
+    if (do_bench_read_all) return run_suite(path, 1, use_direct, block_size);
+    if (do_bench_read) return bench_read(path, bench_size, use_direct, block_size);
+    if (do_bench) return bench_write(path, bench_size, use_direct, block_size);
 
     fprintf(stderr, "Error: specify --bench, --bench-read, --bench-all, --bench-read-all, or --info\n");
     usage();

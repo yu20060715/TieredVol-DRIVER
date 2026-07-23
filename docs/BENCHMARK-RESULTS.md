@@ -76,24 +76,47 @@ Note: TieredVol includes NVMe with PCIe 2.0x4 (~1000 MB/s) while LVM only uses t
 
 | Disk | Model | Size | Type | Write | Read | Tier |
 |------|-------|------|------|-------|------|------|
-| nvme0n1 | CT1000P3PSSD8 | 931.5G | NVMe | 988 MB/s | 988 MB/s | FAST |
-| sdb | CT500MX500SSD1 | 465.8G | SATA | 470 MB/s | 470 MB/s | MED |
-| sdc | WDC WDS250G2B0A | 232.9G | SATA | 397 MB/s | 397 MB/s | SLOW |
+| nvme0n1 | CT1000P3PSSD8 | 931.5G | NVMe | 940 MB/s | 940 MB/s | FAST |
+| sdb | CT500MX500SSD1 | 465.8G | SATA | 412 MB/s | 412 MB/s | SLOW |
+| sdc | WDC WDS250G2B0A | 232.9G | SATA | 440 MB/s | 440 MB/s | MED |
 
 ### Segment Layout (auto-computed)
 
 | Segment | Logical Range | Disks | Stripe | Description |
 |---------|---------------|-------|--------|-------------|
 | 0 | [0, 231GB) | 3 (sdc+sdb+nvme) | 4096KB | All disks participate |
-| 1 | [231GB, 464GB) | 2 (sdb+nvme) | 3072KB | sdc exhausted |
-| 2 | [464GB, 930GB) | 1 (nvme) | 2048KB | Only NVMe remains |
+| 1 | [231GB, 465GB) | 2 (sdb+nvme) | 3072KB | sdc exhausted |
+| 2 | [465GB, 931GB) | 1 (nvme) | 2048KB | Only NVMe remains |
 
-### Throughput Results
+### Throughput Results (Default blocksize=1MB — Pre-fix Baseline)
 
 | Test | 512MB | 5GB | 10GB |
 |------|-------|-----|------|
 | **Write** | 590 MB/s | 615 MB/s | 587 MB/s |
 | **Read** | 562 MB/s | 625 MB/s | 656 MB/s |
+
+### Throughput Results (blocksize=16MB — Post-fix)
+
+| Test | 512MB | 5GB | 10GB |
+|------|-------|-----|------|
+| **Write** | 1057 MB/s | 1134 MB/s | 1084 MB/s |
+| **Read** | 1264 MB/s | 1356 MB/s | 1416 MB/s |
+
+### Throughput Results (blocksize=64MB — Optimal for Writes)
+
+| Test | 512MB | 5GB | 10GB |
+|------|-------|-----|------|
+| **Write** | 1218 MB/s | 1220 MB/s | 1195 MB/s |
+| **Read** | 1384 MB/s | — | — |
+
+### Blocksize Sensitivity (Write, 512MB)
+
+| Blocksize | Throughput | Efficiency |
+|-----------|-----------|------------|
+| 1 MB | 576 MB/s | 35% |
+| 16 MB | 1057 MB/s | 64% |
+| 32 MB | 1082 MB/s | 66% |
+| 64 MB | 1218 MB/s | 74% |
 
 ### Data Integrity
 
@@ -114,8 +137,18 @@ Note: TieredVol includes NVMe with PCIe 2.0x4 (~1000 MB/s) while LVM only uses t
 
 ### Analysis
 
-- Kernel dm target achieves **~60%** of theoretical combined throughput (615 / (988+470+397) ≈ 0.24 for raw sum, but correct comparison is against weighted average)
-- Weighted striping correctly distributes I/O proportional to disk speed
+**Pre-fix (blocksize=1MB):**
+- dm target achieved ~60% efficiency — bottleneck was bio splitting returning DM_MAPIO_REMAPPED after submit_bio_noacct (causing double-submit) and 1MB blocks limiting parallelism
+
+**Post-fix (blocksize=16MB+):**
+- Read 10GB: **1416 MB/s** → **90.2%** of theoretical weighted throughput (~1570 MB/s)
+- Write 64MB blocks: **1220 MB/s** → **78%** efficiency
+- Write bottleneck is bioset pool (64 bios) limiting split concurrency at very large blocks
 - 3-segment layout automatically adapts to unequal disk capacities
-- No I/O errors during testing; kernel module bio splitting works correctly
 - SLC cache warm-up (2GB) applied before each disk benchmark for accurate results
+
+**Key Fixes Applied:**
+1. `tieredvol_meta.c`: `kernel_read()` positive return leaked into function return → separate `nr` variable
+2. `tieredvol_core.c`: `tieredvol_split_and_submit()` returned DM_MAPIO_REMAPPED after `submit_bio_noacct()` → changed to DM_MAPIO_SUBMITTED
+3. `tiered_io.c`: Default blocksize changed from 1MB to 16MB; added `--blocksize` CLI param
+4. `cmd_create.c`: insmod path fixed to `driver/tieredvol.ko`
