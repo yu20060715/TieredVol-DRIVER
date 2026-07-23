@@ -114,14 +114,20 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 		return -ENOMEM;
 	}
 
-	ret = kernel_read(f, buf, file_size, &pos);
-	filp_close(f, NULL);
+	{
+		ssize_t nr;
 
-	if (ret < 0) {
-		vfree(buf);
-		return ret;
+		nr = kernel_read(f, buf, file_size, &pos);
+		filp_close(f, NULL);
+
+		if (nr < 0) {
+			vfree(buf);
+			return (int)nr;
+		}
+		buf[nr] = '\0';
 	}
-	buf[ret] = '\0';
+
+	ret = 0;
 
 	memset(meta, 0, sizeof(*meta));
 
