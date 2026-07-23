@@ -1,0 +1,2 @@
+obj-m := tieredvol.o
+tieredvol-objs := tieredvol_core.o tieredvol_map.o tieredvol_meta.o

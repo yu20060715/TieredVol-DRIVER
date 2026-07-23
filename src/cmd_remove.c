@@ -9,13 +9,31 @@
 #include <errno.h>
 #include "tiered_common.h"
 #include "tiered_types.h"
-#include "tiered_sched.h"
 #include "version.h"
 #include "setup_discover.h"
 #include "setup_bench.h"
 #include "exec_helper.h"
 #include "cmd_create.h"
 #include "cmd_remove.h"
+
+static int is_kernel_target(const char *name) {
+    char path[256];
+    snprintf(path, sizeof(path), "/dev/mapper/%s", name);
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+
+    char table_cmd[512];
+    snprintf(table_cmd, sizeof(table_cmd), "dmsetup table %s 2>/dev/null", name);
+    FILE *p = popen(table_cmd, "r");
+    if (!p) return 0;
+    char line[1024];
+    int found = 0;
+    while (fgets(line, sizeof(line), p)) {
+        if (strstr(line, "tieredvol")) { found = 1; break; }
+    }
+    pclose(p);
+    return found;
+}
 
 int cmd_remove(int argc, char *argv[]) {
     char *name = NULL;
@@ -35,15 +53,54 @@ int cmd_remove(int argc, char *argv[]) {
 
     printf("=== TieredVol: Removing '%s' ===\n", name);
 
-    /* Check for scheduler volume first */
+    if (is_kernel_target(name)) {
+        printf("  Detected kernel dm target (tieredvol)\n");
+
+        printf("  Removing dm target...\n");
+        {
+            char *dm_argv[] = {"sudo", "dmsetup", "remove", name, NULL};
+            int ret = tv_exec_sudo(dm_argv, 0);
+            if (ret != 0) {
+                fprintf(stderr, "  dmsetup remove failed (retrying)...\n");
+                sleep(1);
+                ret = tv_exec_sudo(dm_argv, 0);
+            }
+            if (ret == 0)
+                printf("  Removed /dev/mapper/%s\n", name);
+            else
+                fprintf(stderr, "  Failed to remove /dev/mapper/%s\n", name);
+        }
+
+        printf("  Removing metadata...\n");
+        {
+            char conf_path[256];
+            snprintf(conf_path, sizeof(conf_path), TV_CONFIG_DIR "%s.conf", name);
+            char *rm_argv[] = {"sudo", "rm", "-f", conf_path, NULL};
+            (void)tv_exec_sudo(rm_argv, 0);
+        }
+        {
+            char sched_path[256];
+            snprintf(sched_path, sizeof(sched_path), TV_CONFIG_DIR "%s.scheduler", name);
+            char *rm_argv[] = {"sudo", "rm", "-f", sched_path, NULL};
+            (void)tv_exec_sudo(rm_argv, 0);
+        }
+        {
+            char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL};
+            (void)tv_exec_sudo(rmdir_argv, 0);
+        }
+
+        printf("\n=== Remove Complete ===\n");
+        return TV_OK;
+    }
+
+    /* Check for old-style scheduler volume */
     char sched_path[256];
     snprintf(sched_path, sizeof(sched_path), TV_CONFIG_DIR "%s.scheduler", name);
     FILE *sf = fopen(sched_path, "r");
     if (sf) {
         fclose(sf);
-        printf("  Detected weighted I/O scheduler volume\n");
+        printf("  Detected legacy weighted I/O scheduler volume\n");
 
-        /* Read disk names from .scheduler metadata */
         char targets[TV_MAX_DISKS][64];
         int ntargets = 0;
 
@@ -51,15 +108,17 @@ int cmd_remove(int argc, char *argv[]) {
         memset(&sched_meta, 0, sizeof(sched_meta));
         if (tv_metadata_load(&sched_meta, sched_path) == 0) {
             for (uint32_t i = 0; i < sched_meta.disk_count && ntargets < TV_MAX_DISKS; i++) {
-                make_target(targets[ntargets], sizeof(targets[0]), sched_meta.disk_names[i]);
+                char short_disk[64];
+                const char *dn = sched_meta.disk_names[i];
+                const char *slash = strrchr(dn, '/');
+                strncpy(short_disk, slash ? slash + 1 : dn, 63);
+                short_disk[63] = 0;
+                make_target(targets[ntargets], sizeof(targets[0]), short_disk);
                 ntargets++;
             }
         }
 
-        /* Remove dm-linear targets (retry up to 3 times for kernel release) */
-        printf("Removing dm-linear targets...\n");
         if (ntargets == 0) {
-            fprintf(stderr, "  Warning: could not read metadata, attempting to find targets by name pattern\n");
             FILE *p = popen("sudo dmsetup ls 2>/dev/null", "r");
             if (p) {
                 char line[256];
@@ -79,44 +138,22 @@ int cmd_remove(int argc, char *argv[]) {
             int removed = 0;
             for (int retry = 0; retry < 3; retry++) {
                 char *const dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
-                if (tv_exec_sudo(dm_argv, 0) == 0) {
-                    removed = 1;
-                    break;
-                }
-                if (retry < 2) {
-                    fprintf(stderr, "  %s busy, retrying in 1s...\n", targets[i]);
-                    sleep(1);
-                }
+                if (tv_exec_sudo(dm_argv, 0) == 0) { removed = 1; break; }
+                if (retry < 2) { fprintf(stderr, "  %s busy, retrying...\n", targets[i]); sleep(1); }
             }
-            if (removed)
-                printf("  Removed %s\n", targets[i]);
-            else
-                fprintf(stderr, "  Failed to remove %s after retries\n", targets[i]);
+            if (removed) printf("  Removed %s\n", targets[i]);
+            else fprintf(stderr, "  Failed to remove %s\n", targets[i]);
         }
 
-        /* Remove .scheduler and .conf metadata */
-        printf("Removing scheduler metadata...\n");
-        {
-            char *rm_argv[] = {"sudo", "rm", "-f", sched_path, NULL};
-            (void)tv_exec_sudo(rm_argv, 0);
-        }
-        {
-            char conf_path_cleanup[256];
-            snprintf(conf_path_cleanup, sizeof(conf_path_cleanup), TV_CONFIG_DIR "%s.conf", name);
-            char *rm_argv[] = {"sudo", "rm", "-f", conf_path_cleanup, NULL};
-            (void)tv_exec_sudo(rm_argv, 0);
-        }
-        {
-            char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL};
-            (void)tv_exec_sudo(rmdir_argv, 0);
-        }
+        { char *rm_argv[] = {"sudo", "rm", "-f", sched_path, NULL}; (void)tv_exec_sudo(rm_argv, 0); }
+        { char conf_path_cleanup[256]; snprintf(conf_path_cleanup, sizeof(conf_path_cleanup), TV_CONFIG_DIR "%s.conf", name); char *rm_argv[] = {"sudo", "rm", "-f", conf_path_cleanup, NULL}; (void)tv_exec_sudo(rm_argv, 0); }
+        { char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL}; (void)tv_exec_sudo(rmdir_argv, 0); }
 
         printf("\n=== Remove Complete ===\n");
         return TV_OK;
     }
 
     /* LVM volume path */
-
     char targets[TV_MAX_DISKS][64];
     int ntargets = 0;
 
@@ -134,90 +171,31 @@ int cmd_remove(int argc, char *argv[]) {
             }
         }
         fclose(cf);
-
-        if (ntargets == 0) {
-            fprintf(stderr, "Error: no devices found in config %s\n", conf_path);
-            return TV_ERR;
-        }
+        if (ntargets == 0) { fprintf(stderr, "Error: no devices in config\n"); return TV_ERR; }
     } else {
-        fprintf(stderr, "Error: no config found for '%s' at %s\n", name, conf_path);
-        fprintf(stderr, "  Run: sudo tiered_setup --remove --name %s\n", name);
+        fprintf(stderr, "Error: no config for '%s'\n", name);
         return TV_ERR;
     }
 
     printf("Checking mounts...\n");
-    for (int i = 0; i < ntargets; i++) {
-        char target_dev[128];
-        snprintf(target_dev, sizeof(target_dev), "/dev/mapper/%s", targets[i]);
-        char mp[512];
-        find_mount_for_disk(target_dev, mp, sizeof(mp));
-        if (mp[0]) {
-            char *umount_argv[] = {"sudo", "umount", mp, NULL};
-            int umount_ret = tv_exec_sudo(umount_argv, 0);
-            if (umount_ret != 0) {
-                fprintf(stderr, "Warning: umount %s returned %d\n", mp, umount_ret);
-            } else {
-                printf("  Unmounted %s\n", mp);
-            }
-        }
-    }
-
     char lv_path[256];
     snprintf(lv_path, sizeof(lv_path), "/dev/mapper/tv_vg_%s-tv_lv_%s", name, name);
-    {
-        struct stat st;
-        if (stat(lv_path, &st) == 0) {
-            char mp[512];
-            find_mount_for_disk(lv_path, mp, sizeof(mp));
-            if (mp[0]) {
-                char *umount_argv[] = {"sudo", "umount", mp, NULL};
-                int umount_ret = tv_exec_sudo(umount_argv, 0);
-                if (umount_ret != 0) {
-                    fprintf(stderr, "Warning: umount %s returned %d\n", mp, umount_ret);
-                } else {
-                    printf("  Unmounted %s\n", mp);
-                }
-            }
-        }
-    }
+    { struct stat st; if (stat(lv_path, &st) == 0) { char mp[512]; find_mount_for_disk(lv_path, mp, sizeof(mp)); if (mp[0]) { char *ua[] = {"sudo", "umount", mp, NULL}; (void)tv_exec_sudo(ua, 0); printf("  Unmounted %s\n", mp); } } }
 
     printf("Removing LVM logical volume...\n");
-    {
-        char full_lv[256];
-        snprintf(full_lv, sizeof(full_lv), "tv_vg_%s/tv_lv_%s", name, name);
-        char *const lv_argv[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", full_lv, NULL};
-        (void)tv_exec_run("lvremove", lv_argv);
-    }
+    { char fl[256]; snprintf(fl, sizeof(fl), "tv_vg_%s/tv_lv_%s", name, name); char *la[] = {"lvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", fl, NULL}; (void)tv_exec_run("lvremove", la); }
 
     printf("Removing volume group...\n");
-    {
-        char vg_name[128];
-        snprintf(vg_name, sizeof(vg_name), "tv_vg_%s", name);
-        char *const vg_argv[] = {"vgremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", vg_name, NULL};
-        (void)tv_exec_run("vgremove", vg_argv);
-    }
+    { char vn[128]; snprintf(vn, sizeof(vn), "tv_vg_%s", name); char *va[] = {"vgremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-f", vn, NULL}; (void)tv_exec_run("vgremove", va); }
 
     printf("Removing dm-linear carve targets...\n");
     for (int i = 0; i < ntargets; i++) {
-        {
-            char devpath[128];
-            snprintf(devpath, sizeof(devpath), "/dev/mapper/%s", targets[i]);
-            char *const pv_argv[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", devpath, NULL};
-            (void)tv_exec_run("pvremove", pv_argv);
-        }
-        {
-            char *const dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
-            (void)tv_exec_sudo(dm_argv, 0);
-        }
+        { char dp[128]; snprintf(dp, sizeof(dp), "/dev/mapper/%s", targets[i]); char *pa[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", dp, NULL}; (void)tv_exec_run("pvremove", pa); }
+        { char *da[] = {"sudo", "dmsetup", "remove", targets[i], NULL}; (void)tv_exec_sudo(da, 0); }
     }
 
     printf("Removing config...\n");
-    {
-        char *rm_argv[] = {"sudo", "rm", "-f", conf_path, NULL};
-        (void)tv_exec_sudo(rm_argv, 0);
-        char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL};
-        (void)tv_exec_sudo(rmdir_argv, 0);
-    }
+    { char *ra[] = {"sudo", "rm", "-f", conf_path, NULL}; (void)tv_exec_sudo(ra, 0); char *rda[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL}; (void)tv_exec_sudo(rda, 0); }
 
     printf("\n=== Remove Complete ===\n");
     return TV_OK;
@@ -233,13 +211,36 @@ int cmd_status(void) {
             struct dirent *ent;
             int found = 0;
             while ((ent = readdir(d))) {
-                if (strncmp(ent->d_name, "tv_", 3) == 0) {
-                    printf("  /dev/mapper/%s\n", ent->d_name);
+                if (ent->d_name[0] == '.') continue;
+                if (strncmp(ent->d_name, "tv_", 3) == 0 ||
+                    strncmp(ent->d_name, "fastpool", 8) == 0) {
+                    printf("  /dev/mapper/%s", ent->d_name);
+                    if (is_kernel_target(ent->d_name))
+                        printf(" [tieredvol]");
+                    printf("\n");
                     found = 1;
                 }
             }
             closedir(d);
             if (!found) printf("  None\n");
+        }
+    }
+
+    printf("\nKernel Module:\n");
+    {
+        FILE *f = fopen("/proc/modules", "r");
+        if (f) {
+            char line[256];
+            int found = 0;
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, "tieredvol ", 10) == 0) {
+                    printf("  tieredvol loaded\n");
+                    found = 1;
+                    break;
+                }
+            }
+            fclose(f);
+            if (!found) printf("  tieredvol not loaded\n");
         }
     }
 

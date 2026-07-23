@@ -8,6 +8,8 @@
 #include "tiered_types.h"
 #include "warmup.h"
 
+volatile sig_atomic_t g_shutdown_requested = 0;
+
 #define BENCH_RAW_SIZE      (32 * 1024 * 1024)
 #define BENCH_RAW_RUNS      3
 #define BENCH_RAW_BLOCK     512

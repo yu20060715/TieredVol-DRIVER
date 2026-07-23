@@ -2,31 +2,25 @@ CC=gcc
 CFLAGS=-D_GNU_SOURCE -Wall -Wextra -Wpedantic -std=gnu11 -O2
 PREFIX=/usr/local
 
-SCHED_OBJS=src/tiered_sched.o src/tiered_partition.o src/tiered_mapper.o \
-           src/tiered_io_uring.o src/tiered_metadata.o \
-           src/tiered_benchmark.o src/warmup.o
+# Scheduler core: partition, mapper, metadata, benchmark, warmup
+# (io_uring removed — migration to kernel dm-target in progress)
+SCHED_OBJS=src/tiered_partition.o src/tiered_mapper.o \
+           src/tiered_metadata.o src/tiered_benchmark.o src/warmup.o
 
 SETUP_OBJS=src/exec_helper.o src/setup_discover.o src/setup_bench.o src/cmd_create.o src/cmd_remove.o
-IO_OBJS=src/io_bench.o
 
 all: tiered_setup tiered_io
 
 tiered_setup: src/main.c src/tiered_common.h src/tiered_types.h src/version.h src/setup_discover.h src/setup_bench.h src/exec_helper.h src/cmd_create.h src/cmd_remove.h $(SCHED_OBJS) $(SETUP_OBJS)
-	$(CC) $(CFLAGS) -o $@ src/main.c $(SCHED_OBJS) $(SETUP_OBJS) -lm -luring
+	$(CC) $(CFLAGS) -o $@ src/main.c $(SCHED_OBJS) $(SETUP_OBJS) -lm
 
-tiered_io: src/tiered_io.c src/tiered_sched.h src/io_bench.h $(SCHED_OBJS) $(IO_OBJS)
-	$(CC) $(CFLAGS) -o $@ src/tiered_io.c $(SCHED_OBJS) $(IO_OBJS) -luring
-
-src/tiered_sched.o: src/tiered_sched.c src/tiered_sched.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+tiered_io: src/tiered_io.c src/tiered_types.h src/tiered_metadata.o
+	$(CC) $(CFLAGS) -o $@ src/tiered_io.c src/tiered_metadata.o
 
 src/tiered_partition.o: src/tiered_partition.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/tiered_mapper.o: src/tiered_mapper.c src/tiered_types.h
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-src/tiered_io_uring.o: src/tiered_io_uring.c src/tiered_io_uring.h src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/tiered_metadata.o: src/tiered_metadata.c src/tiered_types.h
@@ -44,79 +38,67 @@ src/exec_helper.o: src/exec_helper.c src/exec_helper.h
 src/setup_discover.o: src/setup_discover.c src/setup_discover.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/setup_bench.o: src/setup_bench.c src/setup_bench.h src/setup_discover.h src/tiered_sched.h
+src/setup_bench.o: src/setup_bench.c src/setup_bench.h src/setup_discover.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/cmd_create.o: src/cmd_create.c src/cmd_create.h src/tiered_sched.h src/setup_discover.h src/setup_bench.h src/exec_helper.h src/tiered_types.h src/version.h src/tiered_common.h
+src/cmd_create.o: src/cmd_create.c src/cmd_create.h src/tiered_types.h src/setup_discover.h src/setup_bench.h src/exec_helper.h src/version.h src/tiered_common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/cmd_remove.o: src/cmd_remove.c src/cmd_remove.h src/cmd_create.h src/tiered_sched.h src/setup_discover.h src/exec_helper.h src/tiered_types.h src/tiered_common.h
+src/cmd_remove.o: src/cmd_remove.c src/cmd_remove.h src/cmd_create.h src/tiered_types.h src/setup_discover.h src/exec_helper.h src/tiered_common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/io_bench.o: src/io_bench.c src/io_bench.h src/tiered_sched.h
-	$(CC) $(CFLAGS) -c -o $@ $<
-
+# Unit tests (no io_uring dependency — pure logic)
 test_common: tests/test_common.c src/tiered_common.h
 	$(CC) $(CFLAGS) -o $@ $<
 
-test_mapper: tests/test_mapper.c src/tiered_sched.h $(SCHED_OBJS)
-	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS) -luring
+test_mapper: tests/test_mapper.c src/tiered_types.h $(SCHED_OBJS)
+	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
-test_partition: tests/test_partition.c src/tiered_sched.h $(SCHED_OBJS)
-	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS) -luring
+test_partition: tests/test_partition.c src/tiered_types.h $(SCHED_OBJS)
+	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
-test_metadata: tests/test_metadata.c src/tiered_sched.h $(SCHED_OBJS)
-	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS) -luring
+test_metadata: tests/test_metadata.c src/tiered_types.h $(SCHED_OBJS)
+	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
-test_sched: tests/test_sched.c src/tiered_sched.h $(SCHED_OBJS)
-	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS) -luring
+# test_sched and test_integrity disabled during kernel dm-target migration
+# They will be rewritten as kernel module integration tests in Phase 3
 
-test_integrity: tests/test_integrity.c src/tiered_sched.h $(SCHED_OBJS)
-	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS) -luring
-
-test: test_common test_mapper test_partition test_metadata test_sched test_integrity
+test: test_common test_mapper test_partition test_metadata
 	@echo "=== test_common ===" && ./test_common && \
 	echo "=== test_mapper ===" && ./test_mapper && \
 	echo "=== test_partition ===" && ./test_partition && \
-	echo "=== test_metadata ===" && ./test_metadata && \
-	echo "=== test_sched ===" && ./test_sched && \
-	echo "=== test_integrity ===" && ./test_integrity
+	echo "=== test_metadata ===" && ./test_metadata
 
-test-full:
-	$(MAKE) test
-	-sudo losetup -d /dev/loop0
-	sudo dd if=/dev/zero of=/tmp/tv_test.img bs=1M count=100
-	DEV=$$(sudo losetup -f --show /tmp/tv_test.img); \
-	sudo ./test_integrity $$DEV; \
-	sudo losetup -d $$DEV
-	sudo rm -f /tmp/tv_test.img
+test-full: test
+	@echo "Kernel module integration tests will be added in Phase 2"
+
+# Kernel module targets
+module:
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/driver modules
+
+module_install:
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/driver modules_install
+	depmod -a
+
+module_clean:
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/driver clean
 
 install: all
 	install -m 755 tiered_setup $(DESTDIR)$(PREFIX)/bin/tiered_setup
 	install -m 755 tiered_io $(DESTDIR)$(PREFIX)/bin/tiered_io
-	install -m 755 scripts/tieredvol-restore.sh $(DESTDIR)$(PREFIX)/bin/tieredvol-restore.sh
 	mkdir -p $(DESTDIR)/etc/tieredvol
 	mkdir -p $(DESTDIR)/etc/systemd/system
-	install -m 644 scripts/tieredvol-restore.service $(DESTDIR)/etc/systemd/system/tieredvol-restore.service
 	@echo ""
 	@echo "Installed:"
 	@echo "  $(DESTDIR)$(PREFIX)/bin/tiered_setup"
 	@echo "  $(DESTDIR)$(PREFIX)/bin/tiered_io"
-	@echo "  $(DESTDIR)$(PREFIX)/bin/tieredvol-restore.sh"
-	@echo "  $(DESTDIR)/etc/systemd/system/tieredvol-restore.service"
 	@echo ""
-	@echo "To enable auto-restore on boot:"
-	@echo "  sudo systemctl daemon-reload"
-	@echo "  sudo systemctl enable tieredvol-restore"
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_setup
-	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_io
-	rm -f $(DESTDIR)$(PREFIX)/bin/tieredvol-restore.sh
-	rm -f $(DESTDIR)/etc/systemd/system/tieredvol-restore.service
 
 clean:
-	rm -f tiered_setup tiered_io test_common test_mapper test_partition test_metadata test_sched test_integrity
+	rm -f tiered_setup tiered_io test_common test_mapper test_partition test_metadata
 	rm -f src/*.o
 
-.PHONY: all install uninstall clean test test-full
+.PHONY: all install uninstall clean test test-full module module_install module_clean

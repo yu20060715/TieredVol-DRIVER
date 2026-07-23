@@ -1,69 +1,83 @@
-# TieredVol Scheduler
+# TieredVol-DRIVER
 
-An experimental user-space weighted striping scheduler for heterogeneous storage devices.
+A kernel-level Device Mapper target for weighted striping across heterogeneous storage devices.
 
-TieredVol Scheduler evaluates whether weighted striping — assigning I/O chunk sizes proportional to each disk's sequential bandwidth — can improve aggregate throughput when storage devices with different speeds (e.g., NVMe + SATA SSD) are combined.
-
-**This is not a filesystem, RAID implementation, Linux block driver, or Device Mapper target.** It does not intercept standard POSIX `write()` calls. Applications interact with the scheduler through a dedicated user-space API (`tv_write()` / `tv_read()`), which performs weighted striping directly on raw storage devices.
+TieredVol-DRIVER replaces the userspace io_uring I/O path with a kernel dm-target module (`tieredvol.ko`), achieving near-zero overhead. Applications interact with tiered storage through standard `write()`/`read()` syscalls on `/dev/mapper/<name>`.
 
 ```
 Application
       │
       ▼
-  tv_write() / tv_read()    ← Application must use this API
+  write() / read()         ← Standard POSIX I/O
       │
       ▼
-  TieredVol Scheduler       ← weighted chunk allocation + offset mapping
+  VFS → bio                ← Kernel bio path
       │
       ▼
-  io_uring                  ← async I/O dispatch
+  tieredvol_submit()       ← Kernel module: weighted dispatch per-bio
       │
       ▼
-  Raw Device (/dev/mapper/*)
+  Disk A / Disk B / ...    ← Direct to underlying block devices
 ```
 
 ### What This Prototype Validates
 
-- Weighted chunk scheduling (proportional to disk speed)
-- Static weight generation via benchmark at initialization
+- Kernel-level weighted bio dispatch (proportional to disk speed)
+- Bio splitting for bios spanning multiple disk regions
 - Segment-based mapping for unequal disk capacities
-- Logical ↔ Physical offset mapping
-- Parallel asynchronous dispatch using io_uring
+- Logical ↔ Physical offset mapping (zero-copy)
+- Zero overhead from syscall/copy/CQE
 
-### Key Results (sustained 5 GB, fio + io_uring + iodepth=64)
+### Key Results (sustained 5 GB, fio + io_uring + iodepth=64, userspace v1)
 
 | Config | Write | vs LVM | Read | HW Sum Efficiency |
 |--------|-------|--------|------|-------------------|
 | 2-disk [2,1] | 1063 MB/s | 1.56× | 1101 MB/s | 76.3% |
 | 3-disk [2,1,1] | 1168 MB/s | 2.01× | 1253 MB/s | 62.7% |
 
-Hardware: i5-4570, NVMe CT1000P3PSSD8 (~967 MB/s), SATA CT500MX500SSD1 (~427 MB/s), SATA WDC WDS250G2B0A (~432 MB/s). Hardware sum: 2-disk=1394 MB/s, 3-disk=1864 MB/s. Weights generated via `round(speed/slowest)`: [2,1] / [2,1,1].
+Hardware: i5-4570, NVMe CT1000P3PSSD8 (~967 MB/s), SATA CT500MX500SSD1 (~427 MB/s), SATA WDC WDS250G2B0A (~432 MB/s). Hardware sum: 2-disk=1394 MB/s, 3-disk=1864 MB/s. Weights: [2,1] / [2,1,1].
+
+Target with kernel module: η > 90% (overhead < 10%).
 
 ### What Is Intentionally Excluded
 
 - Filesystem implementation
-- Kernel block driver / Device Mapper target
 - Data redundancy (no mirror, no parity)
 - Crash consistency / journaling
 - Metadata recovery
 - Dynamic online rebalancing
-- POSIX `write()` interception
 
-The current implementation assumes static striping weights generated during initialization. Changing weights invalidates all logical-to-physical mappings unless data migration is performed.
+---
 
-### Known Limitations
+## Quick Start
 
-- **Data size must be a multiple of stripe_size**: `tv_write()` and `tv_read()` require the data length to be an exact multiple of the stripe size. Partial stripes write only to disk 0, causing undefined read results.
-- **Equal-capacity disks**: when multiple disks have identical capacity, they are grouped into a single segment and share I/O proportionally to their weights.
-- **Sequential write only**: random writes require read-modify-write which is not yet implemented.
+```bash
+git clone https://github.com/yu20060715/TieredVol-DRIVER.git
+cd TieredVol-DRIVER
 
-> Under large sequential workloads with sufficient queue depth, aggregate throughput **may approach** the sum of individual sequential bandwidths. Actual results depend on CPU, PCIe bandwidth, filesystem overhead, and I/O pattern.
+# Build userspace tools
+make
+
+# Build kernel module
+make module
+sudo make module_install
+sudo depmod -a
+
+# Create a weighted volume
+sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc --scheduler
+
+# Benchmark
+sudo ./tiered_io --path /dev/mapper/fastpool --bench-all
+
+# Remove
+sudo ./tiered_setup --remove --name fastpool
+```
 
 ---
 
 ## Weighted Striping vs Fixed-Size Striping
 
-Traditional RAID0 and LVM striping use a fixed stripe size for all disks. When storage devices exhibit significantly different sequential bandwidth, fixed striping underutilizes faster devices because all disks must finish their chunk before the next stripe begins.
+Traditional RAID0 and LVM striping use a fixed stripe size for all disks. When storage devices exhibit significantly different sequential bandwidth, fixed striping underutilizes faster devices.
 
 ```
 Fixed striping (LVM):          Weighted striping (TieredVol):
@@ -77,125 +91,77 @@ NVMe idle waiting for SATA     All disks finish at approximately
 → throughput ≈ slowest disk    the same time → higher aggregate
 ```
 
-**Weight is generated at initialization** via a benchmark that measures sequential write speed with SLC cache warm-up (2GB pre-write). This ensures weights reflect sustained disk speed, not peak SLC cache speed.
+**Weight is generated at initialization** via a benchmark that measures sequential write speed with SLC cache warm-up (2GB pre-write).
 
-```bash
-# Create a weighted striping session
-sudo tiered_setup --create --name fastpool \
-    --disks nvme0n1:1000,sda:500,sdb:500 \
-    --scheduler
-
-# Compare peak vs sustained speed
-sudo tiered_io --name fastpool --bench --size 128MB           # Peak (SLC cache)
-sudo tiered_io --name fastpool --bench --size 128MB --warmup  # Sustained
-```
-
-For implementation details, see:
-- [PARTITION_SPLITTING.md](docs/PARTITION_SPLITTING.md) — Weight calculation, capacity segmentation, offset mapping
-- [WEIGHTED_IO_SCHEDULER.md](docs/WEIGHTED_IO_SCHEDULER.md) — Three-layer architecture, io_uring dispatch, stripe buffer
-- [BENCHMARK-RESULTS.md](docs/BENCHMARK-RESULTS.md) — Benchmark results on B85 platform
 ---
 
+## CLI Usage
 
-
-## Legacy: dm-linear + LVM Striping Tool
-
-The project also includes a CLI management tool for dm-linear carving + LVM striping (Phase 0/1). This tool predates the weighted striping scheduler and provides a way to combine disks using Linux's native dm-linear and LVM.
-
-```
-Disk A (NVMe, 2000 MB/s) ──dm-linear──┐
-Disk B (SATA, 1000 MB/s) ──dm-linear──┤── LVM VG ── striped LV ── filesystem ── mount
-                                       │
-                                       ▼
-                                  ~2820 MB/s (same-speed disks)
-```
-
-> **Note:** LVM striping uses the same stripe size for all disks. When combining disks of different speeds, throughput is limited by the slowest disk. This is why the weighted striping scheduler was developed.
-
-### Features
-
-- **Carve Custom Capacity** — Slice a specified amount from each disk via dm-linear
-- **Input Validation** — Name/FS/mount whitelists, double-confirmation safety prompts
-- **Error Rollback** — Any step failure automatically cleans up all created devices
-- **Auto Benchmark** — Background parallel speed testing of all disks
-- **RAM Cache Tuning** — Adjust `vm.dirty_ratio` to borrow RAM as write cache
-
-### Quick Start (LVM Striping)
+### Tiered Storage (Kernel dm target)
 
 ```bash
-git clone https://github.com/yu20060715/TieredVol.git
-cd TieredVol
-make
-sudo ./tiered_setup --list
+# Create weighted volume (kernel module)
+sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb --scheduler
+
+# Benchmark the volume
+sudo tiered_io --path /dev/mapper/fastpool --bench --size 5GB
+sudo tiered_io --path /dev/mapper/fastpool --bench-all
+
+# Show volume metadata
+sudo tiered_io --name fastpool --info
+
+# Remove volume
+sudo tiered_setup --remove --name fastpool
 ```
 
-### CLI Usage (LVM Striping)
+### LVM Striping (Legacy)
 
 ```bash
-# List all disks
-sudo tiered_setup --list
+# Create LVM striped volume
+sudo tiered_setup --create --name pool --disks sdb:300,sdc:200 --fs ext4 --mount /mnt/pool
 
-# Benchmark 3 disks
-sudo tiered_setup --bench --disks sdb,sdc,nvme0n1
+# Benchmark
+sudo tiered_io --path /dev/mapper/tv_vg_pool-tv_lv_pool --bench --size 5GB
 
-# Create striped volume (carve 300G from sdb, 200G from sdc)
-sudo tiered_setup --create --name fastpool --disks sdb:300,sdc:200 --fs ext4 --mount /mnt/fast
-
-# Create volume (full sda + 500G from sdb)
-sudo tiered_setup --create --name pool --disks sda,sdb:500 --fs xfs --mount /mnt/pool
-
-# View status
-sudo tiered_setup --status
-
-# Destroy volume
-sudo tiered_setup --destroy --name fastpool
+# Remove
+sudo tiered_setup --remove --name pool
 ```
 
-### Carve Syntax
+### Disk Management
 
-| Example | Description |
-|---------|-------------|
-| `sda:1000,sdb:500` | Carve 1000GB from sda, 500GB from sdb |
-| `sda,sdb` | Take full disk from both (minus 1GB each) |
-| `nvme0n1:2000,sda:1000,sdb:1000` | Three disks: 2T + 1T + 1T |
+```bash
+sudo tiered_setup --list         # List all disks
+sudo tiered_setup --bench --disks sdb,sdc,nvme0n1  # Benchmark disks
+sudo tiered_setup --status       # Show status
+```
 
 ---
 
 ## Requirements
 
-- Linux (kernel 5.1+ for io_uring support)
+- Linux kernel 6.x (tested on 6.14.0-27)
 - `lvm2` `dmsetup` `gcc` `make`
-- `liburing-dev` (for Weighted Striping Scheduler)
+- `linux-headers-$(uname -r)` (for kernel module build)
 - Root privileges (sudo)
 
 ### Install Dependencies
 
 ```bash
 # Debian / Ubuntu
-sudo apt install lvm2 gcc make liburing-dev
-
-# Fedora / RHEL
-sudo dnf install lvm2 gcc make liburing-devel
-
-# Arch
-sudo pacman -S lvm2 gcc make liburing
+sudo apt install lvm2 gcc make linux-headers-$(uname -r)
 ```
 
 ## Build
 
 ```bash
-make              # Build tiered_setup + tiered_io
-make test              # Unit tests (101 assertions, 5 suites, no sudo)
-sudo make test-full    # Unit + integration tests (112 assertions, 6 suites)
-make clean        # Remove all build artifacts
-sudo make install # Install to /usr/local/bin/
-```
-
-### Enable Auto-Restore on Boot (Optional)
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable tieredvol-restore
+make                    # Build tiered_setup + tiered_io
+make test               # Unit tests (81 assertions, 4 suites, no sudo)
+make module             # Build kernel module
+sudo make module_install # Install kernel module
+sudo depmod -a          # Update module dependencies
+sudo make test-full     # Unit + integration tests
+make clean              # Remove all build artifacts
+sudo make install       # Install to /usr/local/bin/
 ```
 
 ---
@@ -203,107 +169,118 @@ sudo systemctl enable tieredvol-restore
 ## Project Structure
 
 ```
-TieredVol/
+TieredVol-DRIVER/
 ├── README.md
-├── LICENSE                     # MIT License
-├── benchmarks/                 # Raw benchmark data and summary
-├── docs/
-│   ├── USAGE.md                # Detailed usage guide
-│   ├── PARTITION_SPLITTING.md  # Weighted striping algorithm
-│   ├── WEIGHTED_IO_SCHEDULER.md # I/O dispatch implementation
-│   └── BENCHMARK-RESULTS.md    # Benchmark results on B85 platform
-├── scripts/
-│   ├── install_deps.sh         # One-click dependency installer
-│   ├── test_scheduler.sh       # End-to-end scheduler test
-│   ├── tieredvol-restore.sh    # Boot-time volume restore
-│   └── tieredvol-restore.service
+├── MIGRATION.md                  # Migration plan from userspace to kernel
 ├── Makefile
+├── driver/                       # Kernel dm-target module
+│   ├── Kbuild                    # Kernel build configuration
+│   ├── tieredvol.h               # Shared kernel types
+│   ├── tieredvol_core.c          # dm_target ops, bio submission, completion
+│   ├── tieredvol_map.c           # Logical → Physical offset mapping
+│   └── tieredvol_meta.c          # Metadata loading from config file
 ├── src/
-│   ├── main.c                  # CLI entry point
-│   ├── tiered_common.h         # Shared validation
-│   ├── tiered_types.h          # Shared type definitions
-│   ├── version.h
-│   ├── tiered_sched.h          # Scheduler structs + API
-│   ├── tiered_sched.c          # Scheduler core
-│   ├── tiered_mapper.c         # Offset mapping
-│   ├── tiered_io_uring.c       # io_uring wrapper
-│   ├── tiered_io_uring.h       # io_uring interface
-│   ├── tiered_benchmark.c      # Initialization benchmark
-│   ├── tiered_partition.c      # Weight + segment calculation
-│   ├── tiered_metadata.c       # Metadata save/load
-│   ├── tiered_io.c             # CLI I/O tool (read/write/bench/path)
-│   ├── io_bench.c              # Benchmark helpers
-│   ├── io_bench.h              # Benchmark interface
-│   ├── warmup.c                # SLC cache warm-up
-│   ├── warmup.h                # Warm-up interface
-│   ├── exec_helper.c           # External command execution
-│   ├── exec_helper.h           # Exec helper interface
-│   ├── setup_discover.c        # Disk discovery
-│   ├── setup_discover.h        # Discovery interface
-│   ├── setup_bench.c           # Setup benchmark logic
-│   ├── setup_bench.h           # Setup bench interface
-│   ├── cmd_create.c            # Volume creation command
-│   ├── cmd_create.h            # Create command interface
-│   ├── cmd_remove.c            # Volume removal command
-│   └── cmd_remove.h            # Remove command interface
-└── tests/
-    ├── test_common.c
-    ├── test_common.h
-    ├── test_mapper.c
-    ├── test_partition.c
-    ├── test_metadata.c
-    ├── test_sched.c
-    └── test_integrity.c
+│   ├── main.c                    # CLI entry point (tiered_setup)
+│   ├── tiered_common.h           # Input validation (name, fs, mount)
+│   ├── tiered_types.h            # Shared type definitions
+│   ├── version.h                 # Version string
+│   ├── tiered_mapper.c           # Offset mapping (userspace)
+│   ├── tiered_partition.c        # Weight + segment calculation
+│   ├── tiered_metadata.c         # Metadata save/load (INI format)
+│   ├── tiered_benchmark.c        # Initialization benchmark
+│   ├── tiered_io.c               # I/O benchmark tool (pwrite/pread)
+│   ├── warmup.c / warmup.h       # SLC cache warm-up
+│   ├── exec_helper.c / .h        # External command execution
+│   ├── setup_discover.c / .h     # Disk discovery (lsblk, sysfs)
+│   ├── setup_bench.c / .h        # Setup benchmark logic
+│   ├── cmd_create.c / .h         # Volume creation (kernel dm + LVM)
+│   └── cmd_remove.c / .h         # Volume removal
+├── tests/
+│   ├── test_common.c             # Input validation tests
+│   ├── test_mapper.c             # Mapping tests
+│   ├── test_partition.c          # Weight/segment tests
+│   └── test_metadata.c           # Metadata round-trip tests
+├── benchmarks/                   # Raw benchmark data and summary
+├── docs/
+│   ├── USAGE.md                  # Detailed usage guide
+│   ├── PARTITION_SPLITTING.md    # Weighted striping algorithm
+│   ├── WEIGHTED_IO_SCHEDULER.md  # I/O dispatch implementation
+│   └── BENCHMARK-RESULTS.md      # Benchmark results on B85 platform
+└── scripts/
+    ├── install_deps.sh           # Dependency installer
+    ├── test_scheduler.sh         # End-to-end test
+    ├── tieredvol-restore.sh      # Boot-time volume restore
+    └── tieredvol-restore.service # Systemd service
 ```
 
 ### Code Architecture
 
 | Module | Responsibility |
 |--------|---------------|
+| **Kernel module** | |
+| `driver/tieredvol_core.c` | dm_target ctr/dtr/map, bio splitting, weighted dispatch |
+| `driver/tieredvol_map.c` | Logical → Physical offset mapping (kernel) |
+| `driver/tieredvol_meta.c` | Metadata loading from config file (kernel) |
+| **Userspace tools** | |
 | `main.c` | CLI entry point: argument dispatch, dependency checks |
-| `cmd_create.c` | Volume creation: dm-linear/LVM/create-scheduler, capacity carving, rollback |
-| `cmd_remove.c` | Volume removal: teardown dm-linear/LVM/scheduler targets |
-| `tiered_sched.c` | Scheduler core: init, write (buffer + flush), read (mapping + io_uring), destroy |
-| `tiered_mapper.c` | Logical ↔ Physical offset mapping (prefix sum + linear scan) |
-| `tiered_io_uring.c` | io_uring wrapper (SQE/CQE, submit, wait) |
-| `tiered_benchmark.c` | Initialization benchmark (O_DIRECT, 3 runs average) — **not a storage benchmark** |
-| `tiered_partition.c` | Weight calculation, capacity segmentation, segment building |
-| `tiered_metadata.c` | Metadata save/load (static weights only) |
-| `tiered_io.c` | CLI I/O tool: info/read/write/bench/bench-all/path |
-| `io_bench.c` | Benchmark helpers: disk open/close/discard, warmup, single/all bench runs |
-| `warmup.c` | SLC cache warm-up: sequential write pass before benchmark |
-| `exec_helper.c` | External command execution (popen-based) for dmsetup/lvm |
+| `cmd_create.c` | Volume creation: kernel dm target + legacy LVM |
+| `cmd_remove.c` | Volume removal: dmsetup remove + legacy teardown |
+| `tiered_io.c` | I/O benchmark: pwrite/pread on block devices |
+| `tiered_mapper.c` | Logical ↔ Physical offset mapping (userspace) |
+| `tiered_partition.c` | Weight calculation, capacity segmentation |
+| `tiered_metadata.c` | Metadata save/load (INI format) |
+| `tiered_benchmark.c` | Initialization benchmark |
+| `warmup.c` | SLC cache warm-up |
+| `exec_helper.c` | External command execution for dmsetup/lvm |
 | `setup_discover.c` | Disk discovery: list, filter, detect partitions |
-| `setup_bench.c` | Setup benchmark: parallel speed testing of selected disks |
+| `setup_bench.c` | Setup benchmark: parallel speed testing |
 
 ---
 
-## Fair Comparison: Scheduler vs LVM
+## Kernel Module
 
-To compare weighted striping against LVM striping, use the `--path` option:
+The `tieredvol` dm target processes bios in-kernel:
 
-```bash
-# Scheduler mode (weighted striping)
-sudo ./tiered_io --name fastpool --bench --size 128MB
+1. **bio arrives** at the dm target (from VFS `write()`/`read()`)
+2. **Map**: `tv_map_logical()` translates logical byte offset → (disk, physical_offset, remaining)
+3. **Split**: If bio crosses a stripe boundary, `bio_split()` fragments it
+4. **Redirect**: `bio_set_dev()` + sector update → submit to underlying device
 
-# Direct path mode (LVM/filesystem)
-sudo ./tiered_io --path /mnt/test --bench --size 128MB
+Key constants:
+- `TV_CHUNK_SIZE` = 1 MB (weight unit)
+- `TV_MAX_DISKS` = 16
+- `TV_MAX_SEGS` = 16
+
+### Metadata Format
+
+Config files are stored in `/etc/tieredvol/<name>.conf` (INI format):
+
+```ini
+[weighted_striping]
+version=1
+chunk_size=1048576
+segment_count=1
+disk_count=2
+disk0_name=/dev/nvme0n1
+disk1_name=/dev/sdb
+seg0_begin=0
+seg0_end=931520000000
+seg0_count=2
+seg0_disks=0,1
+seg0_weight=2,1
+seg0_stripe=3145728
 ```
-
-Both modes use the same 1MB block size (TV_CHUNK_SIZE) and O_DIRECT for fair comparison.
 
 ---
 
 ## Limitations
 
-- **I/O path integration** — `tv_write()` / `tv_read()` are implemented and called by `tiered_io` CLI tool. End-to-end verified via `tiered_io --bench`, `tiered_io --write`, and `tiered_io --read`. FUSE/libtiered integration not yet available.
-- **Static weights only** — Weights are computed at initialization and fixed. Changing weights invalidates all mappings.
-- **No fault tolerance** — If any disk fails, the entire stripe set is lost. No degraded mode, no rebuild, no mirror/parity.
-- **No POSIX write() interception** — Applications must use `tv_write()` / `tv_read()`. Standard `write()` goes to the filesystem, not the scheduler.
-- **No partial stripe tracking** — Close/fsync behavior for partial stripes is not fully implemented.
-- **Benchmark is for initialization only** — The built-in benchmark measures initial sequential write speed with SLC cache warm-up (2GB pre-write). It is not a comprehensive storage benchmark (no latency, no queue depth sweep).
-- **Not persistent across reboot** — dm-linear targets and LVM volumes require the systemd service for auto-restore.
-- **System disk cannot be used** — dm-linear returns EBUSY on mounted root partition.
+- **Static weights only** — Weights are computed at initialization and fixed.
+- **No fault tolerance** — If any disk fails, the entire stripe set is lost.
+- **No POSIX write() interception** — Applications use standard `write()`/`read()` on the dm target device.
+- **No crash consistency** — No journaling or metadata recovery.
+- **System disk cannot be used** — dm returns EBUSY on mounted root partition.
+- **Module instability risk** — A kernel module bug can oops the system.
 
 ## License
 
