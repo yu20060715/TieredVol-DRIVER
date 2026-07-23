@@ -24,6 +24,9 @@ tiered_ui
 .vscode/
 .idea/
 
+# Config
+.opencode/
+
 # OS
 .DS_Store
 Thumbs.db

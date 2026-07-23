@@ -1,53 +1,0 @@
---- Run 1 ---
-[sudo] password for yu: Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 2 CQEs slow, retrying (30s)
-tv_flush: 2 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.362 seconds
-Throughput: 1415.0 MB/s
-Stripes flushed: 171
---- Run 2 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 1 CQEs slow, retrying (30s)
-tv_flush: 1 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.349 seconds
-Throughput: 1469.0 MB/s
-Stripes flushed: 171
---- Run 3 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 2 CQEs slow, retrying (30s)
-tv_flush: 2 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.347 seconds
-Throughput: 1475.2 MB/s
-Stripes flushed: 171
---- Run 4 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-Benchmark: 536870912 bytes (512.0 MB) in 0.344 seconds
-Throughput: 1488.2 MB/s
-Stripes flushed: 171
---- Run 5 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 2 CQEs slow, retrying (30s)
-tv_flush: 2 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.350 seconds
-Throughput: 1462.8 MB/s
-Stripes flushed: 171

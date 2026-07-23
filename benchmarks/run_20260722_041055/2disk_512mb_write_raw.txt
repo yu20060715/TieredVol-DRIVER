@@ -1,60 +1,0 @@
---- T3 Run 1 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 11 CQEs slow, retrying (30s)
-tv_flush: 11 CQEs stuck, data may be lost
-Warning: final tv_flush failed (some CQEs may be stuck)
-Benchmark: 536870912 bytes (512.0 MB) in 0.427 seconds
-Throughput: 1198.0 MB/s
-Stripes flushed: 342
---- T3 Run 2 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 11 CQEs slow, retrying (30s)
-tv_flush: 11 CQEs stuck, data may be lost
-Warning: final tv_flush failed (some CQEs may be stuck)
-Benchmark: 536870912 bytes (512.0 MB) in 0.418 seconds
-Throughput: 1224.6 MB/s
-Stripes flushed: 342
---- T3 Run 3 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 1 CQEs slow, retrying (30s)
-tv_flush: 1 CQEs stuck, data may be lost
-Warning: final tv_flush failed (some CQEs may be stuck)
-Benchmark: 536870912 bytes (512.0 MB) in 0.416 seconds
-Throughput: 1230.4 MB/s
-Stripes flushed: 342
---- T3 Run 4 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 2 CQEs slow, retrying (30s)
-tv_flush: 2 CQEs stuck, data may be lost
-Warning: final tv_flush failed (some CQEs may be stuck)
-Benchmark: 536870912 bytes (512.0 MB) in 0.440 seconds
-Throughput: 1163.9 MB/s
-Stripes flushed: 342
---- T3 Run 5 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-tv_flush: 9 CQEs slow, retrying (30s)
-tv_flush: 9 CQEs stuck, data may be lost
-Warning: final tv_flush failed (some CQEs may be stuck)
-Benchmark: 536870912 bytes (512.0 MB) in 0.471 seconds
-Throughput: 1087.2 MB/s
-Stripes flushed: 342

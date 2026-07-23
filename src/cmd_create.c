@@ -257,7 +257,6 @@ int cmd_create(int argc, char *argv[]) {
                ratio);
     }
     printf("  Total theoretical speed: %.0f MB/s\n", total_speed);
-    printf("  Estimated actual: ~%.0f MB/s\n", total_speed * TV_ESTIMATED_EFFICIENCY);
     printf("\n");
 
     printf("  ================================================================\n");

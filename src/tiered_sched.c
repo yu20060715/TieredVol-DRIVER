@@ -38,6 +38,21 @@ TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta) {
         sched->sbuf[i].in_flight = 0;
         sched->sbuf[i].cqes_pending = 0;
     }
+
+    {
+        struct iovec iovecs[TV_BUF_COUNT];
+        for (int i = 0; i < TV_BUF_COUNT; i++) {
+            iovecs[i].iov_base = sched->sbuf[i].data;
+            iovecs[i].iov_len  = sched->stripe_size;
+        }
+        if (tv_uring_register_buffers(&sched->ring, iovecs, TV_BUF_COUNT) < 0) {
+            fprintf(stderr, "tv_sched_init: register_buffers failed, falling back to unregistered\n");
+            sched->buffers_registered = 0;
+        } else {
+            sched->buffers_registered = 1;
+        }
+    }
+
     sched->sbuf_head = 0;
     sched->sbuf_used = 0;
     sched->sbuf_logical = 0;
@@ -207,11 +222,20 @@ static int flush_submit_io(TV_SCHED *sched, uint64_t logical, uint8_t *data, uin
         uint64_t disk_off = stripe_no * disk_bytes;
         int fd = sched->disks[seg->disk_index[i]].fd;
 
-        if (tv_uring_write(&sched->ring, fd, data + buf_pos,
-                           (size_t)write_bytes, (off_t)disk_off, ud) < 0) {
-            fprintf(stderr, "tv_flush: SQE allocation failed for disk %u\n",
-                    seg->disk_index[i]);
-            return TV_ERR;
+        if (sched->buffers_registered) {
+            if (tv_uring_write_fixed(&sched->ring, fd, data + buf_pos,
+                               (size_t)write_bytes, (off_t)disk_off, buf_idx, ud) < 0) {
+                fprintf(stderr, "tv_flush: SQE allocation failed for disk %u\n",
+                        seg->disk_index[i]);
+                return TV_ERR;
+            }
+        } else {
+            if (tv_uring_write(&sched->ring, fd, data + buf_pos,
+                               (size_t)write_bytes, (off_t)disk_off, ud) < 0) {
+                fprintf(stderr, "tv_flush: SQE allocation failed for disk %u\n",
+                        seg->disk_index[i]);
+                return TV_ERR;
+            }
         }
         buf_pos += write_bytes;
         remaining -= write_bytes;
@@ -399,6 +423,8 @@ void tv_sched_destroy(TV_SCHED *sched) {
         if (sched->disks[i].fd >= 0)
             fsync(sched->disks[i].fd);
     }
+    if (sched->buffers_registered)
+        tv_uring_unregister_buffers(&sched->ring);
     for (int i = 0; i < TV_BUF_COUNT; i++) {
         free(sched->sbuf[i].data);
     }

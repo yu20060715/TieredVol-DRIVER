@@ -15,6 +15,7 @@ typedef struct {
     uint64_t      sbuf_used;
     uint64_t      sbuf_logical;
     int           inflight;
+    int           buffers_registered;
 } TV_SCHED;
 
 TV_SCHED *tv_sched_init(TV_DISK *disks, int ndisks, TV_METADATA *meta);

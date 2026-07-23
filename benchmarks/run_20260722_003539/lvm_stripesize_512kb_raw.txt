@@ -1,6 +1,0 @@
---- Run 1 (stripe=512KB) ---
-950715 | sudo -S ./tiered_io --path 950715|sudo-Slvs--noheadings-olv_pathtv_lvm_vg/lvm_stripe_512 --bench --size 5GB --raw
---- Run 2 (stripe=512KB) ---
-950715 | sudo -S ./tiered_io --path 950715|sudo-Slvs--noheadings-olv_pathtv_lvm_vg/lvm_stripe_512 --bench --size 5GB --raw
---- Run 3 (stripe=512KB) ---
-950715 | sudo -S ./tiered_io --path 950715|sudo-Slvs--noheadings-olv_pathtv_lvm_vg/lvm_stripe_512 --bench --size 5GB --raw

@@ -1,1 +1,0 @@
-950715 | sudo -S ./tiered_setup --create --name tv_test_3d --disks nvme0n1:100,sdb:100,sdc:100 --scheduler

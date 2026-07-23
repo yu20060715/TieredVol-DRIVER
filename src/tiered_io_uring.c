@@ -15,6 +15,24 @@ int tv_uring_init(struct io_uring *ring, int queue_depth) {
     return 0;
 }
 
+int tv_uring_register_buffers(struct io_uring *ring, struct iovec *iovecs, int count) {
+    int ret = io_uring_register_buffers(ring, iovecs, count);
+    if (ret < 0) {
+        fprintf(stderr, "io_uring_register_buffers failed: %s\n", strerror(-ret));
+        return TV_ERR;
+    }
+    return 0;
+}
+
+int tv_uring_unregister_buffers(struct io_uring *ring) {
+    int ret = io_uring_unregister_buffers(ring);
+    if (ret < 0) {
+        fprintf(stderr, "io_uring_unregister_buffers failed: %s\n", strerror(-ret));
+        return TV_ERR;
+    }
+    return 0;
+}
+
 int tv_uring_write(struct io_uring *ring, int fd, const void *buf, size_t len, off_t offset, void *user_data) {
     if (len > UINT_MAX) {
         fprintf(stderr, "tv_uring_write: len %zu exceeds UINT_MAX\n", len);
@@ -24,6 +42,19 @@ int tv_uring_write(struct io_uring *ring, int fd, const void *buf, size_t len, o
     if (!sqe) return TV_ERR;
 
     io_uring_prep_write(sqe, fd, buf, (unsigned)len, offset);
+    io_uring_sqe_set_data(sqe, user_data);
+    return 0;
+}
+
+int tv_uring_write_fixed(struct io_uring *ring, int fd, const void *buf, size_t len, off_t offset, int buf_index, void *user_data) {
+    if (len > UINT_MAX) {
+        fprintf(stderr, "tv_uring_write_fixed: len %zu exceeds UINT_MAX\n", len);
+        return TV_ERR;
+    }
+    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    if (!sqe) return TV_ERR;
+
+    io_uring_prep_write_fixed(sqe, fd, buf, (unsigned)len, offset, buf_index);
     io_uring_sqe_set_data(sqe, user_data);
     return 0;
 }

@@ -415,7 +415,6 @@ int cmd_bench(int argc, char *argv[]) {
         printf("%-28s %-12s %-8s %-8s %-8s\n", id, info[i].tran, size_str, w, r);
     }
     printf("\nTotal theoretical write speed: %.0f MB/s\n", total_w);
-    printf("Estimated actual: ~%.0f MB/s (92-97%% efficiency)\n", total_w * TV_ESTIMATED_EFFICIENCY);
 
     return TV_OK;
 }

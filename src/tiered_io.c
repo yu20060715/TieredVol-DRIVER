@@ -122,7 +122,7 @@ static int cmd_read(TV_SCHED *sched, uint64_t offset, uint64_t len) {
 
 static int cmd_write(TV_SCHED *sched, uint64_t offset, uint64_t len) {
     uint8_t *buf = NULL;
-    if (posix_memalign((void **)&buf, TV_DIRECT_ALIGNMENT, (size_t)len) != 0) {
+    if (posix_memalign((void **)&buf, TV_ALLOC_ALIGNMENT, (size_t)len) != 0) {
         fprintf(stderr, "Error: cannot allocate %lu bytes\n", (unsigned long)len);
         return TV_ERR;
     }
@@ -270,14 +270,14 @@ int main(int argc, char *argv[]) {
 
     int ret = 0;
     if (do_bench_read_all) {
-        ret = cmd_bench_read_all(&meta);
+        ret = cmd_bench_read_all(&meta, do_raw);
     } else if (do_bench_all) {
         /* bench-all manages its own scheduler lifecycle */
-        ret = cmd_bench_all(&meta);
+        ret = cmd_bench_all(&meta, do_raw);
     } else {
         /* Open disks */
         TV_DISK disks[TV_MAX_DISKS];
-        if (open_disks(&meta, disks, use_direct) < 0) {
+        if (open_disks(&meta, disks, use_direct, do_raw) < 0) {
             return 1;
         }
 

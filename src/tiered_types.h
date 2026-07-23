@@ -11,18 +11,16 @@ extern volatile sig_atomic_t g_shutdown_requested;
 #define TV_MAX_SEGS     16
 #define TV_MAX_WEIGHT   16
 #define TV_CHUNK_SIZE (1 * 1024 * 1024)
-#define TV_BUF_COUNT    16
+#define TV_BUF_COUNT    64
 #define TV_CQE_TIMEOUT_SEC     30
 #define TV_OK       0
 #define TV_ERR      (-1)
 
 #define TV_CQE_RETRY_SEC       30
 
-#define TV_ESTIMATED_EFFICIENCY 0.94
 #define DEFAULT_STRIPE_SIZE_KB  512
-#define TV_URING_QUEUE_DEPTH    256
+#define TV_URING_QUEUE_DEPTH    1024
 #define TV_ALLOC_ALIGNMENT      4096
-#define TV_DIRECT_ALIGNMENT     4096
 #define TV_CONFIG_DIR           "/etc/tieredvol/"
 #define TV_PROGRESS_INTERVAL    (64 * 1024 * 1024)
 

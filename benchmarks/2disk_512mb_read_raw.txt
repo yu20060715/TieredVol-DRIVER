@@ -1,58 +1,0 @@
---- Run 1 ---
-[sudo] password for yu: Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  Writing 512 MB to prepare for read...
-tv_flush: 11 CQEs slow, retrying (30s)
-tv_flush: 11 CQEs stuck, recovering (data already on disk)
-  Reading 512 MB...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-Read benchmark: 536870912 bytes (512.0 MB) in 0.459 seconds
-Read throughput: 1114.5 MB/s
---- Run 2 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  Writing 512 MB to prepare for read...
-tv_flush: 8 CQEs slow, retrying (30s)
-tv_flush: 8 CQEs stuck, recovering (data already on disk)
-  Reading 512 MB...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-Read benchmark: 536870912 bytes (512.0 MB) in 0.454 seconds
-Read throughput: 1127.6 MB/s
---- Run 3 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  Writing 512 MB to prepare for read...
-  Reading 512 MB...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-Read benchmark: 536870912 bytes (512.0 MB) in 0.456 seconds
-Read throughput: 1121.8 MB/s
---- Run 4 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  Writing 512 MB to prepare for read...
-tv_flush: 8 CQEs slow, retrying (30s)
-tv_flush: 8 CQEs stuck, recovering (data already on disk)
-  Reading 512 MB...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-Read benchmark: 536870912 bytes (512.0 MB) in 0.463 seconds
-Read throughput: 1105.4 MB/s
---- Run 5 ---
-Loading metadata from /etc/tieredvol/tv_test_2d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Initializing scheduler...
-  Writing 512 MB to prepare for read...
-tv_flush: 3 CQEs slow, retrying (30s)
-tv_flush: 3 CQEs stuck, recovering (data already on disk)
-  Reading 512 MB...
-  progress: 192 / 512 MB  progress: 384 / 512 MB  progress: 512 / 512 MB
-Read benchmark: 536870912 bytes (512.0 MB) in 0.481 seconds
-Read throughput: 1063.6 MB/s

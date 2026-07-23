@@ -1,58 +1,0 @@
---- Run 1 ---
-[sudo] password for yu: Loading metadata from /etc/tieredvol/tv_test_3d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
-Initializing scheduler...
-  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
-tv_flush: 4 CQEs slow, retrying (30s)
-tv_flush: 4 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.453 seconds
-Throughput: 1129.9 MB/s
-Stripes flushed: 128
---- Run 2 ---
-Loading metadata from /etc/tieredvol/tv_test_3d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
-Initializing scheduler...
-  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
-Benchmark: 536870912 bytes (512.0 MB) in 0.392 seconds
-Throughput: 1306.5 MB/s
-Stripes flushed: 128
---- Run 3 ---
-Loading metadata from /etc/tieredvol/tv_test_3d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
-Initializing scheduler...
-  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
-tv_flush: 4 CQEs slow, retrying (30s)
-tv_flush: 4 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.417 seconds
-Throughput: 1228.3 MB/s
-Stripes flushed: 128
---- Run 4 ---
-Loading metadata from /etc/tieredvol/tv_test_3d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
-Initializing scheduler...
-  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
-tv_flush: 3 CQEs slow, retrying (30s)
-tv_flush: 3 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.404 seconds
-Throughput: 1267.4 MB/s
-Stripes flushed: 128
---- Run 5 ---
-Loading metadata from /etc/tieredvol/tv_test_3d.scheduler...
-Opened /dev/mapper/tv_nvme0n1_carve (fd=3) [O_DIRECT]
-Opened /dev/mapper/tv_sdb_carve (fd=4) [O_DIRECT]
-Opened /dev/mapper/tv_sdc_carve (fd=5) [O_DIRECT]
-Initializing scheduler...
-  progress: 64 / 512 MB  progress: 128 / 512 MB  progress: 192 / 512 MB  progress: 256 / 512 MB  progress: 320 / 512 MB  progress: 384 / 512 MB  progress: 448 / 512 MB  progress: 512 / 512 MB
-tv_flush: 3 CQEs slow, retrying (30s)
-tv_flush: 3 CQEs stuck, recovering (data already on disk)
-Benchmark: 536870912 bytes (512.0 MB) in 0.406 seconds
-Throughput: 1261.8 MB/s
-Stripes flushed: 128

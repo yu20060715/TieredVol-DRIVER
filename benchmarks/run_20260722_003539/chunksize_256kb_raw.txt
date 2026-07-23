@@ -1,6 +1,0 @@
---- Run 1 (chunk=256KB) ---
-950715 | sudo -S ./tiered_io --name tv_chunk_256 --bench --size 5GB
---- Run 2 (chunk=256KB) ---
-950715 | sudo -S ./tiered_io --name tv_chunk_256 --bench --size 5GB
---- Run 3 (chunk=256KB) ---
-950715 | sudo -S ./tiered_io --name tv_chunk_256 --bench --size 5GB

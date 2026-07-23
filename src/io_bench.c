@@ -11,7 +11,7 @@
 #include "io_bench.h"
 #include "warmup.h"
 
-int open_disks(TV_METADATA *meta, TV_DISK *disks, int use_direct) {
+int open_disks(TV_METADATA *meta, TV_DISK *disks, int use_direct, int use_raw) {
     int flags = O_RDWR | (use_direct ? O_DIRECT : 0);
     for (uint32_t i = 0; i < meta->disk_count; i++) {
         memset(&disks[i], 0, sizeof(TV_DISK));
@@ -19,8 +19,13 @@ int open_disks(TV_METADATA *meta, TV_DISK *disks, int use_direct) {
         strncpy(disks[i].name, meta->disk_names[i], 63);
 
         char devpath[128];
-        snprintf(devpath, sizeof(devpath), "/dev/mapper/tv_%s_carve",
-                 meta->disk_names[i]);
+        if (use_raw) {
+            snprintf(devpath, sizeof(devpath), "/dev/%s",
+                     meta->disk_names[i]);
+        } else {
+            snprintf(devpath, sizeof(devpath), "/dev/mapper/tv_%s_carve",
+                     meta->disk_names[i]);
+        }
         disks[i].fd = open(devpath, flags);
         if (disks[i].fd < 0) {
             fprintf(stderr, "Error: cannot open %s: %s\n",
@@ -178,7 +183,7 @@ int cmd_bench_one(TV_SCHED *sched, uint64_t size, int warmup, TV_METADATA *meta)
     return 0;
 }
 
-int cmd_bench_all(TV_METADATA *meta) {
+int cmd_bench_all(TV_METADATA *meta, int use_raw) {
     uint64_t sizes[] = {
         512ULL  * 1024 * 1024,
         5120ULL * 1024 * 1024,
@@ -188,7 +193,7 @@ int cmd_bench_all(TV_METADATA *meta) {
     int ret = 0;
 
     TV_DISK disks[TV_MAX_DISKS];
-    if (open_disks(meta, disks, 1) < 0) return TV_ERR;
+    if (open_disks(meta, disks, 1, use_raw) < 0) return TV_ERR;
 
     for (int phase = 0; phase < 2; phase++) {
         for (int i = 0; i < nsizes; i++) {
@@ -342,7 +347,7 @@ int cmd_bench_read_one(TV_SCHED *sched, uint64_t size, TV_METADATA *meta) {
     return 0;
 }
 
-int cmd_bench_read_all(TV_METADATA *meta) {
+int cmd_bench_read_all(TV_METADATA *meta, int use_raw) {
     uint64_t sizes[] = {
         512ULL  * 1024 * 1024,
         5120ULL * 1024 * 1024,
@@ -352,7 +357,7 @@ int cmd_bench_read_all(TV_METADATA *meta) {
     int ret = 0;
 
     TV_DISK disks[TV_MAX_DISKS];
-    if (open_disks(meta, disks, 1) < 0) return TV_ERR;
+    if (open_disks(meta, disks, 1, use_raw) < 0) return TV_ERR;
 
     for (int i = 0; i < nsizes; i++) {
         if (g_shutdown_requested) { ret = -1; break; }
