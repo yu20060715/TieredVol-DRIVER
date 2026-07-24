@@ -2,15 +2,14 @@
 #define TIEREDVOL_H
 
 #include <linux/types.h>
-#include <linux/percpu.h>
 #include <linux/device-mapper.h>
-#include <linux/bio.h>
-#include <linux/slab.h>
 
 #define TV_MAX_DISKS    16
 #define TV_MAX_SEGS     16
 #define TV_MAX_WEIGHT   16
 #define TV_CHUNK_SIZE   (1UL << 20)
+#define TV_SECTOR_SHIFT 9
+#define TV_SECTOR_SIZE  (1 << TV_SECTOR_SHIFT)
 
 struct tieredvol_segment {
 	u64 logical_begin;
@@ -34,7 +33,6 @@ struct tieredvol_map {
 	int disk;
 	u64 offset;
 	u64 length;
-	u64 remaining;
 };
 
 struct tieredvol_ctx {

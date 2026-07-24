@@ -116,7 +116,14 @@ static int bench_write_async(const char *path, uint64_t size, int use_direct, ui
     }
 
     struct io_uring ring;
-    io_uring_queue_init(queue_depth, &ring, 0);
+    int ret = io_uring_queue_init(queue_depth, &ring, 0);
+    if (ret < 0) {
+        fprintf(stderr, "Error: io_uring_queue_init: %s\n", strerror(-ret));
+        for (uint64_t i = 0; i < count; i++) free(bufs[i]);
+        free(bufs);
+        close(fd);
+        return TV_ERR;
+    }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

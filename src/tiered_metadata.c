@@ -71,7 +71,6 @@ int tv_metadata_load(TV_METADATA *meta, const char *path) {
     memset(meta, 0, sizeof(TV_METADATA));
 
     char line[1024];
-    int current_seg = -1;
 
     while (fgets(line, sizeof(line), f)) {
         char *key, *val;
@@ -95,11 +94,12 @@ int tv_metadata_load(TV_METADATA *meta, const char *path) {
                         meta->disk_count, TV_MAX_DISKS);
                 fclose(f); return TV_ERR;
             }
-        } else if (strncmp(key, "disk", 4) == 0 && strstr(key, "_name")) {
+        } else if (strncmp(key, "disk", 4) == 0) {
             /* disk0_name=... */
             char *endp;
             unsigned long idx = strtoul(key + 4, &endp, 10);
-            if (endp && strcmp(endp, "_name") == 0 && idx < TV_MAX_DISKS) {
+            if (endp && strcmp(endp, "_name") == 0 && idx < TV_MAX_DISKS &&
+                idx < meta->disk_count) {
                 strncpy(meta->disk_names[idx], val, 63);
                 meta->disk_names[idx][63] = 0;
             }
@@ -107,10 +107,6 @@ int tv_metadata_load(TV_METADATA *meta, const char *path) {
             char *endp;
             unsigned long idx = strtoul(key + 3, &endp, 10);
             if (idx >= TV_MAX_SEGS) continue;
-
-            if (current_seg < 0 || (int)idx != current_seg) {
-                current_seg = (int)idx;
-            }
 
             TV_SEGMENT *seg = &meta->segments[idx];
 
@@ -123,18 +119,20 @@ int tv_metadata_load(TV_METADATA *meta, const char *path) {
             } else if (strcmp(endp, "_stripe") == 0) {
                 seg->stripe_size = strtoull(val, NULL, 10);
             } else if (strcmp(endp, "_disks") == 0) {
-                char *t = strtok(val, ",");
+                char *saveptr;
+                char *t = strtok_r(val, ",", &saveptr);
                 int j = 0;
                 while (t && j < TV_MAX_DISKS) {
                     seg->disk_index[j++] = (uint32_t)strtoul(t, NULL, 10);
-                    t = strtok(NULL, ",");
+                    t = strtok_r(NULL, ",", &saveptr);
                 }
             } else if (strcmp(endp, "_weight") == 0) {
-                char *t = strtok(val, ",");
+                char *saveptr;
+                char *t = strtok_r(val, ",", &saveptr);
                 int j = 0;
                 while (t && j < TV_MAX_DISKS) {
                     seg->weight[j++] = (uint32_t)strtoul(t, NULL, 10);
-                    t = strtok(NULL, ",");
+                    t = strtok_r(NULL, ",", &saveptr);
                 }
             }
         }

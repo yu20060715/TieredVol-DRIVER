@@ -3,7 +3,7 @@
 struct tieredvol_map tv_map_logical(u64 logical,
 				    struct tieredvol_metadata *meta)
 {
-	struct tieredvol_map err = { .disk = -1, .offset = 0, .length = 0, .remaining = 0 };
+	struct tieredvol_map err = { .disk = -1, .offset = 0, .length = 0 };
 	int seg_idx, disk_idx;
 	const struct tieredvol_segment *seg;
 	u64 stripe_no, offset_in;
@@ -57,7 +57,6 @@ struct tieredvol_map tv_map_logical(u64 logical,
 			     TV_CHUNK_SIZE +
 			     (offset_in - boundary[disk_idx]);
 		map.length = (u64)seg->weight[disk_idx] * TV_CHUNK_SIZE;
-		map.remaining = boundary[disk_idx + 1] - offset_in;
 
 		return map;
 	}

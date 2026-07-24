@@ -50,11 +50,6 @@ int tv_benchmark(const char *disk_path, uint64_t *speed_out, int warmup) {
 
     /* SLC cache warm-up: write 2GB to exhaust SLC cache before benchmarking */
     if (warmup) {
-        off_t warmup_offset = 0;
-        if (dev_size > WARMUP_DEFAULT_BYTES + 1024 * 1024) {
-            warmup_offset = dev_size - WARMUP_DEFAULT_BYTES - 1024 * 1024;
-            warmup_offset = warmup_offset & ~((off_t)BENCH_RAW_BLOCK - 1);
-        }
         fprintf(stderr, "  Warming up SLC cache (2GB)...\n");
         tv_warmup_device(disk_path, (uint64_t)WARMUP_DEFAULT_BYTES);
         fprintf(stderr, "  Warm-up complete, starting benchmark...\n");

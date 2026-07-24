@@ -1,10 +1,8 @@
 #ifndef SETUP_DISCOVER_H
 #define SETUP_DISCOVER_H
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <dirent.h>
+#include <stdint.h>
+#include <stddef.h>
 
 typedef struct {
     char disk[32];

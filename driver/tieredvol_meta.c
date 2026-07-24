@@ -2,14 +2,17 @@
 #include <linux/string.h>
 #include <linux/vmalloc.h>
 #include <linux/fs.h>
-#include <linux/uaccess.h>
 #include "tieredvol.h"
+
+#define TV_MAX_CONFIG_SIZE (1024 * 1024)
 
 static int parse_u32(const char *s, u32 *out)
 {
 	unsigned long v;
 
 	if (kstrtoul(s, 10, &v))
+		return -EINVAL;
+	if (v > (~0U))
 		return -EINVAL;
 	*out = (u32)v;
 	return 0;
@@ -58,6 +61,8 @@ static int parse_csv_u32(char *s, u32 *arr, int max, int *count)
 
 		if (kstrtoul(tok, 10, &v))
 			return -EINVAL;
+		if (v > (~0U))
+			return -EINVAL;
 		arr[n++] = (u32)v;
 	}
 	*count = n;
@@ -92,7 +97,6 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 	loff_t pos = 0, file_size;
 	char *buf;
 	char *line, *next_line;
-	int current_seg = -1;
 	int ret = 0;
 
 	if (!meta || !path)
@@ -103,7 +107,7 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 		return PTR_ERR(f);
 
 	file_size = i_size_read(file_inode(f));
-	if (file_size <= 0 || file_size > 1024 * 1024) {
+	if (file_size <= 0 || file_size > TV_MAX_CONFIG_SIZE) {
 		filp_close(f, NULL);
 		return -EINVAL;
 	}
@@ -144,17 +148,30 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			continue;
 
 		if (strcmp(k, "version") == 0) {
-			parse_u32(v, &meta->version);
+			if (parse_u32(v, &meta->version) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
 		} else if (strcmp(k, "chunk_size") == 0) {
-			parse_u32(v, &meta->chunk_size);
+			if (parse_u32(v, &meta->chunk_size) < 0 ||
+			    meta->chunk_size == 0) {
+				ret = -EINVAL;
+				goto out;
+			}
 		} else if (strcmp(k, "segment_count") == 0) {
-			parse_u32(v, &meta->segment_count);
+			if (parse_u32(v, &meta->segment_count) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
 			if (meta->segment_count > TV_MAX_SEGS) {
 				ret = -EINVAL;
 				goto out;
 			}
 		} else if (strcmp(k, "disk_count") == 0) {
-			parse_u32(v, &meta->disk_count);
+			if (parse_u32(v, &meta->disk_count) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
 			if (meta->disk_count > TV_MAX_DISKS) {
 				ret = -EINVAL;
 				goto out;
@@ -163,7 +180,8 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			   strstr(k, "_name")) {
 			if (parse_num_prefix(k + 4, &idx, &suf) == 0 &&
 			    strcmp(suf, "_name") == 0 &&
-			    idx < TV_MAX_DISKS) {
+			    idx < TV_MAX_DISKS &&
+			    idx < meta->disk_count) {
 				strncpy(meta->disk_names[idx], v, 63);
 				meta->disk_names[idx][63] = '\0';
 			}
@@ -175,7 +193,6 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			if (idx >= TV_MAX_SEGS)
 				continue;
 
-			current_seg = (int)idx;
 			seg = &meta->segments[idx];
 
 			if (strcmp(suf, "_begin") == 0) {

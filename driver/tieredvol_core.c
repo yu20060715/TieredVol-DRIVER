@@ -298,11 +298,26 @@ static int tieredvol_message(struct dm_target *ti, unsigned int argc,
 		struct tieredvol_ctx *ctx = ti->private;
 		int i, off = 0;
 
-		for (i = 0; i < ctx->ndisks && off < (int)maxlen - 1; i++)
+		for (i = 0; i < ctx->ndisks && off < (int)maxlen - 1; i++) {
+			u32 w = 0;
+			int si;
+
+			for (si = 0; si < (int)ctx->meta.segment_count; si++) {
+				struct tieredvol_segment *seg = &ctx->meta.segments[si];
+				int j;
+
+				for (j = 0; j < (int)seg->disk_count; j++) {
+					if (seg->disk_index[j] == (u32)i) {
+						w = seg->weight[j];
+						goto found;
+					}
+				}
+			}
+found:
 			off += snprintf(result + off, maxlen - off,
 					"disk[%d]=%s(w=%u) ",
-					i, ctx->meta.disk_names[i],
-					ctx->meta.segments[0].weight[i]);
+					i, ctx->meta.disk_names[i], w);
+		}
 		return 0;
 	}
 
@@ -320,6 +335,7 @@ static struct target_type tieredvol_target = {
 	.status = tieredvol_status,
 	.message = tieredvol_message,
 	.io_hints = tieredvol_io_hints,
+	.iterate_devices = tieredvol_iterate_devices,
 };
 
 static int __init tieredvol_init(void)

@@ -22,17 +22,11 @@ static int is_kernel_target(const char *name) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
 
-    char table_cmd[512];
-    snprintf(table_cmd, sizeof(table_cmd), "dmsetup table %s 2>/dev/null", name);
-    FILE *p = popen(table_cmd, "r");
-    if (!p) return 0;
-    char line[1024];
-    int found = 0;
-    while (fgets(line, sizeof(line), p)) {
-        if (strstr(line, "tieredvol")) { found = 1; break; }
-    }
-    pclose(p);
-    return found;
+    char output[4096];
+    char *dm_argv[] = {"dmsetup", "table", (char *)name, NULL};
+    if (tv_exec_capture("dmsetup", dm_argv, output, sizeof(output)) != 0)
+        return 0;
+    return strstr(output, "tieredvol") != NULL;
 }
 
 int cmd_remove(int argc, char *argv[]) {

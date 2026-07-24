@@ -3,9 +3,6 @@
 
 #include "setup_discover.h"
 
-#include <stddef.h>
-#include <signal.h>
-
 typedef void (*bench_interrupt_fn)(void *ctx);
 
 int cmd_bench(int argc, char *argv[]);

@@ -37,7 +37,7 @@ static int ensure_module_loaded(void) {
         insmod_path[len] = '\0';
         char *slash = strrchr(insmod_path, '/');
         if (slash) {
-            strcpy(slash + 1, "driver/tieredvol.ko");
+            snprintf(slash + 1, sizeof(insmod_path) - (slash + 1 - insmod_path), "driver/tieredvol.ko");
             char *insmod_argv[] = {"insmod", insmod_path, NULL};
             if (tv_exec_run("insmod", insmod_argv) == 0) return 0;
         }

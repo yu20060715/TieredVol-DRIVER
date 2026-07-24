@@ -2,7 +2,6 @@
 #define TIERED_TYPES_H
 
 #include <stdint.h>
-#include <unistd.h>
 #include <signal.h>
 
 extern volatile sig_atomic_t g_shutdown_requested;
@@ -11,15 +10,10 @@ extern volatile sig_atomic_t g_shutdown_requested;
 #define TV_MAX_SEGS     16
 #define TV_MAX_WEIGHT   16
 #define TV_CHUNK_SIZE (1 * 1024 * 1024)
-#define TV_BUF_COUNT    64
-#define TV_CQE_TIMEOUT_SEC     30
 #define TV_OK       0
 #define TV_ERR      (-1)
 
-#define TV_CQE_RETRY_SEC       30
-
 #define DEFAULT_STRIPE_SIZE_KB  512
-#define TV_URING_QUEUE_DEPTH    1024
 #define TV_ALLOC_ALIGNMENT      4096
 #define TV_CONFIG_DIR           "/etc/tieredvol/"
 #define TV_PROGRESS_INTERVAL    (64 * 1024 * 1024)
@@ -58,13 +52,6 @@ typedef struct {
     uint64_t offset;
     uint64_t length;
 } TV_MAP;
-
-typedef struct {
-    uint8_t *data;
-    uint64_t logical;
-    int      in_flight;
-    int      cqes_pending;
-} TV_STRIPE_BUF;
 
 uint32_t tv_compute_weight(uint64_t speed, uint64_t slowest);
 int      tv_build_segments(TV_DISK *disks, int ndisks, TV_SEGMENT *segs, int *nsegs);

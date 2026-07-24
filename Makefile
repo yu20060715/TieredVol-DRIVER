@@ -2,20 +2,15 @@ CC=gcc
 CFLAGS=-D_GNU_SOURCE -Wall -Wextra -Wpedantic -std=gnu11 -O2
 PREFIX=/usr/local
 
-# Scheduler core: partition, mapper, metadata, benchmark, warmup
-# (io_uring removed — migration to kernel dm-target in progress)
 SCHED_OBJS=src/tiered_partition.o src/tiered_mapper.o \
            src/tiered_metadata.o src/tiered_benchmark.o src/warmup.o
 
 SETUP_OBJS=src/exec_helper.o src/setup_discover.o src/setup_bench.o src/cmd_create.o src/cmd_remove.o
 
-all: tiered_setup tiered_io
+all: tiered_setup
 
 tiered_setup: src/main.c src/tiered_common.h src/tiered_types.h src/version.h src/setup_discover.h src/setup_bench.h src/exec_helper.h src/cmd_create.h src/cmd_remove.h $(SCHED_OBJS) $(SETUP_OBJS)
 	$(CC) $(CFLAGS) -o $@ src/main.c $(SCHED_OBJS) $(SETUP_OBJS) -lm
-
-tiered_io: src/tiered_io.c src/tiered_types.h src/tiered_metadata.o
-	$(CC) $(CFLAGS) -o $@ src/tiered_io.c src/tiered_metadata.o -luring
 
 src/tiered_partition.o: src/tiered_partition.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -60,9 +55,6 @@ test_partition: tests/test_partition.c src/tiered_types.h $(SCHED_OBJS)
 test_metadata: tests/test_metadata.c src/tiered_types.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
-# test_sched and test_integrity disabled during kernel dm-target migration
-# They will be rewritten as kernel module integration tests in Phase 3
-
 test: test_common test_mapper test_partition test_metadata
 	@echo "=== test_common ===" && ./test_common && \
 	echo "=== test_mapper ===" && ./test_mapper && \
@@ -85,20 +77,18 @@ module_clean:
 
 install: all
 	install -m 755 tiered_setup $(DESTDIR)$(PREFIX)/bin/tiered_setup
-	install -m 755 tiered_io $(DESTDIR)$(PREFIX)/bin/tiered_io
 	mkdir -p $(DESTDIR)/etc/tieredvol
 	mkdir -p $(DESTDIR)/etc/systemd/system
 	@echo ""
 	@echo "Installed:"
 	@echo "  $(DESTDIR)$(PREFIX)/bin/tiered_setup"
-	@echo "  $(DESTDIR)$(PREFIX)/bin/tiered_io"
 	@echo ""
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_setup
 
 clean:
-	rm -f tiered_setup tiered_io test_common test_mapper test_partition test_metadata
+	rm -f tiered_setup test_common test_mapper test_partition test_metadata
 	rm -f src/*.o
 
 .PHONY: all install uninstall clean test test-full module module_install module_clean
