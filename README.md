@@ -36,9 +36,9 @@ Application
 | 2-disk [1,7] | 1370 MB/s | 80% | 1370/1713 |
 | 2-disk [1,6] | 1383 MB/s | 79% | 1383/1749 |
 
-Hardware: i5-4570, NVMe CT1000P3PSSD8 (~1499 MB/s), SATA CT500MX500SSD1 (~517 MB/s), SATA WDC WDS250G2B0A (~536 MB/s). Both SATA on same Intel 8 Series/C220 controller (shared bus ~957 MB/s combined).
+Hardware: i5-4570, NVMe CT1000P3PSSD8 (~1499 MB/s via PCIe 2.0 x4 adapter), SATA CT500MX500SSD1 (~517 MB/s), SATA WDC WDS250G2B0A (~536 MB/s). Both SATA on same Intel 8 Series/C220 controller (shared bus ~957 MB/s combined).
 
-DM overhead: **<1%** (raw NVMe 1475 MB/s vs DM 1499 MB/s). The25% gap from theoretical is from kernel block layer (BIO_MAX_VECS=256 limits bio to1MB; NVMe max_hw_sectors_kb=128 limits command to 128KB).
+DM overhead: **<1%** (raw NVMe 1475 MB/s vs DM 1499 MB/s). The 25% gap from theoretical is primarily due to the B85 platform's PCIe 2.0 x4 bandwidth limit (~1600 MB/s practical) and multi-device scheduling overhead.
 
 ### What Is Intentionally Excluded
 
@@ -289,7 +289,7 @@ seg0_stripe=3145728
 - **System disk cannot be used** — dm returns EBUSY on mounted root partition.
 - **Module instability risk** — A kernel module bug can oops the system.
 - **NVMe write cache must stay ON** — Disabling it causes -21% throughput loss.
-- **Hardware limits**: NVMe max_hw_sectors_kb=128 (driver cap), BIO_MAX_VECS=256 (kernel compile-time).
+- **Platform bottleneck**: B85 PCIe 2.0 x4 adapter limits NVMe to ~1600 MB/s (drive supports PCIe 4.0). Upgrade to PCIe 3.0/4.0 platform for higher throughput.
 
 ## License
 

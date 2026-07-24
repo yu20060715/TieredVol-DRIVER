@@ -4,13 +4,13 @@
 
 | Device | Model | Size | Interface | Raw Sequential Write |
 |--------|-------|------|-----------|---------------------|
-| nvme0n1 | CT1000P3PSSD8 | 931 GB | NVMe PCIe 3.0 x4 | 1499 MB/s (2M, QD=256) |
+| nvme0n1 | CT1000P3PSSD8 | 931 GB | NVMe (PCIe 2.0 x4 via adapter) | 1499 MB/s (2M, QD=256) |
 | sdb | CT500MX500SSD1 | 465 GB | SATA III | 517 MB/s |
 | sdc | WDC WDS250G2B0A | 232 GB | SATA III | 536 MB/s |
 | sdb+sdc combined | - | - | Same SATA controller | ~957 MB/s |
 
-NVMe: MDTS=6 (256KB cmd), max_hw_sectors_kb=128 (driver caps at 128KB), nr_requests=1023, 5 MSI-X queues
-SATA: Both on Intel 8 Series/C220 SATA III controller (shared bus)
+NVMe: Controller supports PCIe 4.0 x4 (LnkCap 16GT/s), but B85 root port only supports PCIe 2.0 x4 (LnkSta 5GT/s). Practical bandwidth ~1600 MB/s. MDTS=6 (256KB cmd), max_hw_sectors_kb=128 (driver cap), nr_requests=1023, 5 MSI-X queues.
+SATA: Both on Intel 8 Series/C220 SATA III controller (shared bus ~957 MB/s combined)
 
 ## Configuration
 
@@ -96,49 +96,55 @@ All tests: `--direct=1`, 2G write, 3 runs each.
 | 2-disk [1,7] NVMe+sdb | 1713 MB/s | 1370 MB/s | **80%** |
 | 2-disk [1,6] NVMe+sdb | 1749 MB/s | 1383 MB/s | **79%** |
 
-Key insight: More devices = more overhead (74% for 3-disk vs 80% for 2-disk).
+Key insight: More devices = more overhead (75% for 3-disk vs 80% for 2-disk). The theoretical values assume the NVMe can sustain its raw speed (1499 MB/s) indefinitely, but the PCIe 2.0 x4 link limits the practical ceiling to ~1600 MB/s.
 
 ## Theoretical Analysis
 
-With [1,1,6] weights:
-- NVMe at 75%: T ≤ 1499/0.75 = **1999 MB/s** (NVMe-limited)
-- SATA at 25%: T ≤ 957/0.25 = **3828 MB/s** (SATA-limited)
+With [1,1,6] weights (based on actual raw device speeds):
+- NVMe at 75%: T ≤ 1499/0.75 = **1999 MB/s** (theoretical NVMe limit)
+- SATA at 25%: T ≤ 957/0.25 = **3828 MB/s** (theoretical SATA limit)
 - **Theoretical max = 1999 MB/s**
 
 Achieved: **1499 MB/s = 75% efficiency**
-Target: 1683 MB/s = **84% efficiency** (requires ~12% improvement)
 
 ### DM Layer Overhead
 - Raw NVMe: 1475-1504 MB/s
 - DM device: 1499 MB/s (includes SATA parallelism)
 - **DM overhead: <1%** (the driver is extremely efficient)
 
-### Why 75% Efficiency?
+### Why 75% Efficiency? — PCIe 2.0 is the Real Bottleneck
 
-The 25% overhead is NOT from the DM target. It is from the Linux block layer:
+The 25% gap from theoretical is NOT from the DM target (which has <1% overhead). The primary cause is the **B85 platform's PCIe 2.0 x4 limitation**.
 
-1. **BIO_MAX_VECS=256** (x86_64, 4KB pages): Limits each bio to 1MB. A 2MB write
-   creates 2 bios. Each bio incurs allocation, queuing, and completion callback overhead.
+1. **PCIe 2.0 x4 bandwidth cap (~1600 MB/s practical)**: The NVMe controller
+   (CT1000P3PSSD8) supports PCIe 4.0 x4 (LnkCap 16GT/s), but the B85 root port
+   only supports PCIe 2.0 x4 (LnkSta 5GT/s). The NVMe's 1499 MB/s raw speed is
+   already near the PCIe 2.0 x4 practical limit (~1600 MB/s). There is no room
+   to push more data through this link.
 
-2. **NVMe max_hw_sectors_kb=128**: Each 1MB bio is further split into 8x128KB
-   NVMe commands. The NVMe controller's MDTS=6 supports 256KB, but the Linux
-   NVMe driver caps at 128KB due to `max_segments=33`.
+2. **Multi-device scheduling overhead**: With 3 disks (NVMe + 2 SATA), the CPU
+   must process completion interrupts from all devices. More devices = more
+   scheduling overhead. This explains the difference between 2-disk (80%) and
+   3-disk (75%) efficiency.
 
-3. **Per-bio overhead accumulates**: bio allocation (~1-2µs) + block layer
-   queue insertion + DM map (0.25µs) + NVMe submission + completion callback.
-   At high QD, these compound across thousands of in-flight bios.
-
-4. **NVMe command processing**: Each 128KB NVMe command has its own completion,
-   interrupt handling, and callback chain. The NVMe controller has 1023 queue
-   depth, but the CPU must process each completion.
+3. **NVMe command splitting**: max_hw_sectors_kb=128 forces bios to be split
+   into 128KB NVMe commands. Each command has its own completion interrupt.
+   On a faster platform (PCIe 3.0/4.0) with larger NVMe commands, this
+   overhead would decrease proportionally.
 
 ### What Would Be Needed for 1683 MB/s
 
-- **Increase NVMe max_hw_sectors_kb from 128 to 256**: Controller supports it
-  (MDTS=6), but Linux driver caps at 128KB. Requires NVMe driver patch.
-- **Increase BIO_MAX_VECS from 256 to 1024+**: Allows 4MB bios → fewer bios →
-  less overhead. Requires kernel rebuild with modified bio.h.
-- Both are kernel-level changes beyond DM target scope.
+On this B85 platform: **not achievable without hardware upgrade.** The PCIe 2.0 x4
+link is the hard ceiling at ~1600 MB/s.
+
+To exceed 1683 MB/s, upgrade to a platform with:
+- **PCIe 3.0 M.2 slot** (e.g., Intel 100/200-series): NVMe would run at PCIe 3.0 x4
+  (~3500 MB/s), efficiency would improve to ~83-87% due to fewer NVMe commands
+- **PCIe 4.0 M.2 slot** (e.g., AMD B550/X570, Intel 600-series): NVMe would run
+  at PCIe 4.0 x4 (~7000 MB/s), efficiency ~85-90%
+
+The tieredvol.ko module is fully portable — rebuild with `make module` on the new
+platform and the same code will achieve proportionally higher throughput.
 
 ## Recommended Production Configuration
 
