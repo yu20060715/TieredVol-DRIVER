@@ -9,6 +9,7 @@
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <time.h>
+#include <liburing.h>
 #include "tiered_types.h"
 #include "version.h"
 
@@ -79,6 +80,85 @@ static int bench_write(const char *path, uint64_t size, int use_direct, uint64_t
     clock_gettime(CLOCK_MONOTONIC, &t1);
     close(fd);
     free(buf);
+
+    double sec = elapsed_sec(&t0, &t1);
+    double mb = (double)written / (1024.0 * 1024.0);
+    double mbps = mb / sec;
+
+    printf("Throughput: %.1f MB/s  (%.1f GB in %.2f sec)\n", mbps, mb / 1024.0, sec);
+    return 0;
+}
+
+static int bench_write_async(const char *path, uint64_t size, int use_direct, uint64_t bs) {
+    int flags = O_WRONLY | O_CREAT | O_TRUNC;
+    if (use_direct) flags |= O_DIRECT;
+
+    int fd = open(path, flags, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "Error: cannot open %s: %s\n", path, strerror(errno));
+        return TV_ERR;
+    }
+
+    uint64_t count = size / bs;
+    int queue_depth = 4;
+    if (queue_depth > (int)count) queue_depth = (int)count;
+
+    uint8_t **bufs = calloc(count, sizeof(uint8_t *));
+    for (uint64_t i = 0; i < count; i++) {
+        if (posix_memalign((void **)&bufs[i], ALIGNMENT, bs) != 0) {
+            fprintf(stderr, "Error: alloc failed for buf %lu\n", (unsigned long)i);
+            for (uint64_t j = 0; j < i; j++) free(bufs[j]);
+            free(bufs);
+            close(fd);
+            return TV_ERR;
+        }
+        memset(bufs[i], 0xAB, bs);
+    }
+
+    struct io_uring ring;
+    io_uring_queue_init(queue_depth, &ring, 0);
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    uint64_t submitted = 0, completed = 0;
+
+    while (completed < count && !g_stop) {
+        while (submitted < count && (int)(submitted - completed) < queue_depth) {
+            struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+            if (!sqe) break;
+            io_uring_prep_write(sqe, fd, bufs[submitted], bs, submitted * bs);
+            io_uring_sqe_set_data(sqe, (void *)(uintptr_t)submitted);
+            submitted++;
+        }
+
+        io_uring_submit(&ring);
+
+        struct io_uring_cqe *cqe;
+        int ret = io_uring_wait_cqe(&ring, &cqe);
+        if (ret < 0) {
+            fprintf(stderr, "Error: io_uring_wait_cqe: %s\n", strerror(-ret));
+            break;
+        }
+        int res = cqe->res;
+        io_uring_cqe_seen(&ring, cqe);
+        completed++;
+
+        if (res < 0) {
+            fprintf(stderr, "Error: io_uring write failed at entry %lu: %s\n",
+                    (unsigned long)completed - 1, strerror(-res));
+            break;
+        }
+    }
+
+    fsync(fd);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    io_uring_queue_exit(&ring);
+
+    uint64_t written = completed * bs;
+    for (uint64_t i = 0; i < count; i++) free(bufs[i]);
+    free(bufs);
+    close(fd);
 
     double sec = elapsed_sec(&t0, &t1);
     double mb = (double)written / (1024.0 * 1024.0);
@@ -218,7 +298,7 @@ int main(int argc, char *argv[]) {
 
     const char *path = NULL;
     const char *name = NULL;
-    int do_bench = 0, do_bench_all = 0;
+    int do_bench = 0, do_bench_all = 0, do_bench_async = 0;
     int do_bench_read = 0, do_bench_read_all = 0;
     int do_info = 0;
     int use_direct = -1;
@@ -229,6 +309,7 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "--path") == 0 && i + 1 < argc) path = argv[++i];
         else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) name = argv[++i];
         else if (strcmp(argv[i], "--bench") == 0) do_bench = 1;
+        else if (strcmp(argv[i], "--bench-async") == 0) do_bench_async = 1;
         else if (strcmp(argv[i], "--bench-all") == 0) do_bench_all = 1;
         else if (strcmp(argv[i], "--bench-read") == 0) do_bench_read = 1;
         else if (strcmp(argv[i], "--bench-read-all") == 0) do_bench_read_all = 1;
@@ -261,6 +342,7 @@ int main(int argc, char *argv[]) {
     if (do_bench_all) return run_suite(path, 0, use_direct, block_size);
     if (do_bench_read_all) return run_suite(path, 1, use_direct, block_size);
     if (do_bench_read) return bench_read(path, bench_size, use_direct, block_size);
+    if (do_bench_async) return bench_write_async(path, bench_size, use_direct, block_size);
     if (do_bench) return bench_write(path, bench_size, use_direct, block_size);
 
     fprintf(stderr, "Error: specify --bench, --bench-read, --bench-all, --bench-read-all, or --info\n");

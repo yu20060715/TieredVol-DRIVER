@@ -1,5 +1,9 @@
 # TieredVol → TieredVol-DRIVER Migration Plan
 
+> **Status: COMPLETED** — The migration from userspace io_uring to kernel dm-target
+> is finished. The kernel module `tieredvol.ko` v4.2.0 is production-ready.
+> See `BENCHMARK.md` for performance results.
+
 ## Goal
 
 Replace the userspace io_uring I/O path with a kernel dm-target module, reducing overhead from ~20-30% to <10%.

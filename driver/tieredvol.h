@@ -2,7 +2,7 @@
 #define TIEREDVOL_H
 
 #include <linux/types.h>
-#include <linux/spinlock.h>
+#include <linux/percpu.h>
 #include <linux/device-mapper.h>
 #include <linux/bio.h>
 #include <linux/slab.h>
@@ -43,8 +43,8 @@ struct tieredvol_ctx {
 	struct dm_dev **devs;
 	sector_t *disk_sectors;
 	int ndisks;
-	spinlock_t map_lock;
-	struct bio_set fs;
+	sector_t min_chunk_sectors;
+	sector_t stripe_sectors;
 };
 
 struct tieredvol_map tv_map_logical(u64 logical,

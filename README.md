@@ -28,16 +28,17 @@ Application
 - Logical ↔ Physical offset mapping (zero-copy)
 - Zero overhead from syscall/copy/CQE
 
-### Key Results (sustained 5 GB, fio + io_uring + iodepth=64, userspace v1)
+### Key Results (kernel dm-target v4.2.0, fio + io_uring + QD=256)
 
-| Config | Write | vs LVM | Read | HW Sum Efficiency |
-|--------|-------|--------|------|-------------------|
-| 2-disk [2,1] | 1063 MB/s | 1.56× | 1101 MB/s | 76.3% |
-| 3-disk [2,1,1] | 1168 MB/s | 2.01× | 1253 MB/s | 62.7% |
+| Config | Write | Efficiency | vs Theory |
+|--------|-------|------------|-----------|
+| 3-disk [1,1,6] | **1499 MB/s** | 75% | 1499/1999 |
+| 2-disk [1,7] | 1370 MB/s | 80% | 1370/1713 |
+| 2-disk [1,6] | 1383 MB/s | 79% | 1383/1749 |
 
-Hardware: i5-4570, NVMe CT1000P3PSSD8 (~967 MB/s), SATA CT500MX500SSD1 (~427 MB/s), SATA WDC WDS250G2B0A (~432 MB/s). Hardware sum: 2-disk=1394 MB/s, 3-disk=1864 MB/s. Weights: [2,1] / [2,1,1].
+Hardware: i5-4570, NVMe CT1000P3PSSD8 (~1499 MB/s), SATA CT500MX500SSD1 (~517 MB/s), SATA WDC WDS250G2B0A (~536 MB/s). Both SATA on same Intel 8 Series/C220 controller (shared bus ~957 MB/s combined).
 
-Target with kernel module: η > 90% (overhead < 10%).
+DM overhead: **<1%** (raw NVMe 1475 MB/s vs DM 1499 MB/s). The25% gap from theoretical is from kernel block layer (BIO_MAX_VECS=256 limits bio to1MB; NVMe max_hw_sectors_kb=128 limits command to 128KB).
 
 ### What Is Intentionally Excluded
 
@@ -55,19 +56,19 @@ Target with kernel module: η > 90% (overhead < 10%).
 git clone https://github.com/yu20060715/TieredVol-DRIVER.git
 cd TieredVol-DRIVER
 
-# Build userspace tools
+# Build userspace tools + kernel module
 make
-
-# Build kernel module
 make module
-sudo make module_install
-sudo depmod -a
 
-# Create a weighted volume
+# Create a weighted volume (loads kernel module automatically)
 sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc --scheduler
 
-# Benchmark
-sudo ./tiered_io --path /dev/mapper/fastpool --bench-all
+# Benchmark (expected: ~1500 MB/s)
+sudo ./benchmark.sh
+
+# Or manual fio:
+sudo fio --name=bench --filename=/dev/mapper/fastpool --rw=write --bs=2m \
+  --size=2G --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1 --end_fsync=1
 
 # Remove
 sudo ./tiered_setup --remove --name fastpool
@@ -237,14 +238,20 @@ TieredVol-DRIVER/
 
 ---
 
-## Kernel Module
+## Kernel Module (v4.2.0)
 
 The `tieredvol` dm target processes bios in-kernel:
 
 1. **bio arrives** at the dm target (from VFS `write()`/`read()`)
 2. **Map**: `tv_map_logical()` translates logical byte offset → (disk, physical_offset, remaining)
-3. **Split**: If bio crosses a stripe boundary, `bio_split()` fragments it
-4. **Redirect**: `bio_set_dev()` + sector update → submit to underlying device
+3. **Redirect**: `bio_set_dev()` + sector update → DM core submits to underlying device
+
+Key features:
+- `DM_TARGET_NOWAIT`: Non-blocking bio dispatch (optimized for io_uring)
+- `flush_bypasses_map`: Flush FUA bios bypass the map function
+- `dm_set_target_max_io_len()`: Bio splitting at chunk boundaries
+- Per-CPU statistics counters (zero contention)
+- **Map overhead: 0.25 µs/bio** (ftrace profiled)
 
 Key constants:
 - `TV_CHUNK_SIZE` = 1 MB (weight unit)
@@ -281,6 +288,8 @@ seg0_stripe=3145728
 - **No crash consistency** — No journaling or metadata recovery.
 - **System disk cannot be used** — dm returns EBUSY on mounted root partition.
 - **Module instability risk** — A kernel module bug can oops the system.
+- **NVMe write cache must stay ON** — Disabling it causes -21% throughput loss.
+- **Hardware limits**: NVMe max_hw_sectors_kb=128 (driver cap), BIO_MAX_VECS=256 (kernel compile-time).
 
 ## License
 

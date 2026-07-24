@@ -46,8 +46,8 @@ install_debian() {
     sudo apt update -qq
     sudo apt install -y \
         gcc make \
-        liburing-dev \
-        lvm2 \
+        linux-headers-$(uname -r) \
+        lvm2 nvme-cli \
         bc
 }
 
@@ -55,8 +55,8 @@ install_fedora() {
     echo "Installing packages for Fedora/RHEL..."
     sudo dnf install -y \
         gcc make \
-        liburing-devel \
-        lvm2 \
+        kernel-devel \
+        lvm2 nvme-cli \
         bc
 }
 
@@ -64,8 +64,8 @@ install_arch() {
     echo "Installing packages for Arch..."
     sudo pacman -S --needed --noconfirm \
         gcc make \
-        liburing \
-        lvm2 \
+        linux-headers \
+        lvm2 nvme-cli \
         bc
 }
 

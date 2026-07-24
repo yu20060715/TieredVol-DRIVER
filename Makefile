@@ -15,7 +15,7 @@ tiered_setup: src/main.c src/tiered_common.h src/tiered_types.h src/version.h sr
 	$(CC) $(CFLAGS) -o $@ src/main.c $(SCHED_OBJS) $(SETUP_OBJS) -lm
 
 tiered_io: src/tiered_io.c src/tiered_types.h src/tiered_metadata.o
-	$(CC) $(CFLAGS) -o $@ src/tiered_io.c src/tiered_metadata.o
+	$(CC) $(CFLAGS) -o $@ src/tiered_io.c src/tiered_metadata.o -luring
 
 src/tiered_partition.o: src/tiered_partition.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<

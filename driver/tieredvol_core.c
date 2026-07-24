@@ -3,80 +3,71 @@
 #include <linux/device-mapper.h>
 #include <linux/bio.h>
 #include <linux/slab.h>
-#include <linux/spinlock.h>
 #include <linux/string.h>
+#include <linux/percpu.h>
 #include "tieredvol.h"
 
 #define DM_MSG_PREFIX "tieredvol"
 
-static int tieredvol_split_and_submit(struct bio *bio, struct tieredvol_ctx *ctx,
-				      struct tieredvol_map *m)
+static DEFINE_PER_CPU(u64, tv_map_count);
+static DEFINE_PER_CPU(u64, tv_map_sectors);
+static DEFINE_PER_CPU(u64, tv_map_bytes);
+
+static inline u64 tv_read_count(void)
 {
-	sector_t remaining = bio_sectors(bio);
+	u64 total = 0;
+	int cpu;
+	for_each_possible_cpu(cpu)
+		total += per_cpu(tv_map_count, cpu);
+	return total;
+}
 
-	while (remaining > 0) {
-		struct tieredvol_map cur;
-		u64 logical = (u64)bio->bi_iter.bi_sector << SECTOR_SHIFT;
-		u64 split_sectors;
-		struct bio *split;
+static inline u64 tv_read_sectors(void)
+{
+	u64 total = 0;
+	int cpu;
+	for_each_possible_cpu(cpu)
+		total += per_cpu(tv_map_sectors, cpu);
+	return total;
+}
 
-		cur = tv_map_logical(logical, &ctx->meta);
-		if (cur.disk < 0 || cur.disk >= ctx->ndisks) {
-			pr_err("tieredvol: map failed for sector %llu\n",
-			       (unsigned long long)bio->bi_iter.bi_sector);
-			return -EIO;
-		}
-
-		split_sectors = cur.remaining >> SECTOR_SHIFT;
-		if (split_sectors == 0) {
-			pr_err("tieredvol: zero remaining for sector %llu\n",
-			       (unsigned long long)bio->bi_iter.bi_sector);
-			return -EIO;
-		}
-
-		if (split_sectors >= remaining) {
-			bio_set_dev(bio, ctx->devs[cur.disk]->bdev);
-			bio->bi_iter.bi_sector =
-				cur.offset >> SECTOR_SHIFT;
-			submit_bio_noacct(bio);
-			return 0;
-		}
-
-		split = bio_split(bio, split_sectors, GFP_NOIO, &ctx->fs);
-		if (!split) {
-			pr_err("tieredvol: bio_split failed\n");
-			return -ENOMEM;
-		}
-
-		bio_set_dev(split, ctx->devs[cur.disk]->bdev);
-		split->bi_iter.bi_sector = cur.offset >> SECTOR_SHIFT;
-		submit_bio_noacct(split);
-
-		remaining -= split_sectors;
-	}
-
-	return 0;
+static inline u64 tv_read_bytes(void)
+{
+	u64 total = 0;
+	int cpu;
+	for_each_possible_cpu(cpu)
+		total += per_cpu(tv_map_bytes, cpu);
+	return total;
 }
 
 static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 {
 	struct tieredvol_ctx *ctx = ti->private;
+	u64 logical;
+	struct tieredvol_map cur;
+
+	this_cpu_inc(tv_map_count);
+	this_cpu_add(tv_map_sectors, bio_sectors(bio));
+	this_cpu_add(tv_map_bytes, bio->bi_iter.bi_size);
 
 	if (bio->bi_opf & REQ_PREFLUSH || bio->bi_opf & REQ_FUA) {
 		bio_endio(bio);
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	{
-		int ret = tieredvol_split_and_submit(bio, ctx, NULL);
+	logical = (u64)bio->bi_iter.bi_sector << SECTOR_SHIFT;
+	cur = tv_map_logical(logical, &ctx->meta);
 
-		if (ret < 0) {
-			bio_io_error(bio);
-			return DM_MAPIO_SUBMITTED;
-		}
-
+	if (cur.disk < 0 || cur.disk >= ctx->ndisks) {
+		pr_err("tieredvol: map failed for sector %llu\n",
+		       (unsigned long long)bio->bi_iter.bi_sector);
+		bio_io_error(bio);
 		return DM_MAPIO_SUBMITTED;
 	}
+
+	bio_set_dev(bio, ctx->devs[cur.disk]->bdev);
+	bio->bi_iter.bi_sector = cur.offset >> SECTOR_SHIFT;
+	return DM_MAPIO_REMAPPED;
 }
 
 static int tieredvol_ctr(struct dm_target *ti, unsigned int argc,
@@ -97,24 +88,17 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc,
 	}
 
 	ctx->ti = ti;
-	spin_lock_init(&ctx->map_lock);
-
-	ret = bioset_init(&ctx->fs, 64, 0, 0);
-	if (ret) {
-		ti->error = "tieredvol: bioset_init failed";
-		goto free_ctx;
-	}
 
 	ret = tv_metadata_load_kernel(&ctx->meta, argv[0]);
 	if (ret) {
 		ti->error = "tieredvol: failed to load metadata";
-		goto exit_bioset;
+		goto free_ctx;
 	}
 
 	if (ctx->meta.disk_count == 0 || ctx->meta.disk_count > TV_MAX_DISKS) {
 		ti->error = "tieredvol: invalid disk count";
 		ret = -EINVAL;
-		goto exit_bioset;
+		goto free_ctx;
 	}
 
 	ctx->ndisks = ctx->meta.disk_count;
@@ -150,6 +134,47 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc,
 		goto put_devices;
 	}
 
+	/* Compute min_chunk_sectors and stripe_sectors across all segments.
+	 * min_chunk = min over all segments of (min weight * TV_CHUNK_SIZE).
+	 * dm_set_target_max_io_len() ensures dm core splits bios so they
+	 * never cross a disk boundary within a stripe.
+	 */
+	{
+		sector_t global_min_chunk = (sector_t)-1;
+		sector_t max_stripe = 0;
+		u32 si, j;
+
+		for (si = 0; si < ctx->meta.segment_count; si++) {
+			struct tieredvol_segment *seg = &ctx->meta.segments[si];
+			sector_t seg_min;
+
+			if (seg->disk_count == 0)
+				continue;
+
+			seg_min = (sector_t)seg->weight[0] * (TV_CHUNK_SIZE >> SECTOR_SHIFT);
+			for (j = 1; j < seg->disk_count; j++) {
+				sector_t w = (sector_t)seg->weight[j] *
+					     (TV_CHUNK_SIZE >> SECTOR_SHIFT);
+
+				if (w < seg_min)
+					seg_min = w;
+			}
+			if (seg_min < global_min_chunk)
+				global_min_chunk = seg_min;
+			if (seg->stripe_size > max_stripe)
+				max_stripe = seg->stripe_size;
+		}
+
+		if (global_min_chunk == (sector_t)-1 || global_min_chunk == 0) {
+			ti->error = "tieredvol: invalid chunk geometry";
+			ret = -EINVAL;
+			goto put_devices;
+		}
+
+		ctx->min_chunk_sectors = global_min_chunk;
+		ctx->stripe_sectors = max_stripe >> SECTOR_SHIFT;
+	}
+
 	for (i = 0; i < (int)ctx->meta.segment_count; i++)
 		pr_info("tieredvol: segment[%d] [%llu, %llu) stripe=%llu disks=%u\n",
 			i,
@@ -157,6 +182,20 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc,
 			(unsigned long long)ctx->meta.segments[i].logical_end,
 			(unsigned long long)ctx->meta.segments[i].stripe_size,
 			ctx->meta.segments[i].disk_count);
+
+	pr_info("tieredvol: min_chunk=%llu sectors, stripe=%llu sectors\n",
+		(unsigned long long)ctx->min_chunk_sectors,
+		(unsigned long long)ctx->stripe_sectors);
+
+	ret = dm_set_target_max_io_len(ti, ctx->min_chunk_sectors);
+	if (ret) {
+		ti->error = "tieredvol: dm_set_target_max_io_len failed";
+		goto put_devices;
+	}
+
+	ti->num_flush_bios = ctx->ndisks;
+	ti->num_discard_bios = ctx->ndisks;
+	ti->flush_bypasses_map = true;
 
 	ti->private = ctx;
 	return 0;
@@ -167,8 +206,6 @@ put_devices:
 free_devs:
 	kfree(ctx->devs);
 	kfree(ctx->disk_sectors);
-exit_bioset:
-	bioset_exit(&ctx->fs);
 free_ctx:
 	kfree(ctx);
 	return ret;
@@ -184,16 +221,19 @@ static void tieredvol_dtr(struct dm_target *ti)
 
 	kfree(ctx->devs);
 	kfree(ctx->disk_sectors);
-	bioset_exit(&ctx->fs);
 	kfree(ctx);
 }
 
 static void tieredvol_io_hints(struct dm_target *ti,
 			       struct queue_limits *limits)
 {
+	struct tieredvol_ctx *ctx = ti->private;
+
 	limits->logical_block_size = 512;
 	limits->physical_block_size = 512;
-	limits->io_min = 512;
+	limits->chunk_sectors = ctx->min_chunk_sectors;
+	limits->io_min = ctx->min_chunk_sectors;
+	limits->io_opt = ctx->stripe_sectors;
 }
 
 static int tieredvol_iterate_devices(struct dm_target *ti,
@@ -234,6 +274,26 @@ static void tieredvol_status(struct dm_target *ti, status_type_t type,
 static int tieredvol_message(struct dm_target *ti, unsigned int argc,
 			     char **argv, char *result, unsigned int maxlen)
 {
+	if (argc == 1 && strcmp(argv[0], "reset_stats") == 0) {
+		int cpu;
+		for_each_possible_cpu(cpu) {
+			per_cpu(tv_map_count, cpu) = 0;
+			per_cpu(tv_map_sectors, cpu) = 0;
+			per_cpu(tv_map_bytes, cpu) = 0;
+		}
+		snprintf(result, maxlen, "stats reset");
+		return 0;
+	}
+	if (argc == 1 && strcmp(argv[0], "show_stats") == 0) {
+		u64 cnt = tv_read_count();
+		u64 bytes = tv_read_bytes();
+		u64 avg = cnt ? bytes / cnt : 0;
+		pr_info("tieredvol: maps=%llu avg_bytes=%llu total_bytes=%llu",
+			cnt, avg, bytes);
+		snprintf(result, maxlen, "maps=%llu avg_bytes=%llu",
+			 cnt, avg);
+		return 0;
+	}
 	if (argc == 1 && strcmp(argv[0], "status") == 0) {
 		struct tieredvol_ctx *ctx = ti->private;
 		int i, off = 0;
@@ -251,15 +311,15 @@ static int tieredvol_message(struct dm_target *ti, unsigned int argc,
 
 static struct target_type tieredvol_target = {
 	.name   = "tieredvol",
-	.version = {1, 0, 0},
+	.version = {2, 0, 0},
 	.module = THIS_MODULE,
+	.features = DM_TARGET_NOWAIT,
 	.ctr    = tieredvol_ctr,
 	.dtr    = tieredvol_dtr,
 	.map    = tieredvol_map,
 	.status = tieredvol_status,
 	.message = tieredvol_message,
 	.io_hints = tieredvol_io_hints,
-	.iterate_devices = tieredvol_iterate_devices,
 };
 
 static int __init tieredvol_init(void)
@@ -288,4 +348,4 @@ module_exit(tieredvol_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("TieredVol");
 MODULE_DESCRIPTION("Weighted striped dm target for tiered storage");
-MODULE_VERSION("2.0.0");
+MODULE_VERSION("4.2.0");

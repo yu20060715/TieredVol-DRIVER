@@ -1,31 +1,29 @@
-# Compiled binaries
+# Build artifacts (userspace)
 tiered_setup
 tiered_io
-tiered_benchmark
 test_common
-
-# Test binaries
 test_mapper
 test_partition
 test_metadata
-test_sched
-test_integrity
-test_tui
-tiered_ui
+src/*.o
+*.pyc
 
-# Object files
-*.o
-*.a
+# Kernel module build artifacts (also in driver/.gitignore)
+driver/*.o
+driver/*.ko
+driver/*.mod
+driver/*.mod.c
+driver/*.cmd
+driver/Module.symvers
+driver/modules.order
+driver/.module-common.o
+driver/..module-common.o.cmd
 
-# Editor
+# Editor / IDE
+.vscode/
 *.swp
 *.swo
 *~
-.vscode/
-.idea/
-
-# Config
-.opencode/
 
 # OS
 .DS_Store
