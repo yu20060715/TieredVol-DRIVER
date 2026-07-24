@@ -262,9 +262,20 @@ static void tieredvol_status(struct dm_target *ti, status_type_t type,
 		snprintf(result, maxlen, "%u disks %u segments",
 			 ctx->ndisks, ctx->meta.segment_count);
 		break;
-	case STATUSTYPE_TABLE:
-		snprintf(result, maxlen, "%s", ctx->meta.disk_names[0]);
+	case STATUSTYPE_TABLE: {
+		int off = 0;
+		int i;
+
+		for (i = 0; i < ctx->ndisks && off < maxlen; i++) {
+			int n = snprintf(result + off, maxlen - off,
+					 "%s%s", i > 0 ? " " : "",
+					 ctx->meta.disk_names[i]);
+			if (n < 0)
+				break;
+			off += n;
+		}
 		break;
+	}
 	case STATUSTYPE_IMA:
 		result[0] = '\0';
 		break;

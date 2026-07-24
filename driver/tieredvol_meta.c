@@ -195,25 +195,43 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 
 			seg = &meta->segments[idx];
 
-			if (strcmp(suf, "_begin") == 0) {
-				parse_u64(v, &seg->logical_begin);
-			} else if (strcmp(suf, "_end") == 0) {
-				parse_u64(v, &seg->logical_end);
-			} else if (strcmp(suf, "_count") == 0) {
-				parse_u32(v, &seg->disk_count);
-			} else if (strcmp(suf, "_stripe") == 0) {
-				parse_u64(v, &seg->stripe_size);
-			} else if (strcmp(suf, "_disks") == 0) {
-				int n;
-
-				parse_csv_u32(v, seg->disk_index,
-					       TV_MAX_DISKS, &n);
-			} else if (strcmp(suf, "_weight") == 0) {
-				int n;
-
-				parse_csv_u32(v, seg->weight,
-					       TV_MAX_DISKS, &n);
+		if (strcmp(suf, "_begin") == 0) {
+			if (parse_u64(v, &seg->logical_begin) < 0) {
+				ret = -EINVAL;
+				goto out;
 			}
+		} else if (strcmp(suf, "_end") == 0) {
+			if (parse_u64(v, &seg->logical_end) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
+		} else if (strcmp(suf, "_count") == 0) {
+			if (parse_u32(v, &seg->disk_count) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
+		} else if (strcmp(suf, "_stripe") == 0) {
+			if (parse_u64(v, &seg->stripe_size) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
+		} else if (strcmp(suf, "_disks") == 0) {
+			int n;
+
+			if (parse_csv_u32(v, seg->disk_index,
+					   TV_MAX_DISKS, &n) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
+		} else if (strcmp(suf, "_weight") == 0) {
+			int n;
+
+			if (parse_csv_u32(v, seg->weight,
+					   TV_MAX_DISKS, &n) < 0) {
+				ret = -EINVAL;
+				goto out;
+			}
+		}
 		}
 	}
 
