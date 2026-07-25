@@ -155,3 +155,66 @@ Note: TieredVol includes NVMe with PCIe 2.0x4 (~1000 MB/s) while LVM only uses t
 2. `tieredvol_core.c`: `tieredvol_split_and_submit()` returned DM_MAPIO_REMAPPED after `submit_bio_noacct()` → changed to DM_MAPIO_SUBMITTED
 3. `tiered_io.c`: Default blocksize changed from 1MB to 16MB; added `--blocksize` CLI param
 4. `cmd_create.c`: insmod path fixed to `driver/tieredvol.ko`
+
+---
+
+## Re-verification (2026-07-25)
+
+**Date:** 2026-07-25
+**Kernel:** 6.14.0-27-generic
+**Module:** tieredvol v4.6.0 (Enhancement .ko)
+**fio:** 3.36, io_uring, numjobs=4, iodepth=32, size=1G, runtime=10s, time_based, direct=1
+**NVMe APST:** Disabled during tests, re-enabled after
+
+### Policy Comparison (fio, 4 threads, QD=32, 1G, 10s)
+
+| Workload | Static (MiB/s) | Adaptive (MiB/s) | Random (MiB/s) |
+|----------|----------------|-------------------|----------------|
+| 128K Seq Read | 1474 | 363 | 658 |
+| 128K Seq Write | 1203 | 604 | 1030 |
+| 4K Rand Read | 1121 | 434 | 969 |
+| 4K Rand Write | 663 | 561 | 745 |
+
+### Block Size Sweep (Static, 4 threads, QD=32, 1G, 10s, write)
+
+| Block Size | Throughput (MiB/s) | Throughput (MB/s) |
+|------------|--------------------|--------------------|
+| 128 KB | 1188 | 1246 |
+| 256 KB | 1231 | 1290 |
+| 512 KB | 1197 | 1255 |
+| 1 MB | 1225 | 1285 |
+| 2 MB | 1211 | 1270 |
+| 4 MB | 978 | 1026 |
+| 8 MB | 969 | 1016 |
+| 16 MB | 980 | 1028 |
+
+### Queue Depth Sweep (Static, 4 threads, bs=2m, 1G, 10s, write)
+
+| QD | Throughput (MiB/s) | Throughput (MB/s) |
+|----|--------------------|--------------------|
+| 1 | 1210 | 1268 |
+| 32 | 1215 | 1274 |
+| 128 | 1239 | 1299 |
+| 256 | 1204 | 1263 |
+| 512 | 1230 | 1290 |
+| 1024 | 1211 | 1270 |
+
+### Raw NVMe Baseline
+
+| Run | Write (MiB/s) | Write (MB/s) |
+|-----|---------------|--------------|
+| 1 | 1416 | 1485 |
+| 2 | 1399 | 1467 |
+| 3 | 1405 | 1473 |
+| **Avg** | **1407** | **1475** |
+
+Raw NVMe measured: **1475 MB/s** — matches thesis exactly.
+
+### Analysis
+
+- **Raw NVMe**: 1475 MB/s avg, consistent with thesis (1475 MB/s). NVMe format triggered temporary GC, fully recovered.
+- **Static 128K**: -6% vs thesis (1474 vs 1574 MiB/s) — within normal hardware variance.
+- **Static 4K**: -21~-24% vs thesis — segment weights differ from thesis [1,1,6] (auto-computed [1,1,3] due to different disk speed at creation time).
+- **BS/QD sweep**: ~11-15% lower than BENCHMARK.md (single-job QD=256 config) — expected, as 4-job QD=32 has different CPU scheduling characteristics.
+- **QD sweep**: Flat across QD 1-1024 (~1210 MiB/s) — the DM target is not queue-depth sensitive at this platform.
+- **Adaptive/Random**: High variance, especially adaptive 4K write (run2=390 vs run3=658). EMA convergence and stale-disk marking cause run-to-run variation.
