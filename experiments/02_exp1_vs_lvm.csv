@@ -1,0 +1,9 @@
+exp_id,config,disks,disk_count,direction,run1,run2,run3,mean,stddev,vs_lvm_pct,vs_raw_pct,notes
+1,TieredVol weighted,nvme+sdb+sdc+sdd,4,write,,,,,,,,weighted striping
+1,LVM_1M stripe,nvme+sdb+sdc+sdd,4,write,,,,,,,,fixed 1M stripe
+1,LVM_256K stripe,nvme+sdb+sdc+sdd,4,write,,,,,,,,fixed 256K stripe
+1,Raw NVMe,nvme0n1,1,write,,,,,,,,baseline
+1,TieredVol weighted,nvme+sdb+sdc+sdd,4,read,,,,,,,,weighted striping
+1,LVM_1M stripe,nvme+sdb+sdc+sdd,4,read,,,,,,,,fixed 1M stripe
+1,LVM_256K stripe,nvme+sdb+sdc+sdd,4,read,,,,,,,,fixed 256K stripe
+1,Raw NVMe,nvme0n1,1,read,,,,,,,,baseline

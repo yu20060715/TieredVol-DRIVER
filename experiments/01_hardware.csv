@@ -1,0 +1,6 @@
+device,model,capacity,interface,pcie_gen,measured_speed_mb_s,measure_date,notes
+nvme0n1,CT1000P3PSSD8 (P3 Plus),931GB,NVMe PCIe 3.0x4,3.0x4,2783,2026-07-27,primary fast tier
+sdb,CT500MX500SSD1 (MX500),465GB,SATA,-,481,2026-07-27,mid tier
+sdc,WDC WDS250G2B0A (WD Blue),232GB,SATA,-,492,2026-07-27,mid tier
+sdd,Crucial BX100,232GB,SATA,-,366,2026-07-27,slow tier
+sda,S4610 960G,894GB,SATA,-,-,-,system disk - NOT used in experiments

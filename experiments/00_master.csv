@@ -1,0 +1,7 @@
+exp_id,name,status,date,version,hardware,thesis_section,key_result,notes
+1,TieredVol vs LVM,done,2026-07-27,v5.0.0,"nvme+sdb+sdc+sdd",Ch5,+125% vs LVM,PCIe 3.0 platform; 4-disk weighted vs fixed stripe
+2,Mirror failover,done,2026-07-27,v5.0.0,"failio_sdb+sdd",Ch5,PASS,md5 match before/after fault inject
+3,Adaptive vs Static,done,2026-07-27,v5.0.0,"nvme+sdb+sdc",Ch5,+10.6%,mixed workload with bg load on sdb
+4,Data integrity,done,2026-07-27,v5.0.0,"nvme+sdb+sdc",Ch5,ALL PASS,fio verify=crc32 all 4 tests
+5,3-tier SN750,pending,,v5.0.0,"nvme+sn750+sata",Ch5,,waiting for SN750 delivery ~2026-08-04
+6,NVMe scaling,pending,,v5.0.0,"1-4 NVMe",Ch5,,1→2→3→4 NVMe throughput curve
