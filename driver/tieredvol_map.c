@@ -1,8 +1,31 @@
 #include "tieredvol.h"
 #include <linux/random.h>
 
+/* Binary search for segment containing logical byte offset.
+ * Segments must be sorted by logical_begin (validated in constructor).
+ * Returns segment index, or -1 if not found.
+ */
+static int tv_find_segment(u64 logical, const struct tieredvol_metadata *meta)
+{
+	int lo = 0, hi = (int)meta->segment_count - 1;
+
+	while (lo <= hi) {
+		int mid = lo + (hi - lo) / 2;
+		const struct tieredvol_segment *seg = &meta->segments[mid];
+
+		if (logical < seg->logical_begin)
+			hi = mid - 1;
+		else if (logical >= seg->logical_end)
+			lo = mid + 1;
+		else
+			return mid;
+	}
+	return -1;
+}
+
 struct tieredvol_map tv_map_logical(u64 logical,
-				    struct tieredvol_metadata *meta)
+				    struct tieredvol_metadata *meta,
+				    u32 chunk_size)
 {
 	struct tieredvol_map err = { .disk = -1, .offset = 0, .length = 0 };
 	int seg_idx, disk_idx;
@@ -14,15 +37,7 @@ struct tieredvol_map tv_map_logical(u64 logical,
 	if (!meta || meta->segment_count == 0)
 		return err;
 
-	seg_idx = -1;
-	for (i = 0; i < (int)meta->segment_count; i++) {
-		if (logical >= meta->segments[i].logical_begin &&
-		    logical <  meta->segments[i].logical_end) {
-			seg_idx = i;
-			break;
-		}
-	}
-
+	seg_idx = tv_find_segment(logical, meta);
 	if (seg_idx < 0)
 		return err;
 
@@ -37,7 +52,7 @@ struct tieredvol_map tv_map_logical(u64 logical,
 	boundary[0] = 0;
 	for (i = 0; i < (int)seg->disk_count; i++)
 		boundary[i + 1] = boundary[i] +
-			(u64)seg->weight[i] * TV_CHUNK_SIZE;
+			(u64)seg->weight[i] * chunk_size;
 
 	disk_idx = -1;
 	for (i = 0; i < (int)seg->disk_count; i++) {
@@ -56,9 +71,9 @@ struct tieredvol_map tv_map_logical(u64 logical,
 		map.disk = (int)seg->disk_index[disk_idx];
 		map.seg_idx = seg_idx;
 		map.offset = stripe_no * (u64)seg->weight[disk_idx] *
-			     TV_CHUNK_SIZE +
+			     chunk_size +
 			     (offset_in - boundary[disk_idx]);
-		map.length = (u64)seg->weight[disk_idx] * TV_CHUNK_SIZE;
+		map.length = (u64)seg->weight[disk_idx] * chunk_size;
 
 		return map;
 	}
@@ -67,31 +82,26 @@ struct tieredvol_map tv_map_logical(u64 logical,
 struct tieredvol_map tv_map_logical_adaptive(u64 logical,
 					    struct tieredvol_metadata *meta,
 					    u64 *ema_load, bool *stale,
+					    bool *degraded,
 					    int ndisks,
-					    u64 *total_write_bytes,
-					    u32 wear_bias)
+					    atomic64_t *total_write_bytes,
+					    u32 wear_bias,
+					    u32 chunk_size,
+					    u64 *ema_latency_ns)
 {
 	struct tieredvol_map err = { .disk = -1, .offset = 0, .length = 0 };
 	int seg_idx;
 	const struct tieredvol_segment *seg;
 	u64 stripe_no, offset_in;
 	int best_disk = -1;
-	u64 best_load = (u64)-1;
+	u64 best_score = (u64)-1;
 	u64 total_writes = 0;
 	int i;
 
 	if (!meta || meta->segment_count == 0)
 		return err;
 
-	seg_idx = -1;
-	for (i = 0; i < (int)meta->segment_count; i++) {
-		if (logical >= meta->segments[i].logical_begin &&
-		    logical <  meta->segments[i].logical_end) {
-			seg_idx = i;
-			break;
-		}
-	}
-
+	seg_idx = tv_find_segment(logical, meta);
 	if (seg_idx < 0)
 		return err;
 
@@ -105,29 +115,57 @@ struct tieredvol_map tv_map_logical_adaptive(u64 logical,
 
 	if (wear_bias > 0 && total_write_bytes) {
 		for (i = 0; i < ndisks; i++)
-			total_writes += total_write_bytes[i];
+			total_writes += atomic64_read(&total_write_bytes[i]);
 	}
 
 	for (i = 0; i < (int)seg->disk_count; i++) {
 		u32 d = seg->disk_index[i];
-		u64 load;
+		u64 score;
 
 		if (d >= (u32)ndisks)
 			continue;
 		if (stale[d])
 			continue;
+		if (degraded && degraded[d])
+			continue;
 
-		load = ema_load[d];
+		/* Multi-factor scoring:
+		 * score = queue_depth + latency_penalty + wear_penalty
+		 * Lower score = better candidate
+		 */
+		score = ema_load[d];
+
+		/* Latency penalty from EMA latency (normalized to ~load scale) */
+		if (ema_latency_ns)
+			score += ema_latency_ns[d] / 1000000; /* ns → ms as score units */
+
+		/* Wear penalty */
 		if (wear_bias > 0 && total_writes > 0 && total_write_bytes)
-			load += wear_bias * total_write_bytes[d] / total_writes;
+			score += wear_bias * atomic64_read(&total_write_bytes[d]) / total_writes;
 
-		if (load < best_load) {
-			best_load = load;
+		if (score < best_score) {
+			best_score = score;
 			best_disk = i;
 		}
 	}
 
 	if (best_disk < 0) {
+		/* Fallback: prefer non-stale/non-degraded disks */
+		for (i = 0; i < (int)seg->disk_count; i++) {
+			u32 d = seg->disk_index[i];
+
+			if (d >= (u32)ndisks)
+				continue;
+			if (stale && stale[d])
+				continue;
+			if (degraded && degraded[d])
+				continue;
+			best_disk = i;
+			break;
+		}
+	}
+	if (best_disk < 0) {
+		/* Last resort: accept any valid disk (even stale/degraded) */
 		for (i = 0; i < (int)seg->disk_count; i++) {
 			u32 d = seg->disk_index[i];
 
@@ -143,7 +181,7 @@ struct tieredvol_map tv_map_logical_adaptive(u64 logical,
 
 	{
 		struct tieredvol_map map;
-		u64 disk_chunk = (u64)seg->weight[best_disk] * TV_CHUNK_SIZE;
+		u64 disk_chunk = (u64)seg->weight[best_disk] * chunk_size;
 
 		map.disk = (int)seg->disk_index[best_disk];
 		map.seg_idx = seg_idx;
@@ -156,7 +194,8 @@ struct tieredvol_map tv_map_logical_adaptive(u64 logical,
 }
 
 struct tieredvol_map tv_map_logical_random(u64 logical,
-					  struct tieredvol_metadata *meta)
+					  struct tieredvol_metadata *meta,
+					  u32 chunk_size)
 {
 	struct tieredvol_map err = { .disk = -1, .offset = 0, .length = 0 };
 	int seg_idx;
@@ -167,13 +206,8 @@ struct tieredvol_map tv_map_logical_random(u64 logical,
 	if (!meta || meta->segment_count == 0)
 		return err;
 
-	for (seg_idx = 0; seg_idx < (int)meta->segment_count; seg_idx++) {
-		if (logical >= meta->segments[seg_idx].logical_begin &&
-		    logical <  meta->segments[seg_idx].logical_end)
-			break;
-	}
-
-	if (seg_idx >= (int)meta->segment_count)
+	seg_idx = tv_find_segment(logical, meta);
+	if (seg_idx < 0)
 		return err;
 
 	seg = &meta->segments[seg_idx];
@@ -188,7 +222,7 @@ struct tieredvol_map tv_map_logical_random(u64 logical,
 
 	{
 		struct tieredvol_map map;
-		u64 disk_chunk = (u64)seg->weight[disk_idx] * TV_CHUNK_SIZE;
+		u64 disk_chunk = (u64)seg->weight[disk_idx] * chunk_size;
 
 		map.disk = (int)seg->disk_index[disk_idx];
 		map.seg_idx = seg_idx;

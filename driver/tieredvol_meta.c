@@ -2,6 +2,7 @@
 #include <linux/string.h>
 #include <linux/vmalloc.h>
 #include <linux/fs.h>
+#include <linux/crc32c.h>
 #include "tieredvol.h"
 
 #define TV_MAX_CONFIG_SIZE (1024 * 1024)
@@ -90,6 +91,47 @@ static int parse_num_prefix(const char *s, unsigned long *idx,
 	return 0;
 }
 
+/* Compute CRC32C over file content, excluding the "crc32=" line.
+ * Must match the kernel save path which computes crc32c(0, buf, off)
+ * over the entire content buffer atomically.
+ */
+static u32 tv_compute_config_crc(const char *buf, size_t len)
+{
+	const char *crc_line;
+	size_t crc_len;
+
+	/* Find the crc32= line and compute CRC over everything else */
+	crc_line = buf;
+	crc_len = 0;
+
+	/* Skip past the crc32= line */
+	{
+		const char *p = buf;
+		const char *end = buf + len;
+		size_t before_len = 0;
+
+		while (p < end) {
+			const char *nl = memchr(p, '\n', end - p);
+			size_t line_len = nl ? (size_t)(nl - p + 1) : (size_t)(end - p);
+
+			if (line_len >= 7 && memcmp(p, "crc32=", 6) == 0) {
+				/* CRC everything before this line */
+				crc_line = buf;
+				crc_len = before_len;
+				break;
+			}
+			before_len += line_len;
+			p = nl ? nl + 1 : end;
+			if (!nl)
+				break;
+		}
+		if (p >= end)
+			return 0; /* no crc32= line found */
+	}
+
+	return crc32c(0, crc_line, crc_len);
+}
+
 int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			    const char *path)
 {
@@ -97,10 +139,10 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 	loff_t pos = 0, file_size;
 	char *buf;
 	char *line, *next_line;
+	ssize_t bytes_read = 0;
 	int ret = 0;
-
-	if (!meta || !path)
-		return -EINVAL;
+	u32 expected_crc = 0;
+	bool has_crc = false;
 
 	f = filp_open(path, O_RDONLY, 0);
 	if (IS_ERR(f))
@@ -119,21 +161,75 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 	}
 
 	{
-		ssize_t nr;
-
-		nr = kernel_read(f, buf, file_size, &pos);
+		bytes_read = kernel_read(f, buf, file_size, &pos);
 		filp_close(f, NULL);
 
-		if (nr < 0) {
+		if (bytes_read < 0) {
 			vfree(buf);
-			return (int)nr;
+			return (int)bytes_read;
 		}
-		buf[nr] = '\0';
+		if (bytes_read == 0)
+			pr_warn("tieredvol: config file is empty\n");
+		buf[bytes_read] = '\0';
 	}
 
 	ret = 0;
 
 	memset(meta, 0, sizeof(*meta));
+
+	/* CRC32 pre-scan: find crc32= line before main parse loop.
+	 * Must not destroy the buffer — do NOT use parse_line() which writes \0.
+	 */
+	{
+		char *scan;
+
+		for (scan = buf; scan && *scan; ) {
+			char *nl = strchr(scan, '\n');
+			char *eq = strchr(scan, '=');
+			char saved_nl = nl ? *nl : '\0';
+			char saved_eq = '\0';
+
+			if (nl)
+				*nl = '\0';
+			if (eq) {
+				saved_eq = *eq;
+				*eq = '\0';
+			}
+
+			if (eq && strcmp(scan, "crc32") == 0) {
+				char *val = eq + 1;
+
+				if (nl)
+					*nl = '\0';
+				if (kstrtou32(val, 10, &expected_crc) == 0)
+					has_crc = true;
+				if (nl)
+					*nl = saved_nl;
+			}
+
+			if (eq)
+				*eq = saved_eq;
+			if (nl) {
+				*nl = saved_nl;
+				scan = nl + 1;
+			} else {
+				break;
+			}
+		}
+	}
+
+	/* CRC32 validation — must be computed before parsing modifies buf */
+	if (has_crc) {
+		u32 actual_crc = tv_compute_config_crc(buf, bytes_read);
+
+		if (actual_crc != expected_crc) {
+			pr_err("tieredvol: config CRC mismatch (expected=0x%08x actual=0x%08x) — file may be corrupted\n",
+			       expected_crc, actual_crc);
+			ret = -EIO;
+			goto out;
+		}
+		pr_info("tieredvol: config CRC OK (0x%08x)\n", actual_crc);
+	}
 
 	for (line = buf; line && *line; line = next_line) {
 		char *k, *v;
@@ -146,6 +242,12 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 
 		if (parse_line(line, &k, &v) < 0)
 			continue;
+
+		if (strcmp(k, "crc32") == 0) {
+			if (kstrtou32(v, 10, &expected_crc) == 0)
+				has_crc = true;
+			continue;
+		}
 
 		if (strcmp(k, "version") == 0) {
 			if (parse_u32(v, &meta->version) < 0) {
@@ -241,10 +343,21 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			seg->mirror_enabled = true;
 			seg->mirror_disk = mirror_idx;
 		}
+		} else if (strcmp(k, "policy") == 0) {
+			long v2;
+
+			if (kstrtol(v, 10, &v2) == 0)
+				meta->runtime_policy = (int)v2;
+		} else if (strcmp(k, "stale_ms") == 0) {
+			parse_u32(v, &meta->runtime_stale_ms);
+		} else if (strcmp(k, "ema_shift") == 0) {
+			parse_u32(v, &meta->runtime_ema_shift);
+		} else if (strcmp(k, "wear_bias") == 0) {
+			parse_u32(v, &meta->runtime_wear_bias);
 		}
 	}
 
-	/* Validate disk indices */
+	/* Validate disk indices and mirror safety */
 	{
 		u32 si, j;
 
@@ -258,6 +371,18 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 					       meta->disk_count);
 					ret = -EINVAL;
 					goto out;
+				}
+			}
+
+			if (seg->mirror_enabled) {
+				for (j = 0; j < seg->disk_count; j++) {
+					if (seg->disk_index[j] ==
+					    seg->mirror_disk) {
+						pr_err("tieredvol: seg%u mirror_disk %u is a stripe participant\n",
+						       si, seg->mirror_disk);
+						ret = -EINVAL;
+						goto out;
+					}
 				}
 			}
 		}
