@@ -10,6 +10,8 @@
 #include "cmd_create.h"
 #include "cmd_remove.h"
 
+#pragma GCC diagnostic ignored "-Wformat-truncation="
+
 static int is_kernel_target(const char *name) {
     char path[256];
     snprintf(path, sizeof(path), "/dev/mapper/%s", name);

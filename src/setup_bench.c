@@ -17,6 +17,8 @@
 #include "setup_discover.h"
 #include "setup_bench.h"
 #include "exec_helper.h"
+
+#pragma GCC diagnostic ignored "-Wformat-truncation="
 #include "warmup.h"
 
 static volatile sig_atomic_t bench_interrupted = 0;

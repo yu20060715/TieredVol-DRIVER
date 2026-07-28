@@ -11,6 +11,8 @@
 #include "exec_helper.h"
 #include "cmd_create.h"
 
+#pragma GCC diagnostic ignored "-Wformat-truncation="
+
 static int ensure_module_loaded(void) {
     FILE *f = fopen("/proc/modules", "r");
     if (f) {

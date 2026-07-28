@@ -50,9 +50,15 @@ test_metadata: tests/test_metadata.c src/tiered_types.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
 test: test_common test_partition test_metadata
-	@echo "=== test_common ===" && ./test_common && \
-	echo "=== test_partition ===" && ./test_partition && \
-	echo "=== test_metadata ===" && ./test_metadata
+	@TP=0; TR=0; \
+	for t in test_common test_partition test_metadata; do \
+		echo "=== $$t ===" && ./$$t; \
+		P=$$?; \
+		if [ $$P -eq 0 ]; then TP=$$((TP+1)); fi; \
+		TR=$$((TR+1)); \
+	done; \
+	echo ""; \
+	echo "=== Suites: $$TP/$$TR passed ==="
 
 test-full: test
 	@echo "Kernel module integration tests will be added in Phase 2"
