@@ -22,8 +22,14 @@ sudo pacman -S lvm2 liburing gcc make
 ### 編譯
 
 ```bash
-cd TieredVol
-make
+cd TieredVol-DRIVER
+make              # 編譯 tiered_setup
+sudo make install # 安裝到 /usr/local/bin
+
+# 編譯 kernel module（需要 kernel header）
+cd driver
+make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
+sudo insmod tieredvol.ko
 ```
 
 ---
@@ -137,10 +143,25 @@ sudo tiered_setup --remove --name fastpool
 ### 建立 Weighted I/O Scheduler Volume
 
 ```bash
+# 方式 1：使用 tiered_setup（推薦）
 sudo tiered_setup --create --name fastpool \
     --disks nvme0n1:1000,sda:500 \
     --scheduler
+
+# 方式 2：手動建立 config + dmsetup
+cat > /etc/tieredvol/v2bench.conf << 'EOF'
+crc32=49359161
+v2disk_start[0]=0
+v2disk_start[1]=1073741824
+v2disk_end[0]=1073741824
+v2disk_end[1]=2147483648
+v2weight[0]=7
+v2weight[1]=1
+EOF
+sudo dmsetup create v2bench --table '0 4194304 v2 /etc/tieredvol/v2bench.conf'
 ```
+
+> **手動建立時**：確認 `/dev/mapper/v2bench` 為 symlink 指向 `../dm-X`。若為普通檔案需先 `rm -f`。
 
 加上 `--scheduler` 參數後，不會建立 LVM volume，而是：
 1. 建立 dm-linear targets
@@ -148,158 +169,90 @@ sudo tiered_setup --create --name fastpool \
 3. 建立 segment 資料
 4. 儲存 metadata 到 `/etc/tieredvol/fastpool.scheduler`
 
-之後用 `tiered_io` 工具進行 I/O 操作。
+之後用 `fio` 工具操作 `/dev/mapper/fastpool`，進行 I/O 測試。
 
 ---
 
-## I/O 工具 (tiered_io) — DEPRECATED
+## I/O 工具 (fio)
 
-> **⚠ Removed in v5.0:** The `tiered_io` binary has been removed. The kernel
-> dm-target module now handles all I/O dispatch transparently. Use standard
-> `write()`/`read()` on `/dev/mapper/<name>` for data operations, and
-> `fio` for benchmarking. See `BENCHMARK.md` for benchmark commands.
+> **tiered_io 已移除（v5.0）：** kernel dm-target 已接手所有 I/O dispatch，標準 `write()`/`read()` 即可操作 `/dev/mapper/<name>`。Benchmark 使用 `fio`。
 
-`tiered_io` was the Weighted I/O Scheduler's I/O entry point. It is no longer part of the build.
-
-### 查看 Volume 資訊
+### 建立 DM Volume
 
 ```bash
-sudo tiered_io --name fastpool --info
+# 1. 建立 config（例如 2-disk 7:1 weight）
+cat > /etc/tieredvol/v2bench.conf << 'EOF'
+crc32=49359161
+v2disk_start[0]=0
+v2disk_start[1]=1073741824
+v2disk_end[0]=1073741824
+v2disk_end[1]=2147483648
+v2weight[0]=7
+v2weight[1]=1
+EOF
+
+# 2. 建立 dm device（需先確認 symlink 是否存在）
+sudo dmsetup create v2bench --table '0 4194304 v2 /etc/tieredvol/v2bench.conf'
+
+# 3. 確認 symlink 指向 block device
+ls -la /dev/mapper/v2bench
 ```
 
-輸出 metadata 和 segment 資訊：
+> **重要：** 建立 DM device 後，`/dev/mapper/v2bench` 必須是 symlink 指向 `../dm-X`。若為普通檔案，表示 symlink 遺失，需先 `rm -f /dev/mapper/v2bench` 再重建。
 
-```
-Metadata: v1, chunk=1MB, 2 disks, 2 segments
-  Disk[0] nvme0n1
-  Disk[1] sda
-  Segment[0]: 0 - 53687091200 (2 disks, stripe=3MB)
-    disk[0] weight=2 chunk=2MB
-    disk[1] weight=1 chunk=1MB
-  Segment[1]: 53687091200 - 107374182400 (1 disks, stripe=1MB)
-    disk[1] weight=1 chunk=1MB
-```
-
-### 寫入 Benchmark（Scheduler 模式）
+### Benchmark（fio）
 
 ```bash
-# 峰值速度（SLC cache 還在）
-sudo tiered_io --name fastpool --bench --size 128MB
+# Write benchmark — O_DIRECT（真實磁碟速度）
+sudo fio --filename=/dev/mapper/v2bench \
+    --ioengine=io_uring --direct=1 \
+    --rw=write --bs=1M --size=1G --iodepth=256
 
-# 持久速度（SLC cache 預熱後）
-sudo tiered_io --name fastpool --bench --size 128MB --warmup
+# Read benchmark — O_DIRECT
+sudo fio --filename=/dev/mapper/v2bench \
+    --ioengine=io_uring --direct=1 \
+    --rw=read --bs=1M --size=1G --iodepth=256
 
-# 大 size + O_DIRECT + 持久速度
-sudo tiered_io --name fastpool --bench --size 1GB --warmup
+# Random read — O_DIRECT
+sudo fio --filename=/dev/mapper/v2bench \
+    --ioengine=io_uring --direct=1 \
+    --rw=randread --bs=4k --size=256M --iodepth=256
 ```
 
-透過 weighted striping 寫入指定大小的資料，測量吞吐量。
-加 `--warmup` 先寫 20%% 的 volume（最多4GB）填滿 SLC cache 再測，得到持久速度。
-預設使用 O_DIRECT（繞過 page cache，得到真實磁碟速度）。加 `--no-direct` 可關閉。
+參數說明：
+| 參數 | 說明 |
+|------|------|
+| `--filename` | DM target 裝置路徑 |
+| `--ioengine=io_uring` | 使用 io_uring 非同步 I/O |
+| `--direct=1` | O_DIRECT，繞過 page cache |
+| `--rw` | 讀寫模式：`write`、`read`、`randread` |
+| `--bs` | Block size（1M = 順序，4k = 隨機） |
+| `--size` | 測試資料量 |
+| `--iodepth` | I/O queue depth（建議 256） |
 
-輸出範例：
-```
-Benchmark: 134217728 bytes (128.0 MB) in 0.234 seconds
-Throughput: 547.0 MB/s
-Stripes flushed: 667
-```
-
-### 完整 Benchmark Suite（Scheduler 模式）
+### 驗證 Block Stats
 
 ```bash
-# 執行所有 benchmark 模式
-sudo tiered_io --name fastpool --bench-all
+# 測試前先 reset stats
+sudo sh -c 'for f in /sys/block/dm-*/stat; do echo 0 0 0 0 0 0 0 0 0 0 0 > $f; done'
+
+# 跑 benchmark
+sudo fio --filename=/dev/mapper/v2bench \
+    --ioengine=io_uring --direct=1 \
+    --rw=write --bs=1M --size=1G --iodepth=256
+
+# 測試後查看 stats（確認哪些 disk 真的被寫入）
+cat /sys/block/nvme0n1/stat
+cat /sys/block/sdb/stat
 ```
 
-`--bench-all` 會依序執行 512MB、5120MB、10240MB 的 benchmark，每個 size 各跑兩輪（no warmup + with warmup）。
-
-### 寫入 Benchmark（Direct Path 模式，用於 LVM/filesystem 對比）
-
-```bash
-# 峰值速度
-sudo tiered_io --path /mnt/test --bench --size 128MB
-
-# 持久速度
-sudo tiered_io --path /mnt/test --bench --size 128MB --warmup
-
-# 完整 benchmark suite
-sudo tiered_io --path /mnt/test --bench-all
-```
-
-Direct path 模式使用 `pwrite()` 直接寫入指定路徑，適用於 LVM volume 或任何檔案系統。
-**使用相同的 TV_CHUNK_SIZE（目前 1MB）block size 和 O_DIRECT，確保與 scheduler 模式公平比較。**
-
-### 信號處理
-
-`tiered_io` 支援 SIGTERM 和 SIGINT（Ctrl+C）優雅中斷：
-
-- 收到信號後，等待目前 in-flight 的 I/O 完成
-- 清理 io_uring ring 和 stripe buffer
-- 正確關閉所有檔案描述元
-- 輸出已完成的 stripes 數量和部分吞吐量統計
-
-```bash
-# 優雅中斷（Ctrl+C）
-sudo tiered_io --name fastpool --bench --size 1GB
-^C
-# → 等待 in-flight I/O 完成後退出
-
-# 背景執行 + timeout
-sudo timeout 30s tiered_io --name fastpool --bench --size 1GB
-```
-
-### 寫入資料
-
-```bash
-dd if=/dev/zero bs=1M count=10 | sudo tiered_io --name fastpool --write --offset 0 --len 10485760
-```
-
-從 stdin 讀取資料，寫入 scheduler volume 的指定 offset。
-
-| 參數 | 說明 | 必填 |
-|------|------|------|
-| `--offset` | 起始邏輯 offset（bytes） | 否，預設 0 |
-| `--len` | 寫入長度（bytes） | 是 |
-
-### 讀取資料
-
-```bash
-sudo tiered_io --name fastpool --read --offset 0 --len 1024 | xxd
-```
-
-從 scheduler volume 讀取資料，輸出到 stdout。
-
-| 參數 | 說明 | 必填 |
-|------|------|------|
-| `--offset` | 起始邏輯 offset（bytes） | 否，預設 0 |
-| `--len` | 讀取長度（bytes） | 是 |
-
-### 完整測試流程
-
-```bash
-# 1. 建立 scheduler volume
-sudo tiered_setup --create --name testpool \
-    --disks nvme0n1:100,sda:100 \
-    --scheduler
-
-# 2. 確認 metadata
-sudo tiered_io --name testpool --info
-
-# 3. 寫入 benchmark
-sudo tiered_io --name testpool --bench --size 128MB
-
-# 4. 寫入 + 讀回驗證
-dd if=/dev/urandom bs=1M count=1 | sudo tiered_io --name testpool --write --offset 0 --len 1048576
-sudo tiered_io --name testpool --read --offset 0 --len 1048576 | md5sum
-
-# 5. 清理
-sudo tiered_setup --destroy --name testpool
-```
-
----
+> Write 領域的 sectors 計算方式：`(sectors / 2) / 1024 / 1024` = MiB。每個 disk 的寫入量應符合 weight 比例。
 
 ## 注意事項
 
+- **建立 DM device 前**，確認 `/dev/mapper/<name>` 沒有殘留的普通檔案（fio `O_CREAT` 會建立假檔案，導致 O_DIRECT 數據膨脹）
+- **O_DIRECT 測試**，`--filename` 必須是 block device 或 regular file，不可 pipe
+- **驗證**：benchmark 跑完後檢查 block stats，確認每個 disk 的寫入量符合 weight 比例
 - **系統碟無法使用** — 掛載 `/` 的硬碟會標記 `[ROOT]` 並鎖定
 - **已掛載硬碟無法使用** — 標記 `[MOUNTED]` 的硬碟會鎖定
 - **已切過的碟** — 如果硬碟已經被 carve 過（存在 `tv_*_carve` dm target），程式會報錯並提示先解除
@@ -307,52 +260,3 @@ sudo tiered_setup --destroy --name testpool
 - **每顆碟只能 carve 一次** — dm-linear 從 sector 0 開始，第二次 carve 會覆蓋第一次
 - 需要 root 權限執行所有操作
 - 建立 volume 時任何步驟失敗會**自動回滾**
-
----
-
-## 重開機保留
-
-TieredVol 的 volume 預設**不會在重開機後自動恢復**。要實現開機自動重建，需要安裝 systemd service。
-
-### 安裝
-
-```bash
-cd TieredVol
-make
-sudo make install
-sudo systemctl daemon-reload
-sudo systemctl enable tieredvol-restore
-```
-
-安裝後，每次建立 volume 時，systemd service 會在開機時自動讀取 `/etc/tieredvol/*.conf` 並重建。
-
-### 手動測試
-
-```bash
-# 模擬還原（不真的動手）
-sudo tieredvol-restore.sh --dry-run
-
-# 正式還原
-sudo tieredvol-restore.sh
-
-# 查看日誌
-journalctl -u tieredvol-restore
-```
-
-### 管理
-
-```bash
-sudo systemctl status tieredvol-restore   # 查看狀態
-sudo systemctl disable tieredvol-restore  # 停用開機自動還原
-sudo systemctl enable tieredvol-restore   # 重新啟用
-```
-
-### 運作原理
-
-```
-開機 → systemd 啟動 tieredvol-restore.service
-     → 讀取 /etc/tieredvol/*.conf
-     → 依序重建：dm-linear → pvcreate → vgcreate → lvcreate → mount
-```
-
-每個 volume 的 config 檔包含所有必要參數（碟名、容量、檔案系統、掛載點、stripe 大小），restore script 會逐一讀取並重建。

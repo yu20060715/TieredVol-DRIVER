@@ -1,5 +1,1 @@
 exp_id,test_name,verify_type,bytes_tested,result,bs,io_depth,notes
-4,sequential_write_read,crc32,1GB,,1M,256,fio --verify=crc32
-4,random_rw,crc32,256MB,,4K,64,fio --verify=crc32
-4,small_io_512b,crc32,128MB,,512B,128,tests bio splitting
-4,cross_segment_boundary,crc32,512MB,,2M,256,offset=200G

@@ -1,6 +1,1 @@
 exp_id,phase,md5_before,md5_after,match,error_count,rebuild_status,notes
-2,write+read_back,,,,,,256MB pattern write then read verify
-2,fault_inject,,,,,,"DM error on primary, read from mirror"
-2,read_after_fault,,,,,,"md5 match = PASS"
-2,rebuild,,,,,,rebuild from primary to mirror
-2,final_verify,,,,,,"md5 match after rebuild = PASS"

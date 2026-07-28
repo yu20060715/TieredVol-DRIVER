@@ -1,6 +1,1 @@
 thesis_ref,experiment,csv_file,row_filter,figure_type,notes
-Table 5.1,1,02_exp1_vs_lvm.csv,config=TieredVol,table,weighted vs LVM throughput comparison
-Table 5.2,1,01_hardware.csv,all disks,table,hardware baseline speeds
-Table 5.3,3,04_exp3_adaptive.csv,policy=adaptive,table,adaptive vs static under mixed load
-Figure 5.1,2,03_exp2_mirror.csv,phase=fault_inject,figure,mirror failover md5 verification
-Figure 5.2,3,04_exp3_adaptive.csv,workload=mixed,figure,adaptive advantage bar chart

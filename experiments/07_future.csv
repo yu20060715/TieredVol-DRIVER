@@ -1,5 +1,1 @@
 exp_id,name,description,hardware,blocked_by,expected_date,priority,status
-5,3-tier weighted striping,NVMe + SN750 + SATA 3-tier test,SN750 delivery,SN750 ~2026-08-04,high,pending
-6,NVMe scaling curve,1→2→3→4 NVMe throughput,2-4 NVMe drives,SN750 + extra NVMe,high,pending
-7,adaptive stress test,extreme mixed workload with 4+ concurrent bg loaders,TieredVol 4-disk,SN750,medium,pending
-8,power failure recovery,unclean shutdown + metadata replay,tiered_vol with journal,WIP in code,low,pending

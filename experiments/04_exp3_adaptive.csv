@@ -1,5 +1,1 @@
 exp_id,policy,workload,direction,run1,run2,run3,mean,stddev,adaptive_advantage_pct,bg_load_device,notes
-3,static,sequential,write,,,,,,,,"no bg load baseline"
-3,adaptive,sequential,write,,,,,,,,"no bg load baseline"
-3,static,mixed,write,,,,,,,sdb,"bg load on sdb via dd"
-3,adaptive,mixed,write,,,,,,,sdb,"bg load on sdb via dd"
