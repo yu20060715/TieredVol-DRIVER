@@ -148,6 +148,7 @@ struct tieredvol_map tv_map_logical_random(u64 logical,
 /* ---- tieredvol_meta.c exports ---- */
 int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			    const char *path);
+int tv_metadata_save_kernel(struct tieredvol_ctx *ctx);
 
 /* ---- tieredvol_log.c exports ---- */
 void tv_log(u8 level, u8 disk_idx, u8 event_type, const char *fmt, ...);

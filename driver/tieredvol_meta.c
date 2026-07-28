@@ -132,6 +132,143 @@ static u32 tv_compute_config_crc(const char *buf, size_t len)
 	return crc32c(0, crc_line, crc_len);
 }
 
+/* ---- Metadata write-back (kernel → file) ---- */
+
+static DEFINE_MUTEX(tv_save_mutex);
+
+int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
+{
+	struct file *f;
+	char *buf;
+	int off = 0;
+	int ret;
+	u32 crc;
+	loff_t pos = 0;
+	char bak_path[260];
+
+	if (!ctx->config_path[0])
+		return -ENOENT;
+
+	mutex_lock(&tv_save_mutex);
+
+	buf = kmalloc(65536, GFP_KERNEL);
+	if (!buf) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+
+	off += scnprintf(buf + off, 65536 - off, "[weighted_striping]\n");
+	off += scnprintf(buf + off, 65536 - off, "version=%u\n",
+			  ctx->meta.version);
+	off += scnprintf(buf + off, 65536 - off, "chunk_size=%u\n",
+			  ctx->meta.chunk_size);
+	off += scnprintf(buf + off, 65536 - off, "segment_count=%u\n",
+			  ctx->meta.segment_count);
+	off += scnprintf(buf + off, 65536 - off, "disk_count=%u\n",
+			  ctx->meta.disk_count);
+
+	for (u32 i = 0; i < ctx->meta.disk_count; i++)
+		off += scnprintf(buf + off, 65536 - off,
+				 "disk%u_name=%s\n", i, ctx->meta.disk_names[i]);
+
+	for (u32 i = 0; i < ctx->meta.segment_count; i++) {
+		struct tieredvol_segment *seg = &ctx->meta.segments[i];
+
+		off += scnprintf(buf + off, 65536 - off,
+				 "seg%u_begin=%llu\n", i, seg->logical_begin);
+		off += scnprintf(buf + off, 65536 - off,
+				 "seg%u_end=%llu\n", i, seg->logical_end);
+		off += scnprintf(buf + off, 65536 - off,
+				 "seg%u_count=%u\n", i, seg->disk_count);
+
+		off += scnprintf(buf + off, 65536 - off, "seg%u_disks=",
+				 i);
+		for (u32 j = 0; j < seg->disk_count; j++)
+			off += scnprintf(buf + off, 65536 - off,
+					 "%s%u", j ? "," : "", seg->disk_index[j]);
+		off += scnprintf(buf + off, 65536 - off, "\n");
+
+		off += scnprintf(buf + off, 65536 - off, "seg%u_weight=",
+				 i);
+		for (u32 j = 0; j < seg->disk_count; j++)
+			off += scnprintf(buf + off, 65536 - off,
+					 "%s%u", j ? "," : "", seg->weight[j]);
+		off += scnprintf(buf + off, 65536 - off, "\n");
+
+		off += scnprintf(buf + off, 65536 - off,
+				 "seg%u_stripe=%llu\n", i, seg->stripe_size);
+		if (seg->mirror_enabled)
+			off += scnprintf(buf + off, 65536 - off,
+					 "seg%u_mirror=%u\n", i,
+					 seg->mirror_disk);
+	}
+
+	off += scnprintf(buf + off, 65536 - off, "[runtime]\n");
+	off += scnprintf(buf + off, 65536 - off, "policy=%d\n",
+			  ctx->adaptive.policy);
+	off += scnprintf(buf + off, 65536 - off, "stale_ms=%llu\n",
+			  ctx->adaptive.stale_after_ns / 1000000ULL);
+	off += scnprintf(buf + off, 65536 - off, "ema_shift=%u\n",
+			  ctx->adaptive.ema_weight_shift);
+	off += scnprintf(buf + off, 65536 - off, "wear_bias=%u\n",
+			  ctx->adaptive.wear_bias);
+
+	crc = crc32c(0, buf, off);
+	off += scnprintf(buf + off, 65536 - off, "crc32=%u\n", crc);
+
+	scnprintf(bak_path, sizeof(bak_path), "%s.bak", ctx->config_path);
+
+	f = filp_open(ctx->config_path, O_RDONLY, 0);
+	if (!IS_ERR(f)) {
+		struct file *bak;
+
+		bak = filp_open(bak_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (!IS_ERR(bak)) {
+			char kbuf[256];
+			loff_t rpos = 0, wpos = 0;
+			ssize_t nrd;
+
+			while ((nrd = kernel_read(f, kbuf, sizeof(kbuf),
+						  &rpos)) > 0)
+				kernel_write(bak, kbuf, nrd, &wpos);
+			filp_close(bak, NULL);
+		}
+		filp_close(f, NULL);
+	}
+
+	f = filp_open(ctx->config_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (IS_ERR(f)) {
+		pr_err("tieredvol: save failed to open %s: %ld\n",
+		       ctx->config_path, PTR_ERR(f));
+		kfree(buf);
+		ret = PTR_ERR(f);
+		goto out_unlock;
+	}
+
+	pos = 0;
+	ret = kernel_write(f, buf, off, &pos);
+	filp_close(f, NULL);
+
+	if (ret != off) {
+		pr_err("tieredvol: save write error %d (wrote %lld of %d)\n",
+		       ret, pos, off);
+		kfree(buf);
+		ret = ret < 0 ? ret : -EIO;
+		goto out_unlock;
+	}
+
+	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "metadata saved crc=0x%08x",
+	       crc);
+	pr_info("tieredvol: metadata saved crc=0x%08x to %s\n", crc,
+		ctx->config_path);
+	kfree(buf);
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&tv_save_mutex);
+	return ret;
+}
+
 int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			    const char *path)
 {
