@@ -49,9 +49,12 @@ test_partition: tests/test_partition.c src/tiered_types.h $(SCHED_OBJS)
 test_metadata: tests/test_metadata.c src/tiered_types.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
-test: test_common test_partition test_metadata
+test_map: tests/test_map.c tests/test_common.h
+	$(CC) $(CFLAGS) -o $@ $<
+
+test: test_common test_partition test_metadata test_map
 	@TP=0; TR=0; \
-	for t in test_common test_partition test_metadata; do \
+	for t in test_common test_partition test_metadata test_map; do \
 		echo "=== $$t ===" && ./$$t; \
 		P=$$?; \
 		if [ $$P -eq 0 ]; then TP=$$((TP+1)); fi; \
@@ -103,7 +106,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_setup
 
 clean:
-	rm -f tiered_setup test_common test_partition test_metadata
+	rm -f tiered_setup test_common test_partition test_metadata test_map
 	rm -f src/*.o
 
 .PHONY: all install uninstall clean test test-full lint module module_install module_clean

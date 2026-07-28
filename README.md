@@ -165,7 +165,7 @@ sudo apt install lvm2 gcc make linux-headers-$(uname -r)
 
 ```bash
 make                    # Build tiered_setup
-make test               # Unit tests (67 assertions, 3 suites, no sudo)
+make test               # Unit tests (235 assertions, 4 suites, no sudo)
 make module             # Build kernel module
 sudo make module_install # Install kernel module
 sudo depmod -a          # Update module dependencies

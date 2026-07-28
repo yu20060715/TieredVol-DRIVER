@@ -46,12 +46,13 @@ int tv_pending_find_and_remove(struct block_device *bdev, sector_t sector,
 	int mirror_disk = -1;
 	int cpu;
 
+	get_cpu();
 	for_each_possible_cpu(cpu) {
 		struct tv_pending_read_cpu *pcpu = per_cpu_ptr(&tv_pcpu_reads, cpu);
 		unsigned int i;
 
 		for (i = 0; i < pcpu->count; i++) {
-			unsigned int idx = (pcpu->head + i) % 64;
+			unsigned int idx = (pcpu->head + i) % TV_PENDING_RING_SIZE;
 			struct tv_pending_read_entry *pr = &pcpu->entries[idx];
 
 			if (pr->bdev == bdev && pr->sector == sector &&
@@ -63,9 +64,9 @@ int tv_pending_find_and_remove(struct block_device *bdev, sector_t sector,
 					*mirror_sector_out = pr->mirror_sector;
 				for (j = i; j + 1 < pcpu->count; j++) {
 					unsigned int next =
-						(pcpu->head + j + 1) % 64;
+						(pcpu->head + j + 1) % TV_PENDING_RING_SIZE;
 
-					pcpu->entries[(pcpu->head + j) % 64] =
+					pcpu->entries[(pcpu->head + j) % TV_PENDING_RING_SIZE] =
 						pcpu->entries[next];
 				}
 				pcpu->count--;
@@ -74,6 +75,7 @@ int tv_pending_find_and_remove(struct block_device *bdev, sector_t sector,
 		}
 	}
 found:
+	put_cpu();
 	return mirror_disk;
 }
 EXPORT_SYMBOL_GPL(tv_pending_find_and_remove);
