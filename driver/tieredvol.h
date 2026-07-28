@@ -16,6 +16,7 @@
 #define TV_MAX_DISKS    TV_META_MAX_DISKS
 #define TV_MAX_SEGS     TV_META_MAX_SEGS
 #define TV_SECTOR_SHIFT 9
+#define TV_PENDING_RING_SIZE 64
 
 struct tieredvol_segment {
 	u64 logical_begin;
@@ -194,7 +195,7 @@ struct tv_pending_read_entry {
 };
 
 struct tv_pending_read_cpu {
-	struct tv_pending_read_entry entries[64];
+	struct tv_pending_read_entry entries[TV_PENDING_RING_SIZE];
 	unsigned int head;
 	unsigned int count;
 };
@@ -207,7 +208,7 @@ struct tv_pending_write_entry {
 };
 
 struct tv_pending_write_cpu {
-	struct tv_pending_write_entry entries[64];
+	struct tv_pending_write_entry entries[TV_PENDING_RING_SIZE];
 	unsigned int head;
 	unsigned int count;
 };

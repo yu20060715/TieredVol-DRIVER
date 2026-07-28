@@ -1,12 +1,9 @@
 # Build artifacts (userspace)
 tiered_setup
-tiered_io
 test_common
-test_mapper
 test_partition
 test_metadata
 src/*.o
-*.pyc
 
 # Kernel module build artifacts (also in driver/.gitignore)
 driver/*.o
@@ -28,3 +25,5 @@ driver/..module-common.o.cmd
 # OS
 .DS_Store
 Thumbs.db
+core
+*.core

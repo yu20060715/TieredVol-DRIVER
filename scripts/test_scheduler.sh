@@ -6,10 +6,10 @@
 # What it does:
 #   1. Detect available non-root, non-mounted disks
 #   2. Create a weighted I/O scheduler volume
-#   3. Benchmark with tiered_io --bench
+#   3. Benchmark with fio
 #   4. Destroy scheduler volume
 #   5. Create an LVM striped volume (same disks, same capacity)
-#   6. Benchmark with dd
+#   6. Benchmark with fio
 #   7. Print comparison table
 
 set -euo pipefail
@@ -17,10 +17,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETUP="$PROJECT_DIR/tiered_setup"
-IO="$PROJECT_DIR/tiered_io"
 TEST_NAME="tv_test_$$"
 MOUNT_POINT="/mnt/tv_test_$$"
-BENCH_SIZE="128MB"
+BENCH_SIZE="128M"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -58,8 +57,8 @@ if [[ ! -x "$SETUP" ]]; then
     fail "tiered_setup not found. Run: make clean && make"
     exit 1
 fi
-if [[ ! -x "$IO" ]]; then
-    fail "tiered_io not found. Run: make clean && make"
+if ! command -v fio &>/dev/null; then
+    fail "'fio' not found. Run: sudo apt install fio"
     exit 1
 fi
 
@@ -118,11 +117,12 @@ if [[ ! -f "/etc/tieredvol/${TEST_NAME}.scheduler" ]]; then
 fi
 ok "Scheduler volume created"
 
-log "Running tiered_io benchmark..."
-SCHED_RESULT=$("$IO" --name "$TEST_NAME" --bench --size "$BENCH_SIZE" 2>&1)
-SCHED_MBS=$(echo "$SCHED_RESULT" | grep "Throughput:" | awk '{print $2}')
+log "Running fio benchmark..."
+SCHED_RESULT=$(sudo fio --filename=/dev/mapper/"$TEST_NAME" --rw=write --bs=1M --size="$BENCH_SIZE" \
+    --direct=1 --ioengine=io_uring --iodepth=256 2>&1)
+SCHED_MBS=$(echo "$SCHED_RESULT" | grep "write:" | grep "MiB/s" | awk '{print $2}')
 echo "$SCHED_RESULT" | sed 's/^/  /'
-ok "Scheduler benchmark: ${SCHED_MBS:-?} MB/s"
+ok "Scheduler benchmark: ${SCHED_MBS:-?} MiB/s"
 
 log "Destroying scheduler volume..."
 "$SETUP" --destroy --name "$TEST_NAME" 2>&1 | sed 's/^/  /'
@@ -137,13 +137,14 @@ log "Creating LVM striped volume..."
     --fs ext4 --mount "$MOUNT_POINT" 2>&1 | sed 's/^/  /'
 ok "LVM volume created"
 
-log "Running dd benchmark..."
+log "Running fio benchmark on LVM..."
 sync
 echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
-DD_RESULT=$(dd if=/dev/zero of="${MOUNT_POINT}/benchfile" bs=1M count=128 oflag=direct 2>&1)
-DD_MBS=$(echo "$DD_RESULT" | grep -oP '[\d.]+(?= MB/s)')
+DD_RESULT=$(sudo fio --filename="${MOUNT_POINT}/benchfile" --rw=write --bs=1M --size="$BENCH_SIZE" \
+    --direct=1 --ioengine=io_uring --iodepth=256 2>&1)
+DD_MBS=$(echo "$DD_RESULT" | grep "write:" | grep "MiB/s" | awk '{print $2}')
 echo "  $DD_RESULT"
-ok "LVM benchmark: ${DD_MBS:-?} MB/s"
+ok "LVM benchmark: ${DD_MBS:-?} MiB/s"
 
 log "Destroying LVM volume..."
 "$SETUP" --destroy --name "$TEST_NAME" 2>&1 | sed 's/^/  /'
@@ -158,8 +159,8 @@ echo "=========================================="
 echo ""
 printf "  %-30s %10s\n" "Method" "Throughput"
 printf "  %-30s %10s\n" "------" "----------"
-printf "  %-30s %10s\n" "Weighted I/O Scheduler" "${SCHED_MBS:-?} MB/s"
-printf "  %-30s %10s\n" "LVM Striping (fixed)" "${DD_MBS:-?} MB/s"
+printf "  %-30s %10s\n" "Weighted I/O Scheduler" "${SCHED_MBS:-?} MiB/s"
+printf "  %-30s %10s\n" "LVM Striping (fixed)" "${DD_MBS:-?} MiB/s"
 echo ""
 
 if [[ -n "$SCHED_MBS" && -n "$DD_MBS" ]]; then

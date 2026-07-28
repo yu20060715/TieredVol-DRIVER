@@ -39,7 +39,7 @@ static int bench_disk(const char *disk, double *write_spd, double *read_spd, int
     int result = -1;
     double *ws = NULL;
     double *rs = NULL;
-    char cleanup_path[600] = "";
+    char cleanup_path[PATH_MAX] = "";
 
     struct sigaction sa_new, sa_old_int, sa_old_term;
     memset(&sa_new, 0, sizeof(sa_new));
@@ -364,7 +364,7 @@ int cmd_bench(int argc, char *argv[]) {
     disk_t info[TV_MAX_DISKS];
     for (int i = 0; i < nd; i++) {
         memset(&info[i], 0, sizeof(disk_t));
-        strncpy(info[i].disk, disks[i], 31);
+        snprintf(info[i].disk, sizeof(info[i].disk), "%s", disks[i]);
         sysfs_model(disks[i], info[i].model, sizeof(info[i].model));
         info[i].size_gb = sysfs_size_gb(disks[i]);
     }

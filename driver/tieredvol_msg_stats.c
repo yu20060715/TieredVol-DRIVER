@@ -89,7 +89,6 @@ static int msg_show_inflight(struct dm_target *ti, unsigned int argc,
 				ctx->meta.disk_names[i],
 				atomic_read(&ctx->io.in_flight_bytes[i]));
 	}
-	pr_info("tieredvol: %s\n", result);
 	return 0;
 }
 
@@ -109,7 +108,6 @@ static int msg_show_io_stats(struct dm_target *ti, unsigned int argc,
 				atomic64_read(&ctx->io.total_write_ops[i]),
 				atomic64_read(&ctx->io.total_write_bytes[i]));
 	}
-	pr_info("tieredvol: %s\n", result);
 	return 0;
 }
 

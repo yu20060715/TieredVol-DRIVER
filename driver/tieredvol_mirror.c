@@ -26,8 +26,8 @@ void tv_pending_add(struct block_device *bdev, sector_t sector,
 	struct tv_pending_read_cpu *pcpu = this_cpu_ptr(&tv_pcpu_reads);
 	unsigned int idx;
 
-	idx = (pcpu->head + pcpu->count) % 64;
-	if (pcpu->count < 64) {
+	idx = (pcpu->head + pcpu->count) % TV_PENDING_RING_SIZE;
+	if (pcpu->count < TV_PENDING_RING_SIZE) {
 		pcpu->entries[idx].bdev = bdev;
 		pcpu->entries[idx].sector = sector;
 		pcpu->entries[idx].mirror_sector = mirror_sector;
@@ -86,8 +86,8 @@ void tv_pw_add(struct block_device *bdev, sector_t sector, unsigned int size)
 	struct tv_pending_write_cpu *pcpu = this_cpu_ptr(&tv_pcpu_writes);
 	unsigned int idx;
 
-	idx = (pcpu->head + pcpu->count) % 64;
-	if (pcpu->count < 64) {
+	idx = (pcpu->head + pcpu->count) % TV_PENDING_RING_SIZE;
+	if (pcpu->count < TV_PENDING_RING_SIZE) {
 		pcpu->entries[idx].bdev = bdev;
 		pcpu->entries[idx].sector = sector;
 		pcpu->entries[idx].size = size;

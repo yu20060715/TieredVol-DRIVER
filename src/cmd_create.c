@@ -227,7 +227,7 @@ static int create_scheduler(char *name, char *disk_spec,
 }
 
 void make_target(char *out, size_t sz, const char *disk) {
-    snprintf(out, sz, "tv_%s_carve", disk);
+    snprintf(out, sz, "tv_%.20s_carve", disk);
 }
 
 void cleanup_create(const char *name, disk_t *valid, int valid_disks) {
@@ -262,7 +262,7 @@ int cmd_create(int argc, char *argv[]) {
     char *disk_spec = NULL;
     char *fs = "ext4";
     char *mount_point = NULL;
-    int stripe_size_kb = DEFAULT_STRIPE_SIZE_KB;
+    int stripe_size_kb = 512;
     int user_stripesize = 0;
     int use_scheduler = 0;
     int auto_confirm = 0;

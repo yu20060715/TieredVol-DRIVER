@@ -145,7 +145,7 @@ int cmd_remove(int argc, char *argv[]) {
     char targets[TV_MAX_DISKS][64];
     int ntargets = 0;
 
-    char conf_path[256];
+    char conf_path[512];
     snprintf(conf_path, sizeof(conf_path), TV_CONFIG_DIR "%s.conf", name);
     FILE *cf = fopen(conf_path, "r");
     if (cf) {
@@ -178,7 +178,7 @@ int cmd_remove(int argc, char *argv[]) {
 
     printf("Removing dm-linear carve targets...\n");
     for (int i = 0; i < ntargets; i++) {
-        { char dp[128]; snprintf(dp, sizeof(dp), "/dev/mapper/%s", targets[i]); char *pa[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", dp, NULL}; (void)tv_exec_run("pvremove", pa); }
+        { char dp[192]; snprintf(dp, sizeof(dp), "/dev/mapper/%s", targets[i]); char *pa[] = {"pvremove", "--config", "devices{scan=[\"/dev/mapper\"] obtain_device_list_from_udev=0}", "-ff", "-y", dp, NULL}; (void)tv_exec_run("pvremove", pa); }
         { char *da[] = {"sudo", "dmsetup", "remove", targets[i], NULL}; (void)tv_exec_sudo(da, 0); }
     }
 
@@ -200,8 +200,7 @@ int cmd_status(void) {
             int found = 0;
             while ((ent = readdir(d))) {
                 if (ent->d_name[0] == '.') continue;
-                if (strncmp(ent->d_name, "tv_", 3) == 0 ||
-                    strncmp(ent->d_name, "fastpool", 8) == 0) {
+                if (strncmp(ent->d_name, "tv_", 3) == 0) {
                     printf("  /dev/mapper/%s", ent->d_name);
                     if (is_kernel_target(ent->d_name))
                         printf(" [tieredvol]");

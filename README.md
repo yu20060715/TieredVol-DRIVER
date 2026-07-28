@@ -73,9 +73,6 @@ make module
 # Create a weighted volume (loads kernel module automatically)
 sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc --scheduler
 
-# Benchmark (expected: ~1500 MB/s)
-sudo ./benchmark.sh
-
 # Or manual fio:
 sudo fio --name=bench --filename=/dev/mapper/fastpool --rw=write --bs=2m \
   --size=2G --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1 --end_fsync=1
@@ -184,35 +181,51 @@ sudo make install       # Install to /usr/local/bin/
 ## Project Structure
 
 ```
-TieredVol-DRIVER-Enhancement/
+TieredVol-DRIVER/
 ├── README.md
+├── ARCHITECTURE.md
 ├── Makefile
-├── driver/                          # Kernel dm-target module
-│   ├── tieredvol.h                  # Central header: all structs + exports
-│   ├── tieredvol_core.c             # DM lifecycle: ctr/dtr/map/status/init/exit
-│   ├── tieredvol_map.c              # Logical→Physical: static/adaptive/random
-│   ├── tieredvol_mirror.c           # Mirror I/O + pending tracking + end_io
-│   ├── tieredvol_log.c              # Log ring buffer + EMA decay timer
-│   ├── tieredvol_meta.c             # Metadata read/write (config file)
-│   ├── tieredvol_sysfs.c            # sysfs interface
-│   ├── tieredvol_message.c          # DM message handler (show/set commands)
-│   └── Makefile
-├── src/                             # Userspace tools
-│   ├── tiered_setup                 # CLI: create/setup/configure
-│   ├── tieredvol_benchmark.c        # Benchmark utility
-│   ├── tieredvol_partition.c        # Disk partitioning logic
-│   └── cmd_create.c / cmd_scheduler.c / ...
-├── tests/                           # Test suite
-│   ├── test_*.sh                    # Shell integration tests (48)
-│   └── test_*.c                     # C unit tests (81)
+├── common/
+│   └── tieredvol_meta_format.h     # Shared constants (kernel + userspace)
+├── driver/                         # Kernel dm-target module
+│   ├── tieredvol.h                 # Central header: all structs + exports
+│   ├── tieredvol_core.c            # DM lifecycle: ctr/dtr/map/status/init/exit
+│   ├── tieredvol_map.c             # Logical→Physical: static/adaptive/random
+│   ├── tieredvol_mirror.c          # Mirror I/O + pending tracking + end_io
+│   ├── tieredvol_log.c             # Log ring buffer + EMA decay timer
+│   ├── tieredvol_meta.c            # Metadata read/write (config file)
+│   ├── tieredvol_sysfs.c           # sysfs interface
+│   ├── tieredvol_message.c         # DM message dispatch
+│   ├── tieredvol_msg_stats.c       # Stats message handlers
+│   ├── tieredvol_msg_policy.c      # Policy/adaptive handlers
+│   ├── tieredvol_msg_mirror.c      # Mirror/rebuild handlers
+│   ├── tieredvol_msg_config.c      # Config/log handlers
+│   └── Kbuild
+├── src/                            # Userspace tools
+│   ├── main.c                      # CLI entry point
+│   ├── tiered_types.h              # Core data structures
+│   ├── tiered_common.h             # Input validation
+│   ├── tiered_metadata.c           # Metadata save/load
+│   ├── tiered_partition.c          # Weight computation + segments
+│   ├── tiered_benchmark.c          # Raw device benchmark
+│   ├── warmup.c                    # SLC cache warm-up
+│   ├── cmd_create.c                # Volume creation (scheduler + LVM)
+│   ├── cmd_remove.c                # Volume removal + status
+│   ├── exec_helper.c               # fork/exec wrappers
+│   ├── setup_discover.c            # Block device discovery
+│   └── setup_bench.c               # Parallel disk benchmarking
+├── tests/
+│   ├── test_common.c               # Input validation tests
+│   ├── test_partition.c            # Weight/segment tests
+│   └── test_metadata.c             # Metadata round-trip tests
 ├── docs/
-│   ├── USAGE.md                     # Usage tutorial
-│   └── PARTITION_SPLITTING.md       # Weighted striping algorithm
-├── plan/
-│   └── asym-raid-comparison.md      # Academic comparison (Asym-RAID)
+│   ├── USAGE.md                    # Usage tutorial
+│   └── PARTITION_SPLITTING.md      # Weighted striping algorithm
 └── scripts/
-    ├── test_scheduler.sh            # End-to-end test
-    └── tieredvol-restore.sh         # Boot-time volume restore
+    ├── install_deps.sh             # Install dependencies + build
+    ├── test_scheduler.sh           # End-to-end test (fio)
+    ├── tieredvol-restore.sh        # Boot-time volume restore
+    └── tieredvol-restore.service   # systemd unit
 ```
 
 ### Kernel Module Architecture

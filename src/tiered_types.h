@@ -13,7 +13,6 @@ extern volatile sig_atomic_t g_shutdown_requested;
 #define TV_OK       0
 #define TV_ERR      (-1)
 
-#define DEFAULT_STRIPE_SIZE_KB  512
 #define TV_CONFIG_DIR           "/etc/tieredvol/"
 
 typedef struct {

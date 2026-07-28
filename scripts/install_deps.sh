@@ -91,7 +91,7 @@ echo "  Build successful!"
 echo "=========================================="
 echo ""
 echo "  Binaries:"
-ls -la tiered_setup tiered_io 2>/dev/null | awk '{print "    " $NF " (" $5 " bytes)"}'
+ls -la tiered_setup 2>/dev/null | awk '{print "    " $NF " (" $5 " bytes)"}'
 echo ""
 
 if [[ $DO_INSTALL -eq 1 ]]; then
@@ -100,7 +100,6 @@ if [[ $DO_INSTALL -eq 1 ]]; then
     echo ""
     echo "Installed! Run with:"
     echo "  sudo tiered_setup --list"
-    echo "  sudo tiered_io --name <vol> --info"
 fi
 
 if [[ $DO_TEST -eq 1 ]]; then
@@ -111,5 +110,5 @@ fi
 echo ""
 echo "Quick start:"
 echo "  sudo ./tiered_setup --list"
-echo "  sudo ./tiered_io --name <vol> --info"
-echo "  sudo ./scripts/test_scheduler.sh"
+echo "  sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb --scheduler"
+echo "  sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=2G --direct=1 --ioengine=io_uring --iodepth=256"

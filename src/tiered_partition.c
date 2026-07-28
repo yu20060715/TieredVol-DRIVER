@@ -83,7 +83,7 @@ int tv_build_segments(TV_DISK *disks, int ndisks, TV_SEGMENT *segs, int *nsegs) 
             if (segs[i].stripe_size != ref_stripe) {
                 fprintf(stderr, "tv: WARNING: stripe sizes differ across segments "
                         "(seg0=%lu, seg%d=%lu) — unequal capacities may cause "
-                        "incorrect offset calculations in flush_submit_io\n",
+                        "incorrect offset calculations\n",
                         (unsigned long)ref_stripe, i, (unsigned long)segs[i].stripe_size);
                 break;
             }
