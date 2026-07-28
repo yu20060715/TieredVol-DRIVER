@@ -1,1 +1,1 @@
-exp_id,impl,disks,size,write_mean,write_stddev,read_mean,read_stddev,status,notes
+exp_id,name,status,date,version,hardware,thesis_section,key_result,notes

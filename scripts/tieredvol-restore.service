@@ -1,0 +1,18 @@
+[Unit]
+Description=TieredVol — Restore striped volumes from config
+After=local-fs.target
+After=systemd-udevd.service
+Before=remote-fs.target
+Wants=systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tieredvol-restore.sh
+ExecStop=/bin/true
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tieredvol-restore
+
+[Install]
+WantedBy=multi-user.target

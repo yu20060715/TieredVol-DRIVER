@@ -1,1 +1,1 @@
-device,model,capacity,interface,pcie_gen,measured_speed,run1,run2,run3,mean,notes
+device,model,capacity,interface,pcie_gen,measured_speed_mb_s,measure_date,notes
