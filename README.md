@@ -1,10 +1,8 @@
-# TieredVol-DRIVER-Enhancement
-
-> **Research version.** All features developed here have been merged back to [TieredVol-DRIVER](https://github.com/yu20060715/TieredVol-DRIVER). This repo preserves the development history and roadmap.
+# TieredVol-DRIVER
 
 A kernel-level Device Mapper target for weighted striping across heterogeneous storage devices.
 
-TieredVol-DRIVER replaces the userspace io_uring I/O path with a kernel dm-target module (`tieredvol.ko`), achieving near-zero overhead. Applications interact with tiered storage through standard `write()`/`read()` syscalls on `/dev/mapper/<name>`.
+TieredVol-DRIVER replaces the userspace I/O path with a kernel dm-target module (`tieredvol.ko`), achieving near-zero overhead. Applications interact with tiered storage through standard `write()`/`read()` syscalls on `/dev/mapper/<name>`.
 
 ```
 Application

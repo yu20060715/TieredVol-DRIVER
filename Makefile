@@ -61,7 +61,23 @@ test: test_common test_partition test_metadata
 	echo "=== Suites: $$TP/$$TR passed ==="
 
 test-full: test
-	@echo "Kernel module integration tests will be added in Phase 2"
+	@TV_DEVS=$$(ls /dev/mapper/tv_* 2>/dev/null | head -1); \
+	if [ -z "$$TV_DEVS" ]; then \
+		echo "=== test-full ==="; \
+		echo "  SKIP  no /dev/mapper/tv_* device found (create one with: sudo tiered_setup --create ...)"; \
+	else \
+		echo "=== test-full: fio on $$TV_DEVS ==="; \
+		fio --name=write --filename=$$TV_DEVS --rw=write --bs=128k --direct=1 --ioengine=io_uring --iodepth=256 --size=128M --numjobs=1 --runtime=10 --time_based --group_reporting 2>&1 | tail -3; \
+		fio --name=read --filename=$$TV_DEVS --rw=read --bs=128k --direct=1 --ioengine=io_uring --iodepth=256 --size=128M --numjobs=1 --runtime=10 --time_based --group_reporting 2>&1 | tail -3; \
+	fi
+
+lint:
+	@echo "=== Lint: syntax check ===" && \
+	errors=0; \
+	for f in src/*.c; do \
+		gcc -fsyntax-only -Wall -Wextra -Wpedantic -std=gnu11 -D_GNU_SOURCE $$f 2>&1 || errors=$$((errors+1)); \
+	done; \
+	echo "=== Lint: $$errors file(s) with issues ==="
 
 # Kernel module targets
 module:
@@ -90,4 +106,4 @@ clean:
 	rm -f tiered_setup test_common test_partition test_metadata
 	rm -f src/*.o
 
-.PHONY: all install uninstall clean test test-full module module_install module_clean
+.PHONY: all install uninstall clean test test-full lint module module_install module_clean
