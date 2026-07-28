@@ -3,7 +3,7 @@
  *
  * Re-implements kernel mapping functions as pure C for userspace testing.
  * Tests tv_find_segment, tv_map_logical, tv_map_logical_adaptive,
- * and tv_map_logical_random with 200+ assertions.
+ * and tv_map_logical_random with 168 assertions.
  */
 #include <stdio.h>
 #include <stdlib.h>

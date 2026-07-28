@@ -39,7 +39,7 @@ src/cmd_create.o: src/cmd_create.c src/cmd_create.h src/tiered_types.h src/setup
 src/cmd_remove.o: src/cmd_remove.c src/cmd_remove.h src/cmd_create.h src/tiered_types.h src/setup_discover.h src/exec_helper.h src/tiered_common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Unit tests (no io_uring dependency — pure logic)
+# Unit tests (pure logic — no kernel/liburing dependency)
 test_common: tests/test_common.c src/tiered_common.h
 	$(CC) $(CFLAGS) -o $@ $<
 

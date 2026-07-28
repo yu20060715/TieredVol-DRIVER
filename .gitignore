@@ -3,6 +3,7 @@ tiered_setup
 test_common
 test_partition
 test_metadata
+test_map
 src/*.o
 
 # Kernel module build artifacts (also in driver/.gitignore)
