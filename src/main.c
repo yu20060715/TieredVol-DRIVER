@@ -2,12 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "tiered_common.h"
-#include "tiered_types.h"
 #include "version.h"
 #include "setup_discover.h"
 #include "setup_bench.h"
-#include "exec_helper.h"
 #include "cmd_create.h"
 #include "cmd_remove.h"
 

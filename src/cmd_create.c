@@ -3,10 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <dirent.h>
-#include <errno.h>
 #include "tiered_common.h"
 #include "tiered_types.h"
 #include "version.h"
@@ -61,7 +57,7 @@ static void cleanup_scheduler(const char *name, disk_t *valid, int valid_disks) 
     fprintf(stderr, "  Rollback complete.\n");
 }
 
-static int create_scheduler(int argc, char *argv[], char *name, char *disk_spec,
+static int create_scheduler(char *name, char *disk_spec,
                             int auto_confirm) {
     disk_t disks_arr[TV_MAX_DISKS];
     int nd = 0;
@@ -301,7 +297,7 @@ int cmd_create(int argc, char *argv[]) {
     }
 
     if (use_scheduler) {
-        return create_scheduler(argc, argv, name, disk_spec, auto_confirm);
+        return create_scheduler(name, disk_spec, auto_confirm);
     }
 
     if (!tiered_is_valid_fs(fs)) {

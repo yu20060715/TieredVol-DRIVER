@@ -8,11 +8,11 @@
 
 ## 資料結構
 
-所有 struct 定義在 `src/tieredvol_types.h`。以下是說明：
+所有 struct 定義在 `src/tiered_types.h`。以下是說明：
 
 ### TV_DISK
 
-碟資訊：id, fd, 容量, 可用容量, 速度, 權重, 物理 offset, 碟名。
+碟資訊：id, 可用容量, 速度, 權重, 碟名。
 
 初始化流程：
 ```
@@ -192,9 +192,7 @@ C 只有 512GB，A 和 B 有 1TB。當 C 用完後，剩下三顆碟的比例就
 
 分段資訊：邏輯 offset 範圍, 碟數量, 碟 index 陣列, 權重陣列, stripe size。
 
-定義見 `src/tieredvol_types.h`。
-
-#### 範例
+定義見 `src/tiered_types.h`。
 
 四顆碟容量：Disk0 4TB, Disk1 2TB, Disk2 2TB, Disk3 1TB
 
@@ -255,7 +253,7 @@ SATA 應拿：2400 × 480/1714  = 672KB
 
 ## Metadata
 
-Metadata 結構定義在 `src/tieredvol_types.h`（TV_METADATA）。
+Metadata 結構定義在 `src/tiered_types.h`（TV_METADATA）。
 
 儲存格式：
 ```
@@ -280,18 +278,10 @@ seg0_stripe=3670016
 
 ---
 
-## Runtime Mapping API
+## Offset Mapping
 
-```c
-// 定義在 src/tieredvol_types.h
+Mapping 在 kernel dm-target 時即時計算：
 
-TV_MAP tv_map_logical(uint64_t logical, TV_METADATA *meta);
-```
-
-輸入：logical offset
-輸出：TV_MAP（disk index, physical offset, length）
-
-Mapping 流程：
 ```
 輸入: logical offset
     ↓
@@ -300,11 +290,9 @@ Mapping 流程：
 stripe_no = (logical - segment_begin) / stripe_size
 offset_in = (logical - segment_begin) % stripe_size
     ↓
-binary search boundary → 找到 disk id
+prefix sum boundary → 找到 disk id
     ↓
 physical_offset = stripe_no × (weight × chunk) + offset_in_disk
-    ↓
-輸出: fd, physical offset, length
 ```
 
 ---
@@ -333,7 +321,7 @@ sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 -
 | 碟容量不同 | 依容量排序，分段處理（TV_SEGMENT） |
 | 動態速度變化 | 每輪動態計算比例（第二版 DRR） |
 | 資料結構 | TV_DISK（碟資訊）、TV_SEGMENT（分段）、TV_METADATA（持久化） |
-| Offset 映射 | prefix sum + linear scan → TV_MAP |
+| Offset 映射 | prefix sum + linear scan → (disk, physical offset) |
 
 ---
 
@@ -341,4 +329,4 @@ sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 -
 
 - Weighted striping 概念：參考儲存領域已有的 weighted allocation 概念
 - Ratio 近似演算法：四捨五入 + 上限（tv_compute_weight in tieredvol_partition.c）
-- 相關文件：[WEIGHTED_IO_SCHEDULER.md](WEIGHTED_IO_SCHEDULER.md)（I/O dispatch 實作）
+- 相關文件：[WEIGHTED_IO_SCHEDULER.md](../../TieredVol/docs/WEIGHTED_IO_SCHEDULER.md)（I/O dispatch 實作）

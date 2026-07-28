@@ -35,7 +35,7 @@ Application
 - Wear leveling (write-count-aware weight adjustment)
 - Per-disk I/O statistics (in-flight tracking, completion counters)
 - Integrity (CRC32C), atomic (O_DIRECT), crypto (AES-256-XTS) passthrough
-- Error detection with per-disk error_count and workqueue event notification
+- Error detection with per-disk error_count and degraded mode
 
 ### Key Results (kernel dm-target v5.0, fio + io_uring + QD=256)
 
@@ -115,11 +115,14 @@ NVMe idle waiting for SATA     All disks finish at approximately
 sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb --scheduler
 
 # Benchmark the volume
-sudo tiered_io --path /dev/mapper/fastpool --bench --size 5GB
-sudo tiered_io --path /dev/mapper/fastpool --bench-all
+sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=128k --size=5G \
+  --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1
+sudo fio --filename=/dev/mapper/fastpool --rw=read --bs=128k --size=5G \
+  --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1
 
 # Show volume metadata
-sudo tiered_io --name fastpool --info
+sudo dmsetup table fastpool
+sudo dmsetup status fastpool
 
 # Remove volume
 sudo tiered_setup --remove --name fastpool
@@ -132,7 +135,8 @@ sudo tiered_setup --remove --name fastpool
 sudo tiered_setup --create --name pool --disks sdb:300,sdc:200 --fs ext4 --mount /mnt/pool
 
 # Benchmark
-sudo tiered_io --path /dev/mapper/tv_vg_pool-tv_lv_pool --bench --size 5GB
+sudo fio --filename=/dev/mapper/tv_vg_pool-tv_lv_pool --rw=write --bs=128k --size=5G \
+  --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1
 
 # Remove
 sudo tiered_setup --remove --name pool
@@ -165,8 +169,8 @@ sudo apt install lvm2 gcc make linux-headers-$(uname -r)
 ## Build
 
 ```bash
-make                    # Build tiered_setup + tiered_io
-make test               # Unit tests (81 assertions, 4 suites, no sudo)
+make                    # Build tiered_setup
+make test               # Unit tests (67 assertions, 3 suites, no sudo)
 make module             # Build kernel module
 sudo make module_install # Install kernel module
 sudo depmod -a          # Update module dependencies
@@ -182,7 +186,6 @@ sudo make install       # Install to /usr/local/bin/
 ```
 TieredVol-DRIVER-Enhancement/
 ├── README.md
-├── VERIFY.md                        # Verification results + benchmarks
 ├── Makefile
 ├── driver/                          # Kernel dm-target module
 │   ├── tieredvol.h                  # Central header: all structs + exports

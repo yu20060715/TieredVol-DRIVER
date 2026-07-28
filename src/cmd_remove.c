@@ -1,17 +1,11 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
-#include <fcntl.h>
 #include <dirent.h>
-#include <errno.h>
 #include "tiered_common.h"
 #include "tiered_types.h"
-#include "version.h"
 #include "setup_discover.h"
-#include "setup_bench.h"
 #include "exec_helper.h"
 #include "cmd_create.h"
 #include "cmd_remove.h"

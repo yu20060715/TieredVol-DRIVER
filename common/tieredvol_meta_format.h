@@ -18,7 +18,5 @@
 /* ---- Limits ---- */
 #define TV_META_MAX_DISKS    16
 #define TV_META_MAX_SEGS     16
-#define TV_META_MAX_WEIGHT   16
-#define TV_META_CHUNK_SIZE   (1UL << 20)
 
 #endif /* TIEREDVOL_META_FORMAT_H */

@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-D_GNU_SOURCE -Wall -Wextra -Wpedantic -std=gnu11 -O2
 PREFIX=/usr/local
 
-SCHED_OBJS=src/tiered_partition.o src/tiered_mapper.o \
+SCHED_OBJS=src/tiered_partition.o \
            src/tiered_metadata.o src/tiered_benchmark.o src/warmup.o
 
 SETUP_OBJS=src/exec_helper.o src/setup_discover.o src/setup_bench.o src/cmd_create.o src/cmd_remove.o
@@ -13,9 +13,6 @@ tiered_setup: src/main.c src/tiered_common.h src/tiered_types.h src/version.h sr
 	$(CC) $(CFLAGS) -o $@ src/main.c $(SCHED_OBJS) $(SETUP_OBJS) -lm
 
 src/tiered_partition.o: src/tiered_partition.c src/tiered_types.h
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-src/tiered_mapper.o: src/tiered_mapper.c src/tiered_types.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/tiered_metadata.o: src/tiered_metadata.c src/tiered_types.h
@@ -46,18 +43,14 @@ src/cmd_remove.o: src/cmd_remove.c src/cmd_remove.h src/cmd_create.h src/tiered_
 test_common: tests/test_common.c src/tiered_common.h
 	$(CC) $(CFLAGS) -o $@ $<
 
-test_mapper: tests/test_mapper.c src/tiered_types.h $(SCHED_OBJS)
-	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
-
 test_partition: tests/test_partition.c src/tiered_types.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
 test_metadata: tests/test_metadata.c src/tiered_types.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
 
-test: test_common test_mapper test_partition test_metadata
+test: test_common test_partition test_metadata
 	@echo "=== test_common ===" && ./test_common && \
-	echo "=== test_mapper ===" && ./test_mapper && \
 	echo "=== test_partition ===" && ./test_partition && \
 	echo "=== test_metadata ===" && ./test_metadata
 
@@ -88,7 +81,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_setup
 
 clean:
-	rm -f tiered_setup test_common test_mapper test_partition test_metadata
+	rm -f tiered_setup test_common test_partition test_metadata
 	rm -f src/*.o
 
 .PHONY: all install uninstall clean test test-full module module_install module_clean

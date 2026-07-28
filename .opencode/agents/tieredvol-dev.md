@@ -23,24 +23,25 @@ You are the development agent for the TieredVol project running on the B85 Linux
 
 ### 1. Code Modification (when requested)
 
-- Modify source code in `src/`
+- Modify source code in `src/` or `driver/`
 - Follow existing code style: GNU C11, `-Wall -Wextra -Wpedantic`, no comments unless asked
 - Key files:
-  - `src/tiered_sched.c` — scheduler core (write/read/flush/seek)
-  - `src/tiered_partition.c` — weight calculation, segment building
-  - `src/tiered_metadata.c` — metadata save/load
-  - `src/tiered_io_uring.c` — io_uring wrapper
-  - `src/tiered_mapper.c` — logical↔physical offset mapping
+  - `src/tiered_setup.c` — volume creation, disk listing, benchmarking
+  - `src/tiered_metadata.c` — metadata save/load (kernel format)
+  - `src/tiered_io_uring.c` — io_uring wrapper (kernel-compatible)
   - `src/io_bench.c` — benchmarking infrastructure
-  - `src/cmd_create.c` — volume creation
-  - `src/cmd_remove.c` — volume removal
+  - `src/cmd_create.c` — volume creation commands
+  - `src/cmd_remove.c` — volume removal commands
+  - `src/main.c` — CLI entry point
+  - `driver/tieredvol_core.c` — kernel dm-target core (bio dispatch, completion)
+  - `driver/tieredvol.h` — kernel data structures
 
 ### 2. Compilation and Testing
 
 Always verify changes compile and pass tests before pushing:
 
 ```bash
-make clean && make          # Compile tiered_setup + tiered_io
+make clean && make          # Compile tiered_setup
 make test                   # Unit tests (no sudo required)
 sudo make test-full         # Unit + integration tests (requires loopback)
 ```
@@ -56,10 +57,10 @@ After code changes, run benchmarks and save results to `benchmarks/` directory.
 mkdir -p benchmarks
 ```
 
-**Run benchmarks** — use `tiered_io` with the existing pool. If no pool exists, create one first:
+**Run benchmarks** — use `fio` on the DM device. If no DM device exists, create one first:
 ```bash
-# Check if pool exists
-sudo ./tiered_setup --status
+# Check if DM device exists
+sudo dmsetup ls | grep tv_
 
 # If no scheduler pool exists, create one (adjust disks as needed):
 # sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc --scheduler
@@ -68,38 +69,42 @@ sudo ./tiered_setup --status
 **Benchmark protocol** for each scenario (2-disk and 3-disk):
 
 ```bash
-# For each scenario, run5 iterations with 10-second cooldown:
+# For each scenario, run 5 iterations with 10-second cooldown:
 
 # 5GB sequential write (5 runs)
 for i in 1 2 3 4 5; do
-    sudo ./tiered_io --name fastpool --bench --size 5GB 2>&1 | tee -a benchmarks/5gb_write_raw.txt
+    sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/5gb_write_raw.txt
     echo "--- Run $i done, cooling down 10s ---"
     sleep 10
 done
 
 # 10GB sequential write (5 runs)
 for i in 1 2 3 4 5; do
-    sudo ./tiered_io --name fastpool --bench --size 10GB 2>&1 | tee -a benchmarks/10gb_write_raw.txt
+    sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=10G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/10gb_write_raw.txt
     echo "--- Run $i done, cooling down 10s ---"
     sleep 10
 done
 
 # 5GB sequential read (5 runs)
 for i in 1 2 3 4 5; do
-    sudo ./tiered_io --name fastpool --bench-read --size 5GB 2>&1 | tee -a benchmarks/5gb_read_raw.txt
+    sudo fio --filename=/dev/mapper/fastpool --rw=read --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/5gb_read_raw.txt
     echo "--- Run $i done, cooling down 10s ---"
     sleep 10
 done
 
 # 10GB sequential read (5 runs)
 for i in 1 2 3 4 5; do
-    sudo ./tiered_io --name fastpool --bench-read --size 10GB 2>&1 | tee -a benchmarks/10gb_read_raw.txt
+    sudo fio --filename=/dev/mapper/fastpool --rw=read --bs=1M --size=10G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/10gb_read_raw.txt
     echo "--- Run $i done, cooling down 10s ---"
     sleep 10
 done
 ```
 
-**Note**: The exact CLI flags depend on the current `tiered_io` implementation. Check `./tiered_io --help` first.
+**Note**: The exact fio parameters can be adjusted. Check `fio --enghelp=io_uring` for io_uring options.
 
 After collecting raw data, compute statistics:
 
@@ -139,21 +144,18 @@ git push origin main
 
 ## Architecture Reference
 
-The scheduler uses a 3-layer architecture:
-1. **Offset Map** (`tiered_mapper.c`): pure-math logical→physical translation
-2. **Stripe Buffer** (`tiered_sched.c`): 64-entry ring for write coalescing
-3. **Dispatcher** (`tiered_sched.c` + `tiered_io_uring.c`): io_uring async I/O
+The driver uses a 2-layer architecture:
+1. **Kernel dm-target** (`driver/tieredvol_core.c`): bio dispatch, stripe calculation, per-disk submission via `submit_bio()`
+2. **Userspace setup** (`src/`): volume creation, metadata, CLI
 
 Key constants:
-- `TV_CHUNK_SIZE` = 1 MB (weight unit)
-- `TV_BUF_COUNT` = 64 (pipeline depth)
+- `TV_CHUNK_SIZE` = 1 MB (weight unit, compile-time)
 - `TV_MAX_DISKS` = 16
-- `TV_URING_QUEUE_DEPTH` = 256
+- `TV_URING_QUEUE_DEPTH` = 256 (kernel ring buffer)
 
 ## Constraints
 
 - Requires root (sudo) for dm-linear, benchmarks, and integration tests
-- io_uring requires Linux kernel 5.1+
-- liburing-dev must be installed
+- Kernel module requires matching kernel headers (`dkms` or manual build)
 - Do NOT modify `tests/` unless explicitly asked
 - Do NOT change API signatures (`tv_write`, `tv_read`, `tv_flush`, etc.) without explicit approval

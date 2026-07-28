@@ -3,20 +3,20 @@
 ## 系統需求
 
 - Linux（已測試 Ubuntu 24.04, kernel 6.14）
-- `lvm2` `dmsetup` `liburing-dev` `gcc` `make`
+- `lvm2` `dmsetup` `gcc` `make`
 - Root 權限（sudo）
 
 ### 安裝依賴
 
 ```bash
 # Debian / Ubuntu
-sudo apt install lvm2 liburing-dev gcc make
+sudo apt install lvm2 gcc make
 
 # Fedora / RHEL
-sudo dnf install lvm2 liburing-devel gcc make
+sudo dnf install lvm2 gcc make
 
 # Arch
-sudo pacman -S lvm2 liburing gcc make
+sudo pacman -S lvm2 gcc make
 ```
 
 ### 編譯

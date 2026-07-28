@@ -20,9 +20,6 @@
 struct tieredvol_ctx __rcu *tv_active_ctx;
 EXPORT_SYMBOL_GPL(tv_active_ctx);
 
-struct workqueue_struct *tv_wq;
-EXPORT_SYMBOL_GPL(tv_wq);
-
 static void trigger_event(struct work_struct *work)
 {
 	struct tieredvol_ctx *ctx = container_of(work, struct tieredvol_ctx,
@@ -554,14 +551,6 @@ static int __init tieredvol_init(void)
 		return ret;
 	}
 
-	tv_wq = alloc_workqueue("tieredvol_wq", WQ_UNBOUND | WQ_HIGHPRI, 0);
-	if (!tv_wq) {
-		dm_unregister_target(&tieredvol_target);
-		kfifo_free(&tv_log_fifo);
-		pr_err("tieredvol: workqueue alloc failed\n");
-		return -ENOMEM;
-	}
-
 	tv_sysfs_init();
 
 	/* Initialize per-disk timestamp ring locks */
@@ -580,7 +569,6 @@ static void __exit tieredvol_exit(void)
 {
 	tv_sysfs_exit();
 	dm_unregister_target(&tieredvol_target);
-	destroy_workqueue(tv_wq);
 	kfifo_free(&tv_log_fifo);
 	pr_info("tieredvol: module unloaded\n");
 }

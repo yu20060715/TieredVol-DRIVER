@@ -1,5 +1,5 @@
 ---
-description: "B85 benchmark agent: run full TieredVol vs LVM comparison suite on same disk configuration, save results to benchmarks/, push to git."
+description: "B85 benchmark agent: run full TieredVol driver vs LVM comparison suite on same disk configuration, save results to benchmarks/, push to git."
 mode: primary
 permission:
   edit: allow
@@ -9,7 +9,7 @@ permission:
     "echo * | sudo -S *": allow
     "sudo -S ./tiered_*": allow
     "echo * | sudo -S ./tiered_*": allow
-    "./tiered_io *": allow
+    "sudo fio *": allow
     "./tiered_setup *": allow
     "git *": allow
     "mkdir *": allow
@@ -19,6 +19,7 @@ permission:
     "perf *": allow
     "sync": allow
     "echo 3 | sudo -S tee *": allow
+    "sudo dmsetup *": allow
     "*": ask
 ---
 
@@ -26,9 +27,9 @@ permission:
 
 You are the benchmark automation agent for the TieredVol project running on the B85 Linux machine.
 
-**Working directory**: `/home/yu/TieredVol`
+**Working directory**: `/home/yu/TieredVol-DRIVER`
 **Sudo password**: `950715`
-**Goal**: Run the complete TieredVol vs LVM benchmark suite, save all results to `benchmarks/`, generate a summary, and push to git.
+**Goal**: Run the complete TieredVol driver vs LVM benchmark suite, save all results to `benchmarks/`, generate a summary, and push to git.
 
 ---
 
@@ -46,7 +47,7 @@ You are the benchmark automation agent for the TieredVol project running on the 
 ## Step 0: Environment Check
 
 ```bash
-cd /home/yu/TieredVol
+cd /home/yu/TieredVol-DRIVER
 
 echo 950715 | sudo -S echo "sudo OK" 2>/dev/null
 
@@ -75,7 +76,7 @@ done
 Create a timestamped run directory for raw output:
 ```bash
 RUN_TS=$(date +%Y%m%d_%H%M%S)
-mkdir -p /home/yu/TieredVol/benchmarks/run_${RUN_TS}
+mkdir -p /home/yu/TieredVol-DRIVER/benchmarks/run_${RUN_TS}
 echo "Raw output directory: benchmarks/run_${RUN_TS}"
 ```
 
@@ -94,7 +95,8 @@ echo 950715 | sudo -S ./tiered_setup --create --name tv_test_2d \
 echo "[T1] 2-disk 5GB write — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/2disk_5gb_write_raw.txt
-    echo 950715 | sudo -S ./tiered_io --name tv_test_2d --bench --size 5GB 2>&1 | tee -a benchmarks/run_${RUN_TS}/2disk_5gb_write_raw.txt
+    sudo fio --filename=/dev/mapper/tv_test_2d --rw=write --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/2disk_5gb_write_raw.txt
     sleep 10
 done
 
@@ -110,7 +112,8 @@ echo 950715 | sudo -S ./tiered_setup --create --name tv_test_2d \
 echo "[T2] 2-disk 5GB read — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/2disk_5gb_read_raw.txt
-    echo 950715 | sudo -S ./tiered_io --name tv_test_2d --bench-read --size 5GB 2>&1 | tee -a benchmarks/run_${RUN_TS}/2disk_5gb_read_raw.txt
+    sudo fio --filename=/dev/mapper/tv_test_2d --rw=read --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/2disk_5gb_read_raw.txt
     sleep 10
 done
 
@@ -126,7 +129,8 @@ echo 950715 | sudo -S ./tiered_setup --create --name tv_test_2d \
 echo "[T3] 2-disk 512MB write — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/2disk_512mb_write_raw.txt
-    echo 950715 | sudo -S ./tiered_io --name tv_test_2d --bench --size 512MB 2>&1 | tee -a benchmarks/run_${RUN_TS}/2disk_512mb_write_raw.txt
+    sudo fio --filename=/dev/mapper/tv_test_2d --rw=write --bs=1M --size=512M \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/2disk_512mb_write_raw.txt
     sleep 10
 done
 
@@ -148,7 +152,8 @@ echo 950715 | sudo -S ./tiered_setup --create --name tv_test_3d \
 echo "[T4] 3-disk 5GB write — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/3disk_5gb_write_raw.txt
-    echo 950715 | sudo -S ./tiered_io --name tv_test_3d --bench --size 5GB 2>&1 | tee -a benchmarks/run_${RUN_TS}/3disk_5gb_write_raw.txt
+    sudo fio --filename=/dev/mapper/tv_test_3d --rw=write --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/3disk_5gb_write_raw.txt
     sleep 10
 done
 
@@ -164,7 +169,8 @@ echo 950715 | sudo -S ./tiered_setup --create --name tv_test_3d \
 echo "[T5] 3-disk 5GB read — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/3disk_5gb_read_raw.txt
-    echo 950715 | sudo -S ./tiered_io --name tv_test_3d --bench-read --size 5GB 2>&1 | tee -a benchmarks/run_${RUN_TS}/3disk_5gb_read_raw.txt
+    sudo fio --filename=/dev/mapper/tv_test_3d --rw=read --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/3disk_5gb_read_raw.txt
     sleep 10
 done
 
@@ -177,7 +183,7 @@ echo 950715 | sudo -S ./tiered_setup --destroy --name tv_test_3d 2>&1
 
 **This is the critical fair-comparison section.** Use the SAME disks and SAME carve sizes as TieredVol, but create LVM striped volumes instead of scheduler volumes.
 
-Use `tiered_io --path <raw_device> --bench --size <N> --raw` to benchmark the raw LVM block device with O_DIRECT, matching TieredVol's I/O path.
+Use `sudo fio --filename=<device> --rw=write --bs=1M --size=<N> --direct=1 --ioengine=io_uring --iodepth=256` to benchmark the raw LVM block device with O_DIRECT, matching TieredVol's I/O path.
 
 ### L1: LVM 2-disk NVMe+SATA 5GB Write
 
@@ -192,7 +198,8 @@ echo "LVM LV path: $LV_PATH"
 echo "[L1] LVM 2-disk NVMe+SATA 5GB write — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_5gb_write_raw.txt
-    echo 950715 | sudo -S ./tiered_io --path "$LV_PATH" --bench --size 5GB --raw 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_5gb_write_raw.txt
+    sudo fio --filename="$LV_PATH" --rw=write --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_5gb_write_raw.txt
     sleep 10
 done
 
@@ -210,7 +217,8 @@ LV_PATH=$(echo 950715 | sudo -S lvs --noheadings -o lv_path tv_test_2d 2>/dev/nu
 echo "[L2] LVM 2-disk NVMe+SATA 5GB read — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_5gb_read_raw.txt
-    echo 950715 | sudo -S ./tiered_io --path "$LV_PATH" --bench-read --size 5GB --raw 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_5gb_read_raw.txt
+    sudo fio --filename="$LV_PATH" --rw=read --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_5gb_read_raw.txt
     sleep 10
 done
 
@@ -228,7 +236,8 @@ LV_PATH=$(echo 950715 | sudo -S lvs --noheadings -o lv_path tv_test_2d 2>/dev/nu
 echo "[L3] LVM 2-disk NVMe+SATA 512MB write — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_512mb_write_raw.txt
-    echo 950715 | sudo -S ./tiered_io --path "$LV_PATH" --bench --size 512MB --raw 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_512mb_write_raw.txt
+    sudo fio --filename="$LV_PATH" --rw=write --bs=1M --size=512M \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_2disk_512mb_write_raw.txt
     sleep 10
 done
 
@@ -246,7 +255,8 @@ LV_PATH=$(echo 950715 | sudo -S lvs --noheadings -o lv_path tv_test_3d 2>/dev/nu
 echo "[L4] LVM 3-disk NVMe+2×SATA 5GB write — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/lvm_nvsata_3disk_5gb_write_raw.txt
-    echo 950715 | sudo -S ./tiered_io --path "$LV_PATH" --bench --size 5GB --raw 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_3disk_5gb_write_raw.txt
+    sudo fio --filename="$LV_PATH" --rw=write --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_3disk_5gb_write_raw.txt
     sleep 10
 done
 
@@ -264,7 +274,8 @@ LV_PATH=$(echo 950715 | sudo -S lvs --noheadings -o lv_path tv_test_3d 2>/dev/nu
 echo "[L5] LVM 3-disk NVMe+2×SATA 5GB read — 5 runs"
 for i in 1 2 3 4 5; do
     echo "--- Run $i ---" >> benchmarks/run_${RUN_TS}/lvm_nvsata_3disk_5gb_read_raw.txt
-    echo 950715 | sudo -S ./tiered_io --path "$LV_PATH" --bench-read --size 5GB --raw 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_3disk_5gb_read_raw.txt
+    sudo fio --filename="$LV_PATH" --rw=read --bs=1M --size=5G \
+        --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_nvsata_3disk_5gb_read_raw.txt
     sleep 10
 done
 
@@ -289,7 +300,8 @@ for STRIPE in 128 256 512 1024; do
     echo "[S1] LVM stripe=${STRIPE}KB 5GB write — 3 runs"
     for i in 1 2 3; do
         echo "--- Run $i (stripe=${STRIPE}KB) ---" >> benchmarks/run_${RUN_TS}/lvm_stripesize_${STRIPE}kb_raw.txt
-        echo 950715 | sudo -S ./tiered_io --path "$LV_PATH" --bench --size 5GB --raw 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_stripesize_${STRIPE}kb_raw.txt
+        sudo fio --filename="$LV_PATH" --rw=write --bs=1M --size=5G \
+            --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/lvm_stripesize_${STRIPE}kb_raw.txt
         sleep 10
     done
 
@@ -319,7 +331,8 @@ for CHUNK_KB in 256 512; do
     echo "[S2] TieredVol chunk=${CHUNK_KB}KB 5GB write — 3 runs"
     for i in 1 2 3; do
         echo "--- Run $i (chunk=${CHUNK_KB}KB) ---" >> benchmarks/run_${RUN_TS}/chunksize_${CHUNK_KB}kb_raw.txt
-        echo 950715 | sudo -S ./tiered_io --name tv_chunk_${CHUNK_KB} --bench --size 5GB 2>&1 | tee -a benchmarks/run_${RUN_TS}/chunksize_${CHUNK_KB}kb_raw.txt
+        sudo fio --filename=/dev/mapper/tv_chunk_${CHUNK_KB} --rw=write --bs=1M --size=5G \
+            --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee -a benchmarks/run_${RUN_TS}/chunksize_${CHUNK_KB}kb_raw.txt
         sleep 10
     done
 
@@ -344,8 +357,9 @@ echo 950715 | sudo -S ./tiered_setup --create --name tv_test_3d \
     --disks nvme0n1:100,sda:100,sdb:100 --scheduler 2>&1
 
 echo "[I1] strace io_uring_enter count — 3-disk 5GB write"
-echo 950715 | sudo -S strace -e trace=io_uring_enter -c \
-    ./tiered_io --name tv_test_3d --bench --size 5GB 2>&1 | tee benchmarks/run_${RUN_TS}/uring_3disk_strace_count.txt
+sudo strace -e trace=io_uring_enter -c \
+    fio --filename=/dev/mapper/tv_test_3d --rw=write --bs=1M --size=5G \
+    --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee benchmarks/run_${RUN_TS}/uring_3disk_strace_count.txt
 
 echo 950715 | sudo -S ./tiered_setup --destroy --name tv_test_3d 2>&1
 ```
@@ -357,8 +371,9 @@ echo 950715 | sudo -S ./tiered_setup --create --name tv_test_3d \
     --disks nvme0n1:100,sda:100,sdb:100 --scheduler 2>&1
 
 echo "[I2] perf stat — 3-disk 5GB write"
-echo 950715 | sudo -S perf stat -e syscalls:sys_enter_io_uring_enter,syscalls:sys_exit_io_uring_enter \
-    ./tiered_io --name tv_test_3d --bench --size 5GB 2>&1 | tee benchmarks/run_${RUN_TS}/uring_3disk_perf_stat.txt
+sudo perf stat -e syscalls:sys_enter_io_uring_enter,syscalls:sys_exit_io_uring_enter \
+    fio --filename=/dev/mapper/tv_test_3d --rw=write --bs=1M --size=5G \
+    --direct=1 --ioengine=io_uring --iodepth=256 2>&1 | tee benchmarks/run_${RUN_TS}/uring_3disk_perf_stat.txt
 
 echo 950715 | sudo -S ./tiered_setup --destroy --name tv_test_3d 2>&1
 ```
@@ -488,7 +503,7 @@ echo "=============================================="
 ## Step 10: Git Commit and Push
 
 ```bash
-cd /home/yu/TieredVol
+cd /home/yu/TieredVol-DRIVER
 
 git add benchmarks/
 git status
@@ -517,18 +532,19 @@ echo "[DONE] All benchmarks completed and pushed."
 - Clean up: `echo 950715 | sudo -S ./tiered_setup --destroy --name <vol>`
 - Retry once, then skip and log error
 
-### If `tiered_io --bench` fails:
-- Check disk space: `df -h /dev/mapper/tv_*`
+### If fio on DM device fails:
+- Check DM device exists: `ls -la /dev/mapper/tv_test_*`
+- Check DM status: `echo 950715 | sudo -S dmsetup status tv_test_2d`
 - Check dmesg for errors: `echo 950715 | sudo -S dmesg | tail -20`
 - Retry once, then skip and log error
 
-### If `tiered_io --path --bench --raw` fails on LVM LV:
+### If fio --raw fails on LVM LV:
 - The LV may not support O_DIRECT. Fall back to filesystem benchmark:
   ```bash
   echo 950715 | sudo -S mkfs.ext4 "$LV_PATH"
   echo 950715 | sudo -S mkdir -p /mnt/lvtest
   echo 950715 | sudo -S mount "$LV_PATH" /mnt/lvtest
-  echo 950715 | sudo -S ./tiered_io --path /mnt/lvtest --bench --size 5GB
+  sudo fio --filename=/mnt/lvtest --rw=write --bs=1M --size=5G --direct=1 --ioengine=io_uring --iodepth=256
   echo 950715 | sudo -S umount /mnt/lvtest
   ```
 - Log that raw benchmark was not possible

@@ -183,7 +183,6 @@ extern raw_spinlock_t tv_log_lock;
 extern raw_spinlock_t tv_ts_lock_arr[];
 extern u8 tv_log_level;
 extern unsigned int log_size;
-extern struct workqueue_struct *tv_wq;
 
 /* ---- Pending-read tracking (per-CPU, lockless) ---- */
 struct tv_pending_read_entry {

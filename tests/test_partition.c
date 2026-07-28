@@ -3,6 +3,9 @@
 #include "../src/tiered_types.h"
 #include "test_common.h"
 
+uint32_t tv_compute_weight(uint64_t speed, uint64_t slowest);
+uint64_t tv_compute_stripe_size(uint32_t *weights, int nweights, uint32_t chunk_size);
+
 static void test_weight_fast(void) {
     printf("\n[TEST] tv_compute_weight fast disk\n");
     uint32_t w = tv_compute_weight(3000, 500);
