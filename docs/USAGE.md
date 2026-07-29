@@ -1,5 +1,16 @@
 # TieredVol 使用教學
 
+## 文件索引
+
+| 文件 | 說明 |
+|------|------|
+| `ARCHITECTURE.md` | 整體資料流與模組職責 |
+| `MAPPING.md` | Logical→Physical 映射演算法 |
+| `MIRROR.md` | Mirror RAID1 實作 |
+| `WC.md` | Write Coalescing 寫入合併 |
+| `CONFIG.md` | 設定檔完整參考 |
+| `PARTITION_SPLITTING.md` | Segment 切分原理 |
+
 ## 系統需求
 
 - Linux（已測試 Ubuntu 24.04, kernel 6.14）

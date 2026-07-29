@@ -1,0 +1,122 @@
+# Config — 設定檔參考
+
+## 格式
+
+INI 格式，儲存在 `/etc/tieredvol/<name>.conf`。
+
+## 完整範例
+
+```ini
+[weighted_striping]
+version=1
+chunk_size=1048576
+segment_count=2
+disk_count=4
+disk0_name=/dev/nvme0n1
+disk1_name=/dev/sdb
+disk2_name=/dev/sdc
+disk3_name=/dev/sdd
+seg0_begin=0
+seg0_end=1073741824
+seg0_count=4
+seg0_disks=0,1,2,3
+seg0_weight=6,3,2,1
+seg0_stripe=12582912
+seg0_mirror=3
+seg1_begin=1073741824
+seg1_end=2147483648
+seg1_count=2
+seg1_disks=0,1
+seg1_weight=3,1
+seg1_stripe=4194304
+```
+
+## 參數說明
+
+### 全域
+
+| 參數 | 型態 | 必填 | 說明 |
+|------|------|------|------|
+| `version` | int | 是 | 格式版本（目前 = 1） |
+| `chunk_size` | int | 是 | chunk 大小（bytes），建議 1048576（1MB） |
+| `segment_count` | int | 是 | segment 數量（上限 16） |
+| `disk_count` | int | 是 | disk 數量（上限 16） |
+| `disk{X}_name` | string | 是 | 第 X 顆 disk 的裝置路徑 |
+
+### Per-Segment
+
+| 參數 | 型態 | 必填 | 說明 |
+|------|------|------|------|
+| `seg{X}_begin` | uint64 | 是 | segment 起始 logical byte |
+| `seg{X}_end` | uint64 | 是 | segment 結束 logical byte |
+| `seg{X}_count` | int | 是 | 此 segment 使用的 disk 數量 |
+| `seg{X}_disks` | csv | 是 | disk index 列表（逗號分隔） |
+| `seg{X}_weight` | csv | 是 | weight 列表（逗號分隔，與 disks 對應） |
+| `seg{X}_stripe` | int | 是 | stripe 大小（bytes） |
+| `seg{X}_mirror` | int | 否 | mirror disk index（不指定則無 mirror） |
+| `seg{X}_policy` | string | 否 | dispatch policy（static / adaptive / random） |
+
+## 參數計算
+
+### stripe_size
+
+```
+stripe_size = Σ weight[i] × chunk_size
+```
+
+chunk_size 建議與 filesystem block size 或常用 I/O size 一致（1MB = 1048576）。
+
+### weight
+
+從 benchmark 速度計算：`weight = speed / slowest_speed`。
+
+不指定則 `tiered_setup --create` 會自動測速計算。
+
+### segment 範圍
+
+當 disk 容量不同時，依容量遞增排序，分段建立 segment：
+
+```
+Disk 0: 4TB → 參與所有 segment
+Disk 1: 2TB → 參與前兩個 segment
+Disk 2: 1TB → 只參與第一個 segment
+
+Segment 0: 0 ~ 1TB     → disks [0,1,2]
+Segment 1: 1TB ~ 2TB   → disks [0,1]
+Segment 2: 2TB ~ 4TB   → disks [0]
+```
+
+## Carve 語法
+
+建立時用 `碟名:GB` 指定 carve 容量：
+
+```bash
+sudo tiered_setup --create --name pool --disks nvme0n1:100,sdb:50
+```
+
+- DM path（預設）和 LVM path 都支援
+- 不指定 `:GB` 時使用整碟（扣 1GB）
+- dm-linear 從 sector 0 開始 carve，剩餘空間不能再次使用
+
+## DM Message 命令
+
+| 命令 | 參數 | 說明 |
+|------|------|------|
+| `show_stats` | - | 顯示 I/O stats |
+| `show_config` | - | 顯示 config 內容 |
+| `show_mirror` | - | 顯示 mirror stats |
+| `show_log` | - | 顯示 log buffer |
+| `set_policy` | static/adaptive/random | 切換 dispatch policy |
+| `reset_stats` | - | 重置 I/O stats |
+
+```bash
+sudo dmsetup message <name> 0 show_stats
+sudo dmsetup message <name> 0 set_policy adaptive
+```
+
+## 注意
+
+- Segment 必須依 `begin` 遞增排序，不可重疊
+- 所有 disk index 必須小於 `disk_count`
+- mirror disk 不可與 segment 的任一 primary disk 相同
+- Weight 上限 16，最少 1
