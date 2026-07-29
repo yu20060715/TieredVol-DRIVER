@@ -207,6 +207,72 @@ EXPORT_SYMBOL_GPL(tv_ts_complete);
 
 /* ---- Mirror I/O completion ---- */
 
+void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
+		       struct tieredvol_map cur, u64 logical)
+{
+	struct tieredvol_segment *seg;
+	sector_t mirror_sec;
+
+	if (cur.seg_idx < 0 ||
+	    cur.seg_idx >= (int)ctx->meta.segment_count)
+		return;
+
+	seg = &ctx->meta.segments[cur.seg_idx];
+	if (!seg->mirror_enabled ||
+	    seg->mirror_disk >= (u32)ctx->ndisks ||
+	    seg->mirror_disk == (u32)cur.disk)
+		return;
+
+	mirror_sec = (logical - seg->logical_begin) >> TV_SECTOR_SHIFT;
+
+	if (bio_data_dir(bio) == WRITE) {
+		struct bio *clone;
+		struct tv_mirror_pw_ctx *pwc;
+		unsigned int bio_sz = bio->bi_iter.bi_size;
+
+		pwc = mempool_alloc(ctx->mirror_pw_pool, GFP_NOIO);
+		if (!pwc) {
+			atomic64_inc(&ctx->mirror.mirror_errors);
+			tv_log(TV_LOG_ERR, cur.disk, TV_LOG_MIRROR,
+			       "mirror pwc alloc fail seg%d", cur.seg_idx);
+			return;
+		}
+
+		clone = bio_alloc_clone(
+			ctx->devs[seg->mirror_disk]->bdev, bio,
+			GFP_NOIO, &fs_bio_set);
+		if (!clone) {
+			mempool_free(pwc, ctx->mirror_pw_pool);
+			atomic64_inc(&ctx->mirror.mirror_errors);
+			tv_log(TV_LOG_ERR, cur.disk, TV_LOG_MIRROR,
+			       "mirror alloc fail seg%d", cur.seg_idx);
+			return;
+		}
+
+		clone->bi_iter.bi_sector = mirror_sec;
+		pwc->ctx = ctx;
+		pwc->bdev = ctx->devs[seg->mirror_disk]->bdev;
+		pwc->sector = mirror_sec;
+		pwc->size = bio_sz;
+		clone->bi_private = pwc;
+		clone->bi_end_io = tv_mirror_end_io;
+		atomic64_add(bio_sz, &ctx->mirror.mirror_write_bytes);
+		tv_pw_add(ctx->devs[seg->mirror_disk]->bdev,
+			  mirror_sec, bio_sz);
+		submit_bio(clone);
+		tv_log(TV_LOG_INFO, cur.disk, TV_LOG_MIRROR,
+		       "mirrored %uKB seg%d->disk%d",
+		       bio_sz >> 10, cur.seg_idx, seg->mirror_disk);
+	} else if (bio_data_dir(bio) == READ) {
+		tv_pending_add(ctx->devs[cur.disk]->bdev,
+			       bio->bi_iter.bi_sector,
+			       bio->bi_iter.bi_size,
+			       (int)seg->mirror_disk,
+			       mirror_sec);
+	}
+}
+EXPORT_SYMBOL_GPL(tv_mirror_handle);
+
 void tv_mirror_end_io(struct bio *bio)
 {
 	struct tv_mirror_pw_ctx *pwc = bio->bi_private;

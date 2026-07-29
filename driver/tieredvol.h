@@ -238,6 +238,8 @@ int tv_pending_find_and_remove(struct block_device *bdev, sector_t sector,
 			       unsigned int size, sector_t *mirror_sector_out);
 void tv_ts_submit(int disk_idx, sector_t sector, unsigned int size);
 u64 tv_ts_complete(int disk_idx, sector_t sector, unsigned int size);
+void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
+		       struct tieredvol_map cur, u64 logical);
 void tv_mirror_end_io(struct bio *bio);
 int tieredvol_end_io(struct dm_target *ti, struct bio *bio,
 		     blk_status_t *error);
