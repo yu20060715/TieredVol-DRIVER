@@ -61,6 +61,40 @@ static void cleanup_dm(const char *name, disk_t *valid, int valid_disks) {
 
 static int cmd_create_dm(char *name, char *disk_spec,
                          int auto_confirm) {
+    /* Validate: physical disks only, not mounted, not system */
+    {
+        char vbuf[1024];
+        strncpy(vbuf, disk_spec, sizeof(vbuf) - 1);
+        vbuf[sizeof(vbuf) - 1] = 0;
+        const char *names[TV_MAX_DISKS];
+        int nnames = 0;
+        char *vtok = strtok(vbuf, ",");
+        while (vtok && nnames < TV_MAX_DISKS) {
+            char dname[64];
+            char *colon = strchr(vtok, ':');
+            if (colon) {
+                int len = (int)(colon - vtok);
+                if (len > 63) len = 63;
+                strncpy(dname, vtok, len);
+                dname[len] = '\0';
+            } else {
+                strncpy(dname, vtok, 63);
+                dname[63] = '\0';
+            }
+            if (!tiered_is_physical_disk(dname)) {
+                fprintf(stderr, "Error: '%s' is a virtual device — use physical disks only\n", dname);
+                return TV_ERR;
+            }
+            names[nnames++] = strdup(dname);
+            vtok = strtok(NULL, ",");
+        }
+        if (tiered_mounted_disks(names, nnames)) {
+            for (int k = 0; k < nnames; k++) free((void *)names[k]);
+            return TV_ERR;
+        }
+        for (int k = 0; k < nnames; k++) free((void *)names[k]);
+    }
+
     disk_t disks_arr[TV_MAX_DISKS];
     int nd = 0;
     char buf[1024];
@@ -69,9 +103,23 @@ static int cmd_create_dm(char *name, char *disk_spec,
     char *tok = strtok(buf, ",");
     while (tok && nd < TV_MAX_DISKS) {
         memset(&disks_arr[nd], 0, sizeof(disk_t));
-        strncpy(disks_arr[nd].disk, tok, 31);
-        disks_arr[nd].disk[31] = 0;
-        disks_arr[nd].carve_gb = 0;
+        char *colon = strchr(tok, ':');
+        if (colon) {
+            *colon = 0;
+            strncpy(disks_arr[nd].disk, tok, 31);
+            disks_arr[nd].disk[31] = 0;
+            char *endptr;
+            long long val = strtoll(colon + 1, &endptr, 10);
+            if (*endptr != '\0' || endptr == colon + 1 || val <= 0) {
+                fprintf(stderr, "Error: invalid carve size '%s'\n", colon + 1);
+                return TV_ERR;
+            }
+            disks_arr[nd].carve_gb = val;
+        } else {
+            strncpy(disks_arr[nd].disk, tok, 31);
+            disks_arr[nd].disk[31] = 0;
+            disks_arr[nd].carve_gb = 0;
+        }
         nd++;
         tok = strtok(NULL, ",");
     }
@@ -115,6 +163,11 @@ static int cmd_create_dm(char *name, char *disk_spec,
             fprintf(stderr, "Error: /dev/%s size not detected or too small\n", disks_arr[i].disk);
             return TV_ERR;
         }
+        if (disks_arr[i].carve_gb <= 0) disks_arr[i].carve_gb = disks_arr[i].size_gb - 1;
+        if (disks_arr[i].carve_gb > disks_arr[i].size_gb - 1) {
+            fprintf(stderr, "Error: /dev/%s has %lldGB, cannot carve %lldGB\n", disks_arr[i].disk, disks_arr[i].size_gb, disks_arr[i].carve_gb);
+            return TV_ERR;
+        }
         valid[valid_disks++] = disks_arr[i];
     }
 
@@ -132,9 +185,11 @@ static int cmd_create_dm(char *name, char *disk_spec,
     printf("\n  %-12s %-10s %-10s %-8s %-10s\n", "DEVICE", "SIZE", "AVAIL", "SPEED", "TIER");
     printf("  %-12s %-10s %-10s %-8s %-10s\n", "------------", "----------", "----------", "--------", "----------");
     for (int i = 0; i < valid_disks; i++) {
-        long long avail = valid[i].size_gb - 1;
+        long long use_gb = valid[i].carve_gb > 0 ? valid[i].carve_gb : valid[i].size_gb - 1;
+        long long avail = valid[i].size_gb - use_gb - 1;
+        if (avail < 0) avail = 0;
         printf("  %-12s %-8lldGB %-8lldGB %-8.0f %-10s\n",
-               valid[i].disk, valid[i].size_gb, avail, valid[i].speed_write,
+               valid[i].disk, use_gb, avail, valid[i].speed_write,
                (i == 0) ? "FAST" : (i == valid_disks - 1) ? "SLOW" : "MED");
     }
     printf("\n");
@@ -158,7 +213,8 @@ static int cmd_create_dm(char *name, char *disk_spec,
         memset(&tv_disks[i], 0, sizeof(TV_DISK));
         tv_disks[i].id = i;
         snprintf(tv_disks[i].name, 63, "/dev/%s", valid[i].disk);
-        tv_disks[i].free_size = (uint64_t)(valid[i].size_gb - 1) * 1024ULL * 1024 * 1024;
+        long long use_gb = valid[i].carve_gb > 0 ? valid[i].carve_gb : valid[i].size_gb - 1;
+        tv_disks[i].free_size = (uint64_t)use_gb * 1024ULL * 1024 * 1024;
         tv_disks[i].speed = (uint64_t)valid[i].speed_write;
     }
 
@@ -296,6 +352,40 @@ int cmd_create(int argc, char *argv[]) {
     if (!tiered_is_valid_name(name)) {
         fprintf(stderr, "Error: invalid name '%s'\n", name);
         return TV_ERR;
+    }
+
+    /* Validate: physical disks only, not mounted, not system */
+    {
+        char vbuf[1024];
+        strncpy(vbuf, disk_spec, sizeof(vbuf) - 1);
+        vbuf[sizeof(vbuf) - 1] = 0;
+        const char *names[TV_MAX_DISKS];
+        int nnames = 0;
+        char *vtok = strtok(vbuf, ",");
+        while (vtok && nnames < TV_MAX_DISKS) {
+            char dname[64];
+            char *colon = strchr(vtok, ':');
+            if (colon) {
+                int len = (int)(colon - vtok);
+                if (len > 63) len = 63;
+                strncpy(dname, vtok, len);
+                dname[len] = '\0';
+            } else {
+                strncpy(dname, vtok, 63);
+                dname[63] = '\0';
+            }
+            if (!tiered_is_physical_disk(dname)) {
+                fprintf(stderr, "Error: '%s' is a virtual device — use physical disks only\n", dname);
+                return TV_ERR;
+            }
+            names[nnames++] = strdup(dname);
+            vtok = strtok(NULL, ",");
+        }
+        if (tiered_mounted_disks(names, nnames)) {
+            for (int k = 0; k < nnames; k++) free((void *)names[k]);
+            return TV_ERR;
+        }
+        for (int k = 0; k < nnames; k++) free((void *)names[k]);
     }
 
     if (use_lvm) {

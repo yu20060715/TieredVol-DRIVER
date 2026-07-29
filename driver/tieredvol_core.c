@@ -284,6 +284,20 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 			ti->error = "tieredvol: device lookup failed";
 			goto put_devices;
 		}
+		/* Reject non-physical devices (loop, ram, zram) */
+		{
+			const char *dn = ctx->devs[i]->bdev->bd_disk->disk_name;
+			if (strncmp(dn, "loop", 4) == 0 ||
+			    strncmp(dn, "ram", 3) == 0 ||
+			    strncmp(dn, "zram", 4) == 0) {
+				pr_err("tieredvol: %s is a virtual device (%s) — use physical disks only\n",
+				       ctx->meta.disk_names[i], dn);
+				ti->error = "tieredvol: virtual device rejected";
+				dm_put_device(ti, ctx->devs[i]);
+				ret = -EINVAL;
+				goto put_devices;
+			}
+		}
 		ctx->disk_sectors[i] = bdev_nr_sectors(ctx->devs[i]->bdev);
 	}
 

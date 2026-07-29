@@ -313,6 +313,7 @@ seg0_policy=adaptive   # optional: static (default), adaptive, random
 - **System disk cannot be used** — dm returns EBUSY on mounted root partition.
 - **Module instability risk** — A kernel module bug can oops the system.
 - **NVMe write cache should stay ON** — Disabling it causes -21% throughput loss on some hardware.
+- **Virtual devices rejected** — Loop, ram, and zram devices are blocked by both the userspace tool and the kernel module. Only physical block devices (NVMe, SATA, SAS) are allowed.
 
 ## License
 

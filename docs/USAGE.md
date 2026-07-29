@@ -76,25 +76,33 @@ sudo tiered_setup --bench --disks sdb,sdc --sequential
 ### 建立 Volume
 
 ```bash
-sudo tiered_setup --create --name fastpool --disks sdb:300,sdc:200 --fs ext4 --mount /mnt/fast
+# 預設使用 kernel dm-target（weighted striping）
+sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb
+
+# 指定 carve 容量（DM path 和 LVM path 都支援）
+sudo tiered_setup --create --name fastpool --disks nvme0n1:300,sdb:200
+
+# LVM 模式（需加 --lvm）
+sudo tiered_setup --create --name fastpool --lvm --disks sdb:300,sdc:200 --fs ext4 --mount /mnt/fast
 ```
 
 參數說明：
 | 參數 | 說明 | 必填 |
 |------|------|------|
 | `--name` | Volume 名稱 | 是 |
-| `--disks` | 硬碟列表（格式：`碟名:GB,碟名:GB`） | 是 |
+| `--disks` | 硬碟列表（格式：`碟名` 或 `碟名:GB`） | 是 |
 | `--fs` | 檔案系統（ext4/xfs/btrfs/none） | 否，預設 ext4 |
 | `--mount` | 掛載點 | 否 |
-| `--stripesize` | stripe 大小（KB） | 否，自動判斷 |
+| `--lvm` | 使用 LVM striped（預設為 kernel dm-target） | 否 |
+| `--stripesize` | stripe 大小（KB，僅 LVM） | 否，自動判斷 |
 
-不指定容量時，使用硬碟全部空間（扣 1GB）。
+不指定 `:GB` 時，使用硬碟全部空間（扣 1GB）。切碟語法在 DM path（預設）和 LVM path（`--lvm`）都支援。
 
 #### 建立流程
 
 程式會依序執行以下步驟：
 
-1. **碟驗證** — 檢查每顆碟的狀態：
+1. **碟驗證** — 先檢查碟名是否為實體裝置（loop/ram/zram 直接拒絕），接著檢查每顆碟的狀態：
    - 系統碟（`[ROOT]`）→ 跳過
    - 已掛載碟（`[MOUNTED]`）→ 跳過
    - **已切過的碟** → 報錯退出，提示先執行 `--remove` 解除（並警告資料會消失）
@@ -146,6 +154,9 @@ sudo tiered_setup --remove --name fastpool
 # 使用 tiered_setup（自動測速、計算權重、載入模組、建立 dm target）
 sudo tiered_setup --create --name fastpool --disks nvme0n1,sda
 
+# 指定 carve 容量（不指定即用整碟）
+sudo tiered_setup --create --name fastpool --disks nvme0n1:100,sda:50
+
 # 或手動建立 config + dmsetup
 cat > /etc/tieredvol/fastpool.conf << 'EOF'
 [weighted_striping]
@@ -166,11 +177,15 @@ sudo dmsetup create fastpool --table '0 2097152 tieredvol /etc/tieredvol/fastpoo
 ```
 
 預設建立 kernel dm-target volume，流程如下：
-1. 依磁碟速度計算 weight（benchmark 自動測速）
-2. 建立 segment 資料（加權條紋）
-3. 儲存 metadata 到 `/etc/tieredvol/<name>.conf`
-4. `dmsetup create` → 建立 tieredvol dm target
-5. 之後用 `fio` 工具操作 `/dev/mapper/<name>`，進行 I/O 測試
+1. **碟驗證** — 檢查虛擬裝置（loop/ram/zram 拒絕）、系統碟、已掛載碟
+2. **Configuration 顯示** — 列出每顆碟的 carve 大小、剩餘空間、速度
+3. 依磁碟速度計算 weight（benchmark 自動測速）
+4. 建立 segment 資料（加權條紋）
+5. 儲存 metadata 到 `/etc/tieredvol/<name>.conf`
+6. `dmsetup create` → 建立 tieredvol dm target
+7. 之後用 `fio` 工具操作 `/dev/mapper/<name>`，進行 I/O 測試
+
+支援 `碟名:GB` 語法指定 carve 容量，不指定即用整碟（扣 1GB）。
 
 ---
 
@@ -266,6 +281,7 @@ cat /sys/block/sdb/stat
 - **驗證**：benchmark 跑完後檢查 block stats，確認每個 disk 的寫入量符合 weight 比例
 - **系統碟無法使用** — 掛載 `/` 的硬碟會標記 `[ROOT]` 並鎖定
 - **已掛載硬碟無法使用** — 標記 `[MOUNTED]` 的硬碟會鎖定
+- **虛擬裝置無法使用** — Loop、ram、zram 等虛擬裝置會被 userspace 工具和 kernel module 共同阻擋。僅允許實體區塊裝置（NVMe、SATA、SAS）
 - **已切過的碟** — 如果硬碟已經被 carve 過（存在 `tv_*_carve` dm target），程式會報錯並提示先解除
 - **carve 部分會被覆蓋** — dm-linear 從 sector 0 開始，carve 部分的資料將永久消失。操作前請備份
 - **每顆碟只能 carve 一次** — dm-linear 從 sector 0 開始，第二次 carve 會覆蓋第一次
