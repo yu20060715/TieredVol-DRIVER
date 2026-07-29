@@ -45,7 +45,7 @@ static int ensure_module_loaded(void) {
     return TV_ERR;
 }
 
-static void cleanup_scheduler(const char *name, disk_t *valid, int valid_disks) {
+static void cleanup_dm(const char *name, disk_t *valid, int valid_disks) {
     fprintf(stderr, "  Rolling back...\n");
     char target[256];
     snprintf(target, sizeof(target), "%s", name);
@@ -59,8 +59,8 @@ static void cleanup_scheduler(const char *name, disk_t *valid, int valid_disks) 
     fprintf(stderr, "  Rollback complete.\n");
 }
 
-static int create_scheduler(char *name, char *disk_spec,
-                            int auto_confirm) {
+static int cmd_create_dm(char *name, char *disk_spec,
+                         int auto_confirm) {
     disk_t disks_arr[TV_MAX_DISKS];
     int nd = 0;
     char buf[1024];
@@ -211,7 +211,7 @@ static int create_scheduler(char *name, char *disk_spec,
         int dm_ret = tv_exec_with_stdin("dmsetup", dm_argv, table);
         if (dm_ret != 0) {
             fprintf(stderr, "Error: dmsetup create failed (exit=%d)\n", dm_ret);
-            cleanup_scheduler(name, valid, valid_disks);
+            cleanup_dm(name, valid, valid_disks);
             return TV_ERR;
         }
         printf("  Created /dev/mapper/%s (%lu GB)\n", name,
@@ -266,7 +266,7 @@ int cmd_create(int argc, char *argv[]) {
     char *mount_point = NULL;
     int stripe_size_kb = 512;
     int user_stripesize = 0;
-    int use_scheduler = 0;
+    int use_lvm = 0;
     int auto_confirm = 0;
 
     for (int i = 2; i < argc; i++) {
@@ -274,7 +274,7 @@ int cmd_create(int argc, char *argv[]) {
         else if (strcmp(argv[i], "--disks") == 0 && i + 1 < argc) disk_spec = argv[++i];
         else if (strcmp(argv[i], "--fs") == 0 && i + 1 < argc) fs = argv[++i];
         else if (strcmp(argv[i], "--mount") == 0 && i + 1 < argc) mount_point = argv[++i];
-        else if (strcmp(argv[i], "--scheduler") == 0) use_scheduler = 1;
+        else if (strcmp(argv[i], "--lvm") == 0) use_lvm = 1;
         else if (strcmp(argv[i], "--yes") == 0) auto_confirm = 1;
         else if (strcmp(argv[i], "--stripesize") == 0 && i + 1 < argc) {
             char *endptr;
@@ -289,7 +289,7 @@ int cmd_create(int argc, char *argv[]) {
     }
 
     if (!name || !disk_spec) {
-        fprintf(stderr, "Usage: tiered_setup --create --name NAME --disks sdb,sdc [--scheduler] [--fs ext4] [--mount /mnt/fast]\n");
+        fprintf(stderr, "Usage: tiered_setup --create --name NAME --disks sdb,sdc [--lvm] [--fs ext4] [--mount /mnt/fast]\n");
         return TV_ERR;
     }
 
@@ -298,10 +298,7 @@ int cmd_create(int argc, char *argv[]) {
         return TV_ERR;
     }
 
-    if (use_scheduler) {
-        return create_scheduler(name, disk_spec, auto_confirm);
-    }
-
+    if (use_lvm) {
     if (!tiered_is_valid_fs(fs)) {
         fprintf(stderr, "Error: invalid filesystem '%s'\n", fs);
         return TV_ERR;
@@ -472,4 +469,7 @@ int cmd_create(int argc, char *argv[]) {
 
     printf("\n=== Complete! ===\nDevice: %s\nSize: %lldGB\n", lv_path, total_gb);
     return TV_OK;
+    }
+
+    return cmd_create_dm(name, disk_spec, auto_confirm);
 }

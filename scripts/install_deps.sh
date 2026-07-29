@@ -110,5 +110,5 @@ fi
 echo ""
 echo "Quick start:"
 echo "  sudo ./tiered_setup --list"
-echo "  sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb --scheduler"
+echo "  sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb --lvm"
 echo "  sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=2G --direct=1 --ioengine=io_uring --iodepth=256"

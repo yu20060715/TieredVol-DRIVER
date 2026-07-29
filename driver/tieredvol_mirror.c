@@ -15,6 +15,27 @@
 #include <linux/device-mapper.h>
 #include "tieredvol.h"
 
+int tv_mirror_init_ctx(struct tieredvol_ctx *ctx)
+{
+	ctx->mirror_pw_pool = mempool_create_kmalloc_pool(
+		128, sizeof(struct tv_mirror_pw_ctx));
+	if (!ctx->mirror_pw_pool)
+		return -ENOMEM;
+	ctx->retry_ctx_pool = mempool_create_kmalloc_pool(
+		32, sizeof(struct tv_retry_ctx));
+	if (!ctx->retry_ctx_pool) {
+		mempool_destroy(ctx->mirror_pw_pool);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+void tv_mirror_destroy_ctx(struct tieredvol_ctx *ctx)
+{
+	mempool_destroy(ctx->mirror_pw_pool);
+	mempool_destroy(ctx->retry_ctx_pool);
+}
+
 /* ---- Pending-read tracking (per-CPU, lockless) ---- */
 
 static DEFINE_PER_CPU(struct tv_pending_read_cpu, tv_pcpu_reads);
@@ -152,77 +173,35 @@ static bool tv_pw_is_pending(struct block_device *bdev, sector_t sector,
 	return false;
 }
 
-/* ---- Timestamp ring for latency tracking (global, lightweight) ---- */
+/* ---- Timestamp ring for latency tracking (lockless, O(1) hash) ---- */
 
-struct tv_ts_entry {
-	sector_t sector;
-	unsigned int size;
-	ktime_t submit_ns;
-};
-
-struct tv_ts_ring {
-	struct tv_ts_entry entries[256];
-	unsigned int head;
-	unsigned int count;
-};
-
-static struct tv_ts_ring tv_ts_rings[TV_MAX_DISKS];
-raw_spinlock_t tv_ts_lock_arr[TV_MAX_DISKS];
+static u64 tv_ts_timestamps[TV_MAX_DISKS][256];
 
 void tv_ts_submit(int disk_idx, sector_t sector, unsigned int size)
 {
-	unsigned long flags;
-	unsigned int idx;
+	u32 idx;
 
 	if (disk_idx < 0 || disk_idx >= TV_MAX_DISKS)
 		return;
 
-	raw_spin_lock_irqsave(&tv_ts_lock_arr[disk_idx], flags);
-	if (tv_ts_rings[disk_idx].count < 256) {
-		idx = (tv_ts_rings[disk_idx].head +
-		       tv_ts_rings[disk_idx].count) % 256;
-		tv_ts_rings[disk_idx].count++;
-	} else {
-		/* Ring full: overwrite oldest entry (advance head) */
-		idx = tv_ts_rings[disk_idx].head;
-		tv_ts_rings[disk_idx].head =
-			(tv_ts_rings[disk_idx].head + 1) % 256;
-	}
-	tv_ts_rings[disk_idx].entries[idx].sector = sector;
-	tv_ts_rings[disk_idx].entries[idx].size = size;
-	tv_ts_rings[disk_idx].entries[idx].submit_ns = ktime_get_ns();
-	raw_spin_unlock_irqrestore(&tv_ts_lock_arr[disk_idx], flags);
+	idx = (sector ^ (sector >> 16)) & 0xFF;
+	WRITE_ONCE(tv_ts_timestamps[disk_idx][idx], ktime_get_ns());
 }
 EXPORT_SYMBOL_GPL(tv_ts_submit);
 
 u64 tv_ts_complete(int disk_idx, sector_t sector, unsigned int size)
 {
-	unsigned long flags;
-	u64 delta = 0;
-	unsigned int i;
+	u64 submit_ns;
+	u32 idx;
 
 	if (disk_idx < 0 || disk_idx >= TV_MAX_DISKS)
 		return 0;
 
-	raw_spin_lock_irqsave(&tv_ts_lock_arr[disk_idx], flags);
-	for (i = 0; i < tv_ts_rings[disk_idx].count; i++) {
-		unsigned int idx = (tv_ts_rings[disk_idx].head + i) % 256;
-
-		if (tv_ts_rings[disk_idx].entries[idx].sector == sector &&
-		    tv_ts_rings[disk_idx].entries[idx].size == size) {
-			delta = ktime_get_ns() - tv_ts_rings[disk_idx].entries[idx].submit_ns;
-			for (; i + 1 < tv_ts_rings[disk_idx].count; i++) {
-				unsigned int next = (tv_ts_rings[disk_idx].head + i + 1) % 256;
-
-				tv_ts_rings[disk_idx].entries[(tv_ts_rings[disk_idx].head + i) % 256] =
-					tv_ts_rings[disk_idx].entries[next];
-			}
-			tv_ts_rings[disk_idx].count--;
-			break;
-		}
-	}
-	raw_spin_unlock_irqrestore(&tv_ts_lock_arr[disk_idx], flags);
-	return delta;
+	idx = (sector ^ (sector >> 16)) & 0xFF;
+	submit_ns = READ_ONCE(tv_ts_timestamps[disk_idx][idx]);
+	if (submit_ns == 0)
+		return 0;
+	return ktime_get_ns() - submit_ns;
 }
 EXPORT_SYMBOL_GPL(tv_ts_complete);
 

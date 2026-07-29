@@ -69,12 +69,6 @@ int cmd_remove(int argc, char *argv[]) {
             (void)tv_exec_sudo(rm_argv, 0);
         }
         {
-            char sched_path[256];
-            snprintf(sched_path, sizeof(sched_path), TV_CONFIG_DIR "%s.scheduler", name);
-            char *rm_argv[] = {"sudo", "rm", "-f", sched_path, NULL};
-            (void)tv_exec_sudo(rm_argv, 0);
-        }
-        {
             char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL};
             (void)tv_exec_sudo(rmdir_argv, 0);
         }
@@ -83,67 +77,7 @@ int cmd_remove(int argc, char *argv[]) {
         return TV_OK;
     }
 
-    /* Check for old-style scheduler volume */
-    char sched_path[256];
-    snprintf(sched_path, sizeof(sched_path), TV_CONFIG_DIR "%s.scheduler", name);
-    FILE *sf = fopen(sched_path, "r");
-    if (sf) {
-        fclose(sf);
-        printf("  Detected legacy weighted I/O scheduler volume\n");
-
-        char targets[TV_MAX_DISKS][64];
-        int ntargets = 0;
-
-        TV_METADATA sched_meta;
-        memset(&sched_meta, 0, sizeof(sched_meta));
-        if (tv_metadata_load(&sched_meta, sched_path) == 0) {
-            for (uint32_t i = 0; i < sched_meta.disk_count && ntargets < TV_MAX_DISKS; i++) {
-                char short_disk[64];
-                const char *dn = sched_meta.disk_names[i];
-                const char *slash = strrchr(dn, '/');
-                strncpy(short_disk, slash ? slash + 1 : dn, 63);
-                short_disk[63] = 0;
-                make_target(targets[ntargets], sizeof(targets[0]), short_disk);
-                ntargets++;
-            }
-        }
-
-        if (ntargets == 0) {
-            FILE *p = popen("sudo dmsetup ls 2>/dev/null", "r");
-            if (p) {
-                char line[256];
-                while (fgets(line, sizeof(line), p) && ntargets < TV_MAX_DISKS) {
-                    line[strcspn(line, "\n")] = 0;
-                    char *tok = strtok(line, "\t ");
-                    if (!tok) continue;
-                    if (strncmp(tok, "tv_", 3) == 0 && strstr(tok, "_carve")) {
-                        snprintf(targets[ntargets], sizeof(targets[0]), "%s", tok);
-                        ntargets++;
-                    }
-                }
-                pclose(p);
-            }
-        }
-        for (int i = 0; i < ntargets; i++) {
-            int removed = 0;
-            for (int retry = 0; retry < 3; retry++) {
-                char *const dm_argv[] = {"sudo", "dmsetup", "remove", targets[i], NULL};
-                if (tv_exec_sudo(dm_argv, 0) == 0) { removed = 1; break; }
-                if (retry < 2) { fprintf(stderr, "  %s busy, retrying...\n", targets[i]); sleep(1); }
-            }
-            if (removed) printf("  Removed %s\n", targets[i]);
-            else fprintf(stderr, "  Failed to remove %s\n", targets[i]);
-        }
-
-        { char *rm_argv[] = {"sudo", "rm", "-f", sched_path, NULL}; (void)tv_exec_sudo(rm_argv, 0); }
-        { char conf_path_cleanup[256]; snprintf(conf_path_cleanup, sizeof(conf_path_cleanup), TV_CONFIG_DIR "%s.conf", name); char *rm_argv[] = {"sudo", "rm", "-f", conf_path_cleanup, NULL}; (void)tv_exec_sudo(rm_argv, 0); }
-        { char *rmdir_argv[] = {"sudo", "rmdir", TV_CONFIG_DIR, NULL}; (void)tv_exec_sudo(rmdir_argv, 0); }
-
-        printf("\n=== Remove Complete ===\n");
-        return TV_OK;
-    }
-
-    /* LVM volume path */
+    /* LVM volume path (legacy) */
     char targets[TV_MAX_DISKS][64];
     int ntargets = 0;
 
@@ -240,7 +174,7 @@ int cmd_status(void) {
             struct dirent *ent;
             int found = 0;
             while ((ent = readdir(d))) {
-                if (strstr(ent->d_name, ".conf") || strstr(ent->d_name, ".scheduler")) {
+                if (strstr(ent->d_name, ".conf")) {
                     printf("  " TV_CONFIG_DIR "%s\n", ent->d_name);
                     found = 1;
                 }

@@ -138,38 +138,39 @@ sudo tiered_setup --destroy --name fastpool
 sudo tiered_setup --remove --name fastpool
 ```
 
-支援刪除 LVM striped volume 和 weighted I/O scheduler volume。程式會自動偵測 `.scheduler` 檔案，如果是 scheduler volume 則只清理 dm-linear targets。
+支援刪除 LVM striped volume 和 kernel dm-target volume。程式會自動偵測 volume 類型並執行對應的清理流程。
 
-### 建立 Weighted I/O Scheduler Volume
+### 建立 Kernel dm-target Volume（預設）
 
 ```bash
-# 方式 1：使用 tiered_setup（推薦）
-sudo tiered_setup --create --name fastpool \
-    --disks nvme0n1:1000,sda:500 \
-    --scheduler
+# 使用 tiered_setup（自動測速、計算權重、載入模組、建立 dm target）
+sudo tiered_setup --create --name fastpool --disks nvme0n1,sda
 
-# 方式 2：手動建立 config + dmsetup
-cat > /etc/tieredvol/v2bench.conf << 'EOF'
-crc32=49359161
-v2disk_start[0]=0
-v2disk_start[1]=1073741824
-v2disk_end[0]=1073741824
-v2disk_end[1]=2147483648
-v2weight[0]=7
-v2weight[1]=1
+# 或手動建立 config + dmsetup
+cat > /etc/tieredvol/fastpool.conf << 'EOF'
+[weighted_striping]
+version=1
+chunk_size=1048576
+segment_count=1
+disk_count=2
+disk0_name=/dev/nvme0n1
+disk1_name=/dev/sda
+seg0_begin=0
+seg0_end=931520000000
+seg0_count=2
+seg0_disks=0,1
+seg0_weight=2,1
+seg0_stripe=3145728
 EOF
-sudo dmsetup create v2bench --table '0 4194304 v2 /etc/tieredvol/v2bench.conf'
+sudo dmsetup create fastpool --table '0 2097152 tieredvol /etc/tieredvol/fastpool.conf'
 ```
 
-> **手動建立時**：確認 `/dev/mapper/v2bench` 為 symlink 指向 `../dm-X`。若為普通檔案需先 `rm -f`。
-
-加上 `--scheduler` 參數後，不會建立 LVM volume，而是：
-1. 建立 dm-linear targets
-2. 依磁碟速度計算 weight
-3. 建立 segment 資料
-4. 儲存 metadata 到 `/etc/tieredvol/fastpool.scheduler`
-
-之後用 `fio` 工具操作 `/dev/mapper/fastpool`，進行 I/O 測試。
+預設建立 kernel dm-target volume，流程如下：
+1. 依磁碟速度計算 weight（benchmark 自動測速）
+2. 建立 segment 資料（加權條紋）
+3. 儲存 metadata 到 `/etc/tieredvol/<name>.conf`
+4. `dmsetup create` → 建立 tieredvol dm target
+5. 之後用 `fio` 工具操作 `/dev/mapper/<name>`，進行 I/O 測試
 
 ---
 
@@ -177,28 +178,38 @@ sudo dmsetup create v2bench --table '0 4194304 v2 /etc/tieredvol/v2bench.conf'
 
 > **tiered_io 已移除（v5.0）：** kernel dm-target 已接手所有 I/O dispatch，標準 `write()`/`read()` 即可操作 `/dev/mapper/<name>`。Benchmark 使用 `fio`。
 
-### 建立 DM Volume
+### 建立 tieredvol Volume
+
+使用 `tiered_setup` CLI 工具即可：
 
 ```bash
-# 1. 建立 config（例如 2-disk 7:1 weight）
-cat > /etc/tieredvol/v2bench.conf << 'EOF'
-crc32=49359161
-v2disk_start[0]=0
-v2disk_start[1]=1073741824
-v2disk_end[0]=1073741824
-v2disk_end[1]=2147483648
-v2weight[0]=7
-v2weight[1]=1
-EOF
-
-# 2. 建立 dm device（需先確認 symlink 是否存在）
-sudo dmsetup create v2bench --table '0 4194304 v2 /etc/tieredvol/v2bench.conf'
-
-# 3. 確認 symlink 指向 block device
-ls -la /dev/mapper/v2bench
+# 建立 weighted volume（自動測速、計算權重、載入模組、建立 dm target）
+sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc
 ```
 
-> **重要：** 建立 DM device 後，`/dev/mapper/v2bench` 必須是 symlink 指向 `../dm-X`。若為普通檔案，表示 symlink 遺失，需先 `rm -f /dev/mapper/v2bench` 再重建。
+或手動 config 格式（INI）：
+
+```ini
+[weighted_striping]
+version=1
+chunk_size=1048576
+segment_count=1
+disk_count=2
+disk0_name=/dev/nvme0n1
+disk1_name=/dev/sdb
+seg0_begin=0
+seg0_end=931520000000
+seg0_count=2
+seg0_disks=0,1
+seg0_weight=2,1
+seg0_stripe=3145728
+```
+
+使用 `dmsetup create` 載入：
+
+```bash
+sudo dmsetup create fastpool --table '0 2097152 tieredvol /etc/tieredvol/fastpool.conf'
+```
 
 ### Benchmark（fio）
 

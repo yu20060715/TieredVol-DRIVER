@@ -67,6 +67,80 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 		return DM_MAPIO_SUBMITTED;
 	}
 
+	/* ---- Phase 1 C: Write coalescing ---- */
+	{
+		int wc_ret = tv_wc_try_buffer(ctx, bio, logical, cur);
+		if (wc_ret == DM_MAPIO_SUBMITTED)
+			return DM_MAPIO_SUBMITTED;
+	}
+
+	/* Non-WRITE: flush buffer for read ordering */
+	if (bio_data_dir(bio) != WRITE)
+		tv_wc_flush(ctx);
+
+	/* ---- B: Parallel multi-disk write ---- */
+	if (bio_data_dir(bio) == WRITE &&
+	    cur.seg_idx >= 0 &&
+	    cur.seg_idx < (int)ctx->meta.segment_count) {
+		struct tieredvol_segment *seg = &ctx->meta.segments[cur.seg_idx];
+		int n_seg = (int)seg->disk_count;
+
+		if (n_seg > 1) {
+			struct tv_stripe_ctx sc;
+			u64 b_sz = bio->bi_iter.bi_size;
+
+			tv_stripe_calc_boundaries(seg, ctx->meta.chunk_size,
+						  logical, b_sz, &sc);
+
+			if (sc.fi >= 0 && sc.li >= 0 &&
+			    sc.li - sc.fi + 1 > 1) {
+				u64 d_start[TV_MAX_DISKS];
+				u64 d_sz[TV_MAX_DISKS];
+				int d_id[TV_MAX_DISKS];
+				int n_sub = tv_stripe_compute_ranges(
+					&sc, seg, logical,
+					ctx->meta.chunk_size,
+					d_start, d_sz, d_id);
+
+				if (n_sub > 1 &&
+				    tv_parallel_submit(ctx, bio, n_sub,
+						       d_start, d_sz,
+						       d_id) == 0)
+					return DM_MAPIO_SUBMITTED;
+			}
+		}
+	}
+	/* ---- End B ---- */
+
+	/* Split bio at stripe chunk boundary if it crosses to next disk */
+	if (cur.seg_idx >= 0 &&
+	    cur.seg_idx < (int)ctx->meta.segment_count) {
+		struct tieredvol_segment *seg =
+			&ctx->meta.segments[cur.seg_idx];
+		u64 stripe_off = (logical - seg->logical_begin) %
+				 seg->stripe_size;
+		u64 chunk_acc = 0;
+		int i;
+
+		for (i = 0; i < (int)seg->disk_count; i++) {
+			u64 csize = (u64)seg->weight[i] *
+				    ctx->meta.chunk_size;
+
+			chunk_acc += csize;
+			if ((int)seg->disk_index[i] == cur.disk) {
+				u64 remain = chunk_acc - stripe_off;
+				sector_t remain_sect = remain >>
+						      TV_SECTOR_SHIFT;
+
+				if (remain_sect > 0 &&
+				    bio_sectors(bio) > remain_sect)
+					dm_accept_partial_bio(bio,
+							      remain_sect);
+				break;
+			}
+		}
+	}
+
 	bio_set_dev(bio, ctx->devs[cur.disk]->bdev);
 	bio->bi_iter.bi_sector = cur.offset >> TV_SECTOR_SHIFT;
 	atomic_add(bio->bi_iter.bi_size, &ctx->io.in_flight_bytes[cur.disk]);
@@ -244,6 +318,8 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	atomic_set(&ctx->rebuild.running, 0);
 	init_completion(&ctx->rebuild.done_r);
 	init_completion(&ctx->rebuild.done_w);
+	tv_wc_init_ctx(ctx);
+
 	timer_setup(&ctx->adaptive.decay_timer, tv_decay_timer_fn, 0);
 	mod_timer(&ctx->adaptive.decay_timer, jiffies + HZ);
 
@@ -281,20 +357,9 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		}
 	}
 
-	/* Create mempools for mirror bio contexts */
-	ctx->mirror_pw_pool = mempool_create_kmalloc_pool(
-		128, sizeof(struct tv_mirror_pw_ctx));
-	if (!ctx->mirror_pw_pool) {
-		ti->error = "tieredvol: mempool alloc failed (mirror_pw)";
-		ret = -ENOMEM;
-		goto free_error_count;
-	}
-	ctx->retry_ctx_pool = mempool_create_kmalloc_pool(
-		32, sizeof(struct tv_retry_ctx));
-	if (!ctx->retry_ctx_pool) {
-		mempool_destroy(ctx->mirror_pw_pool);
-		ti->error = "tieredvol: mempool alloc failed (retry_ctx)";
-		ret = -ENOMEM;
+	ret = tv_mirror_init_ctx(ctx);
+	if (ret) {
+		ti->error = "tieredvol: mempool alloc failed";
 		goto free_error_count;
 	}
 	}
@@ -337,6 +402,8 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 		ctx->min_chunk_sectors = global_min_chunk;
 		ctx->stripe_sectors = max_stripe >> TV_SECTOR_SHIFT;
+		if (ctx->stripe_sectors == 0)
+			ctx->stripe_sectors = chunk_sectors;
 	}
 
 	for (i = 0; i < (int)ctx->meta.segment_count; i++)
@@ -351,7 +418,7 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		(unsigned long long)ctx->min_chunk_sectors,
 		(unsigned long long)ctx->stripe_sectors);
 
-	ret = dm_set_target_max_io_len(ti, ctx->min_chunk_sectors);
+	ret = dm_set_target_max_io_len(ti, ctx->stripe_sectors);
 	if (ret) {
 		ti->error = "tieredvol: dm_set_target_max_io_len failed";
 		goto free_error_count;
@@ -387,8 +454,8 @@ static void tieredvol_dtr(struct dm_target *ti)
 	timer_delete_sync(&ctx->adaptive.decay_timer);
 	flush_work(&ctx->trigger_event);
 
-	mempool_destroy(ctx->mirror_pw_pool);
-	mempool_destroy(ctx->retry_ctx_pool);
+	tv_wc_destroy_ctx(ctx);
+	tv_mirror_destroy_ctx(ctx);
 
 	if (atomic_read(&ctx->rebuild.running)) {
 		atomic_set(&ctx->rebuild.running, 0);
@@ -429,7 +496,7 @@ static void tieredvol_io_hints(struct dm_target *ti, struct queue_limits *limits
 
 	limits->logical_block_size = 512;
 	limits->physical_block_size = 512;
-	limits->chunk_sectors = ctx->min_chunk_sectors;
+	limits->chunk_sectors = ctx->stripe_sectors;
 	limits->io_min = ctx->min_chunk_sectors;
 	limits->io_opt = ctx->stripe_sectors;
 }
@@ -552,14 +619,6 @@ static int __init tieredvol_init(void)
 	}
 
 	tv_sysfs_init();
-
-	/* Initialize per-disk timestamp ring locks */
-	{
-		int k;
-
-		for (k = 0; k < TV_MAX_DISKS; k++)
-			raw_spin_lock_init(&tv_ts_lock_arr[k]);
-	}
 
 	pr_info("tieredvol: module loaded (log_size=%u)\n", log_size);
 	return 0;

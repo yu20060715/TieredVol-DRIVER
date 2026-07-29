@@ -111,7 +111,7 @@ SATA:   480 MB/s
 
 ### 方法：四捨五入 + 上限
 
-目前實作（`tv_compute_weight()` in `tieredvol_partition.c`）採用簡單的四捨五入：
+目前實作（`tv_compute_weight()` in `tiered_partition.c`）採用簡單的四捨五入：
 
 ```c
 double w = speed / slowest;
@@ -257,7 +257,7 @@ Metadata 結構定義在 `src/tiered_types.h`（TV_METADATA）。
 
 儲存格式：
 ```
-# /etc/tieredvol/fastpool.scheduler
+# /etc/tieredvol/fastpool.conf
 [weighted_striping]
 version=1
 chunk_size=1048576
@@ -300,14 +300,15 @@ physical_offset = stripe_no × (weight × chunk) + offset_in_disk
 ## 整合到 TieredVol
 
 ```
-sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 --scheduler
+sudo tiered_setup --create --name fastpool --disks nvme0n1,sda,sdb
 
 程式內部：
   1. benchmark → 取得速度
   2. 計算 weight（speed / slowest）
   3. 依容量分段（build segments）
-  4. 儲存 metadata 到 /etc/tieredvol/*.scheduler
-  5. dispatch 時查 weight → 每顆碟拿幾 chunks
+  4. 儲存 metadata 到 /etc/tieredvol/*.conf
+  5. dmsetup create → 建立 tieredvol dm target
+  6. dispatch 時查 weight → 每顆碟拿幾 chunks
 ```
 
 ---
@@ -328,5 +329,4 @@ sudo tiered_setup --create --name fastpool --disks nvme0n1:500,sda:500,sdb:500 -
 ## 參考
 
 - Weighted striping 概念：參考儲存領域已有的 weighted allocation 概念
-- Ratio 近似演算法：四捨五入 + 上限（tv_compute_weight in tieredvol_partition.c）
-- 相關文件：[WEIGHTED_IO_SCHEDULER.md](../../TieredVol/docs/WEIGHTED_IO_SCHEDULER.md)（I/O dispatch 實作）
+- Ratio 近似演算法：四捨五入 + 上限（tv_compute_weight in tiered_partition.c）

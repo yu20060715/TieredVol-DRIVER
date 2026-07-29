@@ -123,6 +123,14 @@ struct tieredvol_ctx {
 	struct tv_adaptive_state adaptive;
 	struct tv_mirror_stats mirror;
 	struct tv_rebuild_state rebuild;
+	struct {
+		spinlock_t lock;
+		struct list_head entries;
+		sector_t stripe_start;
+		int seg_idx;
+		u64 accumulated;
+		struct delayed_work flush_work;
+	} wc;
 	bool mirror_enabled_any;
 	struct work_struct trigger_event;
 	mempool_t *mirror_pw_pool;
@@ -181,7 +189,7 @@ enum tv_log_event {
 
 extern struct kfifo tv_log_fifo;
 extern raw_spinlock_t tv_log_lock;
-extern raw_spinlock_t tv_ts_lock_arr[];
+
 extern u8 tv_log_level;
 extern unsigned int log_size;
 
@@ -214,6 +222,8 @@ struct tv_pending_write_cpu {
 };
 
 /* ---- tieredvol_mirror.c exports ---- */
+int tv_mirror_init_ctx(struct tieredvol_ctx *ctx);
+void tv_mirror_destroy_ctx(struct tieredvol_ctx *ctx);
 struct tv_mirror_pw_ctx {
 	struct tieredvol_ctx *ctx;
 	struct block_device *bdev;
@@ -244,6 +254,56 @@ struct tv_retry_ctx {
 };
 
 int tv_rebuild_thread(void *data);
+
+/* ---- Stripe-split helpers (shared by B path + C path) ---- */
+struct tv_stripe_ctx {
+	int fi, li;
+	int n_seg;
+	u64 disk_end[TV_MAX_DISKS];
+	u64 s_sz;
+	u64 s_off;
+	u64 b_end;
+};
+void tv_stripe_calc_boundaries(struct tieredvol_segment *seg,
+			       u32 chunk_size,
+			       u64 logical, u64 b_sz,
+			       struct tv_stripe_ctx *sc);
+int tv_stripe_compute_ranges(struct tv_stripe_ctx *sc,
+			     struct tieredvol_segment *seg,
+			     u64 logical, u32 chunk_size,
+			     u64 *d_start, u64 *d_sz, int *d_id);
+
+/* ---- B: Parallel multi-disk write support ---- */
+struct tv_parallel_block;
+struct tv_parallel_sub {
+	struct tv_parallel_block *block;
+	int disk_id;
+	unsigned int size;
+};
+struct tv_parallel_block {
+	atomic_t pending;
+	struct bio *orig_bio;
+	struct tieredvol_ctx *ctx;
+	struct tv_parallel_sub subs[];
+};
+void tv_parallel_end_io(struct bio *bio);
+int tv_parallel_submit(struct tieredvol_ctx *ctx, struct bio *bio,
+		       int n_sub, u64 *d_start, u64 *d_sz, int *d_id);
+
+/* ---- C: Write coalescing support ---- */
+extern bool wc_enabled;
+struct tv_wc_entry {
+    struct list_head list;
+    struct bio *bio;
+    struct tieredvol_map map;
+    u64 logical;
+};
+int tv_wc_init_ctx(struct tieredvol_ctx *ctx);
+void tv_wc_destroy_ctx(struct tieredvol_ctx *ctx);
+void tv_wc_flush(struct tieredvol_ctx *ctx);
+int tv_wc_try_buffer(struct tieredvol_ctx *ctx, struct bio *bio,
+		     u64 logical, struct tieredvol_map cur);
+
 
 /* ---- tieredvol_sysfs.c exports ---- */
 void tv_sysfs_init(void);

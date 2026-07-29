@@ -12,7 +12,7 @@
 #include <linux/ktime.h>
 #include <linux/jiffies.h>
 #include <linux/timer.h>
-#include <linux/sprintf.h>
+
 #include "tieredvol.h"
 
 /* ---- Log ring buffer ---- */

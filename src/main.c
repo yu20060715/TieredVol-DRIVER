@@ -15,8 +15,8 @@ static void print_usage(const char *prog) {
     printf("  %s --bench --disks sda,sdb,sdc         Benchmark disks (parallel)\n", prog);
     printf("  %s --bench --disks sda,sdb --sequential Benchmark disks (sequential)\n", prog);
     printf("  %s --bench --disks sda,sdb --warmup    Benchmark with SLC cache warm-up\n", prog);
-    printf("  %s --create --name NAME --disks ...    Create tiered volume\n", prog);
-    printf("  %s --create --name NAME --disks ... --scheduler  Create with weighted I/O scheduler\n", prog);
+    printf("  %s --create --name NAME --disks ...    Create tiered volume (kernel dm-target)\n", prog);
+    printf("  %s --create --name NAME --disks ... --lvm  Create with LVM striping (legacy)\n", prog);
     printf("  %s --remove --name NAME                Remove tiered volume\n", prog);
     printf("  %s --destroy --name NAME               Remove tiered volume\n", prog);
     printf("  %s --status                            Show status\n", prog);
@@ -28,7 +28,7 @@ static void print_usage(const char *prog) {
 }
 
 static int check_deps(void) {
-    const char *deps[] = {"dmsetup", "vgcreate", "pvcreate", NULL};
+    const char *deps[] = {"dmsetup", NULL};
     for (int i = 0; deps[i]; i++) {
         char path_buf[256];
         const char *path_env = getenv("PATH");
@@ -46,7 +46,7 @@ static int check_deps(void) {
             free(path_copy);
         }
         if (!found) {
-            fprintf(stderr, "Error: '%s' not found. Install lvm2: apt install lvm2\n", deps[i]);
+            fprintf(stderr, "Error: '%s' not found. Install dmsetup: apt install dmsetup\n", deps[i]);
             return 1;
         }
     }

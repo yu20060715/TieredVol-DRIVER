@@ -54,7 +54,7 @@ vs LVM: LVM fixed stripe 4-disk W 1407 / R 1829 MB/s. TieredVol weighted stripin
 - Crash consistency / journaling
 - Metadata recovery
 - Dynamic online rebalancing
-- Write cache (attempted and removed — bio_chain + flush_bypasses_map caused D-state hangs)
+- Write cache (Phase 1 C, enabled via `wc_enabled=1` module_param; enabled by default)
 
 ---
 
@@ -69,7 +69,7 @@ make
 make module
 
 # Create a weighted volume (loads kernel module automatically)
-sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc --scheduler
+sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc
 
 # Or manual fio:
 sudo fio --name=bench --filename=/dev/mapper/fastpool --rw=write --bs=2m \
@@ -107,7 +107,7 @@ NVMe idle waiting for SATA     All disks finish at approximately
 
 ```bash
 # Create weighted volume (kernel module)
-sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb --scheduler
+sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb
 
 # Benchmark the volume
 sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=128k --size=5G \
@@ -126,8 +126,8 @@ sudo tiered_setup --remove --name fastpool
 ### LVM Striping (Legacy)
 
 ```bash
-# Create LVM striped volume
-sudo tiered_setup --create --name pool --disks sdb:300,sdc:200 --fs ext4 --mount /mnt/pool
+# Create LVM striped volume (--lvm flag required)
+sudo tiered_setup --create --name pool --disks sdb:300,sdc:200 --lvm --fs ext4 --mount /mnt/pool
 
 # Benchmark
 sudo fio --filename=/dev/mapper/tv_vg_pool-tv_lv_pool --rw=write --bs=128k --size=5G \
@@ -188,6 +188,7 @@ TieredVol-DRIVER/
 ├── driver/                         # Kernel dm-target module
 │   ├── tieredvol.h                 # Central header: all structs + exports
 │   ├── tieredvol_core.c            # DM lifecycle: ctr/dtr/map/status/init/exit
+│   ├── tieredvol_stripe.c          # Stripe-split helpers (B path)
 │   ├── tieredvol_map.c             # Logical→Physical: static/adaptive/random
 │   ├── tieredvol_mirror.c          # Mirror I/O + pending tracking + end_io
 │   ├── tieredvol_log.c             # Log ring buffer + EMA decay timer
@@ -207,7 +208,7 @@ TieredVol-DRIVER/
 │   ├── tiered_partition.c          # Weight computation + segments
 │   ├── tiered_benchmark.c          # Raw device benchmark
 │   ├── warmup.c                    # SLC cache warm-up
-│   ├── cmd_create.c                # Volume creation (scheduler + LVM)
+│   ├── cmd_create.c                # Volume creation (kernel dm-target + LVM)
 │   ├── cmd_remove.c                # Volume removal + status
 │   ├── exec_helper.c               # fork/exec wrappers
 │   ├── setup_discover.c            # Block device discovery
@@ -220,10 +221,7 @@ TieredVol-DRIVER/
 │   ├── USAGE.md                    # Usage tutorial
 │   └── PARTITION_SPLITTING.md      # Weighted striping algorithm
 └── scripts/
-    ├── install_deps.sh             # Install dependencies + build
-    ├── test_scheduler.sh           # End-to-end test (fio)
-    ├── tieredvol-restore.sh        # Boot-time volume restore
-    └── tieredvol-restore.service   # systemd unit
+    └── install_deps.sh             # Install dependencies + build
 ```
 
 ### Kernel Module Architecture
@@ -231,8 +229,10 @@ TieredVol-DRIVER/
 | File | Responsibility |
 |------|---------------|
 | `tieredvol_core.c` | DM lifecycle, I/O entry (`tieredvol_map`), module init/exit |
+| `tieredvol_stripe.c` | Stripe-split helpers: boundaries, ranges, parallel submit |
 | `tieredvol_map.c` | Logical→Physical mapping (static/adaptive/random dispatch) |
-| `tieredvol_mirror.c` | Mirror I/O, pending tracking (per-CPU), timestamp ring, end_io handler |
+| `tieredvol_mirror.c` | Mirror I/O, pending tracking (per-CPU), timestamp ring, mirror/destroy ctx, parallel end_io |
+| `tieredvol_wc.c` | Write-coalescing buffer + flush, init/destroy ctx (Phase 1 C) |
 | `tieredvol_log.c` | Log ring buffer, EMA decay timer (load/latency/IOPS tracking) |
 | `tieredvol_meta.c` | Config file parse/save, CRC32 validation |
 | `tieredvol_message.c` | DM message commands (show/set/modify at runtime) |
@@ -244,8 +244,8 @@ TieredVol-DRIVER/
 User → write()/read() → VFS → bio → tieredvol_map()
   → tv_map_logical_adaptive()     # Multi-factor scoring: load + latency + wear
   → tv_ts_submit()                # Record submit timestamp
-  → [mirror?] → bio_alloc_clone() → submit_bio(clone)
-  → return DM_MAPIO_REMAPPED      # DM submits to physical disk
+   → [mirror?] → bio_alloc_clone() → submit_bio(clone)
+   → submit_bio(bio)               # Submit to physical disk directly
   ...
   → tieredvol_end_io()            # Completion: latency delta, in_flight--
     → tv_ts_complete()            # Calculate latency
@@ -312,7 +312,7 @@ seg0_policy=adaptive   # optional: static (default), adaptive, random
 - **No crash consistency** — No journaling or metadata recovery.
 - **System disk cannot be used** — dm returns EBUSY on mounted root partition.
 - **Module instability risk** — A kernel module bug can oops the system.
-- **NVMe write cache must stay ON** — Disabling it causes -21% throughput loss.
+- **NVMe write cache should stay ON** — Disabling it causes -21% throughput loss on some hardware.
 
 ## License
 
