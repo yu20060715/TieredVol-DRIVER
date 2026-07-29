@@ -40,8 +40,8 @@ src/cmd_remove.o: src/cmd_remove.c src/cmd_remove.h src/cmd_create.h src/tiered_
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Unit tests (pure logic — no kernel/liburing dependency)
-test_common: tests/test_common.c src/tiered_common.h src/setup_bench.h src/setup_discover.h src/setup_bench.c src/exec_helper.c
-	$(CC) $(CFLAGS) -o $@ tests/test_common.c src/setup_bench.c src/exec_helper.c -lm
+test_common: tests/test_common.c src/tiered_common.h src/setup_bench.h src/setup_discover.h src/setup_bench.c src/exec_helper.c src/setup_discover.c src/tiered_benchmark.c src/warmup.c
+	$(CC) $(CFLAGS) -o $@ tests/test_common.c src/setup_bench.c src/exec_helper.c src/setup_discover.c src/tiered_benchmark.c src/warmup.c -lm
 
 test_partition: tests/test_partition.c src/tiered_types.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
