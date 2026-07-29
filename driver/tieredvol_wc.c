@@ -107,13 +107,19 @@ void tv_wc_flush(struct tieredvol_ctx *ctx)
 					ctx->meta.chunk_size,
 					d_start, d_sz, d_id);
 
-				if (n_sub > 1 &&
-				    tv_parallel_submit(ctx, bio, n_sub,
-						       d_start, d_sz,
-						       d_id) == 0)
-					continue;
+				if (n_sub > 1) {
+					tv_mirror_handle(ctx, bio, cur,
+							 logical);
+					if (tv_parallel_submit(ctx, bio,
+							       n_sub,
+							       d_start, d_sz,
+							       d_id) == 0)
+						continue;
+				}
 			}
 		}
+
+		tv_mirror_handle(ctx, bio, cur, logical);
 
 		/* Direct single-disk submit */
 		bio_set_dev(bio, ctx->devs[cur.disk]->bdev);
@@ -141,9 +147,8 @@ int tv_wc_try_buffer(struct tieredvol_ctx *ctx, struct bio *bio,
 
 	if (!wc_enabled || bio_data_dir(bio) != WRITE ||
 	    cur.seg_idx < 0 ||
-	    cur.seg_idx >= (int)ctx->meta.segment_count) {
+	    cur.seg_idx >= (int)ctx->meta.segment_count)
 		return -EAGAIN;
-	}
 
 	seg = &ctx->meta.segments[cur.seg_idx];
 	if (seg->disk_count <= 1)

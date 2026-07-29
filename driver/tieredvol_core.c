@@ -102,11 +102,15 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 					ctx->meta.chunk_size,
 					d_start, d_sz, d_id);
 
-				if (n_sub > 1 &&
-				    tv_parallel_submit(ctx, bio, n_sub,
-						       d_start, d_sz,
-						       d_id) == 0)
-					return DM_MAPIO_SUBMITTED;
+				if (n_sub > 1) {
+					tv_mirror_handle(ctx, bio, cur,
+							 logical);
+					if (tv_parallel_submit(ctx, bio,
+							       n_sub,
+							       d_start, d_sz,
+							       d_id) == 0)
+						return DM_MAPIO_SUBMITTED;
+				}
 			}
 		}
 	}
