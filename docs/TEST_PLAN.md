@@ -5,7 +5,7 @@
 ```
 代號    型號            容量   介面              預估速度
 A    = SN750           512G   PCIe 3.0 x4       3000 MB/s
-B    = P3 Plus         1T     PCIe 2.0 x4       1500 MB/s
+B    = P3 Plus         1T     PCIe 2.0 x4       1000 MB/s
 C    = MX500           512G   SATA               500 MB/s
 D    = WD Blue         250G   SATA               250 MB/s
 ```
@@ -22,8 +22,8 @@ D    = WD Blue         250G   SATA               250 MB/s
 |----|----|----|----------|
 | R1 | A  | write | ~3000 MB/s |
 | R2 | A  | read  | ~3000 MB/s |
-| R3 | B  | write | ~1500 MB/s |
-| R4 | B  | read  | ~1500 MB/s |
+| R3 | B  | write | ~1000 MB/s |
+| R4 | B  | read  | ~1000 MB/s |
 | R5 | C  | write | ~500 MB/s |
 | R6 | C  | read  | ~500 MB/s |
 | R7 | D  | write | ~250 MB/s |
@@ -43,7 +43,7 @@ D    = WD Blue         250G   SATA               250 MB/s
 - `dmsetup status` per-disk write bytes vs weight 比例
 - `show_mirror`（若有開 mirror）確認 mirror_err=0
 
-### 2-disk：A + B（weight ≈ 2:1）
+### 2-disk：A + B（weight ≈ 3:1）
 
 | ID | WC | Mirror | NVMe | SATA | 備註 |
 |----|----|--------|------|------|------|
@@ -52,7 +52,7 @@ D    = WD Blue         250G   SATA               250 MB/s
 | T3 | on | on → C | A+B | C(mir) | Mirror 驗證 |
 | T4 | off | on → C | A+B | C(mir) | Mirror 無 WC |
 
-### 3-disk：A + B + C（weight ≈ 6:3:1）
+### 3-disk：A + B + C（weight ≈ 6:2:1）
 
 | ID | WC | Policy | Mirror | 備註 |
 |----|----|--------|--------|------|
@@ -63,7 +63,7 @@ D    = WD Blue         250G   SATA               250 MB/s
 | T9 | on | adaptive | off | vs T5 |
 | T10 | off | adaptive | off | vs T6 |
 
-### 4-disk：A + B + C + D（weight ≈ 12:6:2:1）
+### 4-disk：A + B + C + D（weight ≈ 12:4:2:1）
 
 | ID | WC | Policy | Mirror | 備註 |
 |----|----|--------|--------|------|
