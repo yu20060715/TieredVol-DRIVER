@@ -1,0 +1,45 @@
+TieredVol-DRIVER — External References & Acknowledgments
+=========================================================
+
+TieredVol references and adapts techniques from the following open-source
+projects and academic publications:
+
+dm-stripe (Linux kernel)
+  Weighted striping dispatch — boundary-array based disk selection.
+  drivers/md/dm-stripe.c
+
+dm-switch (Linux kernel)
+  Region-based bio dispatch with random fallback for degraded/stale disks.
+  drivers/md/dm-switch.c
+
+dm-crypt (Linux kernel)
+  Bio clone + sector remapping + custom end_io completion handler.
+  drivers/md/dm-crypt.c
+
+dm-linear (Linux kernel)
+  Two-line bio remapping pattern: bio_set_dev() + bi_sector rewrite.
+  drivers/md/dm-linear.c
+
+dm-raid1 (Linux kernel)
+  Mirror write via bio_alloc_clone, per-CPU pending tracking, read retry.
+  drivers/md/dm-raid1.c
+
+dm-dust (Linux kernel)
+  Time-based stale disk detection and automatic skip during dispatch.
+  drivers/md/dm-dust.c
+
+dm-log-writes (Linux kernel)
+  Structured I/O event logging via kfifo ring buffer with typed entries.
+  drivers/md/dm-log-writes.c
+
+blk-mq (Linux kernel)
+  Per-disk I/O statistics: inflight bytes, read/write ops/bytes, latency.
+  block/blk-mq.c
+
+emlog by nicupavel
+  Fixed-size kernel ring buffer for structured event logging (design concept).
+  https://github.com/nicupavel/emlog
+
+Jiao & Kim, "Asymmetric RAID: Rethinking RAID for SSD Heterogeneity"
+  HotStorage'24 — multi-factor adaptive dispatch (load, latency, wear).
+  https://doi.org/10.1145/3655038.3665947

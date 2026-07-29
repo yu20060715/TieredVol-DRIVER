@@ -108,6 +108,7 @@ D    = WD Blue         250G   SATA               250 MB/s
 | F3 | Lifecycle | create → bench → message show_stats → remove → recreate | 全部成功 |
 | F4 | DM message | show_mirror / show_stats / show_config / set_policy / reset_stats | 正確輸出 |
 | F5 | WC runtime toggle | `echo N > /sys/module/tieredvol/parameters/wc_enabled` → rerun | WC 生效/關閉 |
+| F6 | Data integrity | `fio --verify=md5 --verify_interval=4K --bs=4K --size=10G --rw=write` → `--rw=read` | verify 0 mismatch，資料正確 |
 
 ---
 
@@ -119,8 +120,8 @@ D    = WD Blue         250G   SATA               250 MB/s
 | Phase 2 TieredVol | ~24 (×2 for write+read) | 20 min |
 | Phase 3 LVM 對照 | ~10 (×2 for write+read) | 10 min |
 | Phase 4 Mirror | 3 | 5 min |
-| Phase 5 功能 | 5 | 5 min |
-| **總計** | **~50 runs** | **~45 min** |
+| Phase 5 功能 | 6 | 10 min |
+| **總計** | **~51 runs** | **~50 min** |
 
 建議分兩輪執行：
 

@@ -40,8 +40,8 @@ src/cmd_remove.o: src/cmd_remove.c src/cmd_remove.h src/cmd_create.h src/tiered_
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Unit tests (pure logic — no kernel/liburing dependency)
-test_common: tests/test_common.c src/tiered_common.h
-	$(CC) $(CFLAGS) -o $@ $<
+test_common: tests/test_common.c src/tiered_common.h src/setup_bench.h src/setup_discover.h src/setup_bench.c src/exec_helper.c
+	$(CC) $(CFLAGS) -o $@ tests/test_common.c src/setup_bench.c src/exec_helper.c -lm
 
 test_partition: tests/test_partition.c src/tiered_types.h $(SCHED_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_OBJS)
@@ -52,9 +52,12 @@ test_metadata: tests/test_metadata.c src/tiered_types.h $(SCHED_OBJS)
 test_map: tests/test_map.c tests/test_common.h
 	$(CC) $(CFLAGS) -o $@ $<
 
-test: test_common test_partition test_metadata test_map
+test_exec: tests/test_exec.c src/exec_helper.h src/exec_helper.c
+	$(CC) $(CFLAGS) -o $@ tests/test_exec.c src/exec_helper.c
+
+test: test_common test_partition test_metadata test_map test_exec
 	@TP=0; TR=0; \
-	for t in test_common test_partition test_metadata test_map; do \
+	for t in test_common test_partition test_metadata test_map test_exec; do \
 		echo "=== $$t ===" && ./$$t; \
 		P=$$?; \
 		if [ $$P -eq 0 ]; then TP=$$((TP+1)); fi; \
@@ -106,7 +109,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_setup
 
 clean:
-	rm -f tiered_setup test_common test_partition test_metadata test_map
+	rm -f tiered_setup test_common test_partition test_metadata test_map test_exec
 	rm -f src/*.o
 
 .PHONY: all install uninstall clean test test-full lint module module_install module_clean

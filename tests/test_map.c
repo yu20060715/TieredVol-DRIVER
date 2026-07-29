@@ -802,6 +802,42 @@ static void test_edge_stripe_multiple(void) {
 /*  MAIN                                                               */
 /* ================================================================== */
 
+static void test_adaptive_all_degraded(void) {
+	printf("\n[TEST] tv_map_logical_adaptive: all degraded -> fallback\n");
+	struct tieredvol_metadata meta;
+	make_meta_1seg(&meta, 2, 1048576);
+	meta.segments[0].weight[0] = 1;
+	meta.segments[0].weight[1] = 1;
+	meta.segments[0].stripe_size = 2 * 1048576;
+
+	u64 ema_load[2] = { 0, 0 };
+	bool stale[2] = { false, false };
+	bool degraded[2] = { true, true };
+
+	struct tieredvol_map m = tv_map_logical_adaptive(
+			0, &meta, ema_load, stale, degraded, 2, NULL, 0, 1048576, NULL);
+	check(m.disk >= 0, "all degraded -> still returns a disk (fallback)");
+}
+
+static void test_random_coverage(void) {
+	printf("\n[TEST] tv_map_logical_random: coverage\n");
+	struct tieredvol_metadata meta;
+	make_meta_1seg(&meta, 4, 1048576);
+	meta.segments[0].weight[0] = 1;
+	meta.segments[0].weight[1] = 1;
+	meta.segments[0].weight[2] = 1;
+	meta.segments[0].weight[3] = 1;
+	meta.segments[0].stripe_size = 4 * 1048576;
+
+	int hits[4] = {0};
+	for (int i = 0; i < 200; i++) {
+		struct tieredvol_map m = tv_map_logical_random(0, &meta, 1048576);
+		if (m.disk >= 0 && m.disk < 4) hits[m.disk]++;
+	}
+	check(hits[0] > 0 && hits[1] > 0 && hits[2] > 0 && hits[3] > 0,
+		  "200 random calls hit all 4 disks at least once");
+}
+
 int main(void) {
 	srand(42);
 
@@ -846,6 +882,10 @@ int main(void) {
 	test_edge_zero_chunk();
 	test_edge_4_segments();
 	test_edge_stripe_multiple();
+
+	/* Additional edge cases */
+	test_adaptive_all_degraded();
+	test_random_coverage();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
