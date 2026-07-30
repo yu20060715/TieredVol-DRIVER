@@ -52,6 +52,19 @@ D    = WD Blue         250G   SATA               250 MB/s
 | T3 | on | on → C | A+B | C(mir) | Mirror 驗證 |
 | T4 | off | on → C | A+B | C(mir) | Mirror 無 WC |
 
+### WC 專項：小寫入合併效益
+
+`fio --bs=4K --size=1G --iodepth=1`（單 depth 避免平行蓋掉 WC 效果）
+
+| ID | WC | 描述 |
+|----|----|------|
+| W1 | on | 4K 隨機寫入，WC 應合併成 1MB chunk |
+| W2 | off | 同上，關 WC，每筆 4K 直接送 disk |
+| W3 | on | 4K 循序寫入 |
+| W4 | off | 4K 循序寫入，關 WC |
+
+**驗收標準**：W1/W3 的 IOPS 應顯著高於 W2/W4（WC 減少 I/O 次數）。
+
 ### 3-disk：A + B + C（weight ≈ 6:2:1）
 
 | ID | WC | Policy | Mirror | 備註 |
@@ -117,7 +130,7 @@ D    = WD Blue         250G   SATA               250 MB/s
 | Phase | Runs | 估計時間 |
 |-------|------|----------|
 | Phase 1 Raw | 8 | 5 min |
-| Phase 2 TieredVol | ~24 (×2 for write+read) | 20 min |
+| Phase 2 TieredVol | ~28 (×2 for write+read) | 22 min |
 | Phase 3 LVM 對照 | ~10 (×2 for write+read) | 10 min |
 | Phase 4 Mirror | 3 | 5 min |
 | Phase 5 功能 | 6 | 10 min |
