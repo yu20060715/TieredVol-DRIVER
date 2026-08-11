@@ -237,6 +237,78 @@ static int msg_show_rebuild(struct dm_target *ti, unsigned int argc,
 	return 0;
 }
 
+static int msg_rebuild_badmap(struct dm_target *ti, unsigned int argc,
+			      char **argv, char *result, unsigned int maxlen)
+{
+	struct tieredvol_ctx *ctx = ti->private;
+
+	if (atomic_read(&ctx->rebuild.running))
+		return -EBUSY;
+	tv_badmap_rebuild(ctx);
+	snprintf(result, maxlen, "badmap rebuild done");
+	return 0;
+}
+
+static int msg_set_badmap(struct dm_target *ti, unsigned int argc,
+			  char **argv, char *result, unsigned int maxlen)
+{
+	struct tieredvol_ctx *ctx = ti->private;
+	u32 disk;
+	u64 chunk_no;
+
+	if (kstrtou32(argv[1], 10, &disk) ||
+	    kstrtou64(argv[2], 10, &chunk_no) ||
+	    disk >= (u32)ctx->ndisks)
+		return -EINVAL;
+	tv_badmap_set(ctx, disk, chunk_no);
+	snprintf(result, maxlen, "badmap set disk=%u chunk=%llu",
+		 disk, chunk_no);
+	pr_info("tieredvol: badmap set disk=%u chunk=%llu\n", disk, chunk_no);
+	return 0;
+}
+
+static int msg_clear_badmap(struct dm_target *ti, unsigned int argc,
+			    char **argv, char *result, unsigned int maxlen)
+{
+	struct tieredvol_ctx *ctx = ti->private;
+	u32 disk;
+	u64 chunk_no;
+
+	if (kstrtou32(argv[1], 10, &disk) ||
+	    kstrtou64(argv[2], 10, &chunk_no) ||
+	    disk >= (u32)ctx->ndisks)
+		return -EINVAL;
+	tv_badmap_clear(ctx, disk, chunk_no);
+	snprintf(result, maxlen, "badmap clear disk=%u chunk=%llu",
+		 disk, chunk_no);
+	pr_info("tieredvol: badmap clear disk=%u chunk=%llu\n", disk, chunk_no);
+	return 0;
+}
+
+static int msg_show_badmap(struct dm_target *ti, unsigned int argc,
+			   char **argv, char *result, unsigned int maxlen)
+{
+	struct tieredvol_ctx *ctx = ti->private;
+	int i, off = 0;
+
+	for (i = 0; i < ctx->ndisks && off < (int)maxlen - 2; i++) {
+		u64 count = 0;
+		u64 c;
+
+		if (!ctx->badmaps[i].bitmap)
+			continue;
+		for (c = 0; c < ctx->badmaps[i].n_chunks; c++) {
+			if (test_bit(c, ctx->badmaps[i].bitmap))
+				count++;
+		}
+		off += snprintf(result + off, maxlen - off,
+				"%s%s=%llu/%llu", i > 0 ? " " : "",
+				ctx->meta.disk_names[i],
+				count, ctx->badmaps[i].n_chunks);
+	}
+	return 0;
+}
+
 /* clang-format off */
 const struct tv_msg_handler tv_msg_mirror[] = {
 	{ "show_mirror",      1, 1, msg_show_mirror },
@@ -249,6 +321,10 @@ const struct tv_msg_handler tv_msg_mirror[] = {
 	{ "start_rebuild",    2, 0, msg_start_rebuild },
 	{ "stop_rebuild",     1, 1, msg_stop_rebuild },
 	{ "show_rebuild",     1, 1, msg_show_rebuild },
+	{ "rebuild_badmap",   1, 1, msg_rebuild_badmap },
+	{ "set_badmap",       3, 3, msg_set_badmap },
+	{ "clear_badmap",     3, 3, msg_clear_badmap },
+	{ "show_badmap",      1, 1, msg_show_badmap },
 };
 /* clang-format on */
 

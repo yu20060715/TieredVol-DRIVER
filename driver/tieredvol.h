@@ -27,6 +27,7 @@ struct tieredvol_segment {
 	u64 stripe_size;
 	bool mirror_enabled;
 	u32 mirror_disk;
+	int policy; /* -1 = inherit from ctx, 0 = static, 1 = adaptive, 2 = random */
 };
 
 struct tieredvol_metadata {
@@ -41,6 +42,7 @@ struct tieredvol_metadata {
 	u32 runtime_stale_ms;
 	u32 runtime_ema_shift;
 	u32 runtime_wear_bias;
+	char badmap_ranges[TV_MAX_DISKS][256];
 };
 
 struct tieredvol_map {
@@ -109,6 +111,15 @@ struct tv_degradation {
 	bool degraded[TV_MAX_DISKS];
 };
 
+struct tieredvol_badmap {
+	unsigned long *bitmap;
+	u64 n_chunks;
+};
+
+struct tv_bench_stats {
+	ktime_t start_time;
+};
+
 struct tieredvol_ctx {
 	struct dm_target *ti;
 	struct tieredvol_metadata meta;
@@ -120,6 +131,7 @@ struct tieredvol_ctx {
 	sector_t stripe_sectors;
 	struct tv_io_stats io;
 	struct tv_degradation deg;
+	struct tieredvol_badmap badmaps[TV_MAX_DISKS];
 	struct tv_adaptive_state adaptive;
 	struct tv_mirror_stats mirror;
 	struct tv_rebuild_state rebuild;
@@ -135,6 +147,7 @@ struct tieredvol_ctx {
 	struct work_struct trigger_event;
 	mempool_t *mirror_pw_pool;
 	mempool_t *retry_ctx_pool;
+	struct tv_bench_stats bench[TV_MAX_DISKS];
 };
 
 /* ---- tieredvol_map.c exports ---- */
@@ -276,6 +289,7 @@ int tv_stripe_compute_ranges(struct tv_stripe_ctx *sc,
 			     u64 *d_start, u64 *d_sz, int *d_id);
 
 /* ---- B: Parallel multi-disk write support ---- */
+#define TV_PARALLEL_TIMEOUT (30 * HZ)
 struct tv_parallel_block;
 struct tv_parallel_sub {
 	struct tv_parallel_block *block;
@@ -286,9 +300,13 @@ struct tv_parallel_block {
 	atomic_t pending;
 	struct bio *orig_bio;
 	struct tieredvol_ctx *ctx;
+	int n_sub;
+	atomic_t timed_out;
+	struct timer_list timer;
 	struct tv_parallel_sub subs[];
 };
 void tv_parallel_end_io(struct bio *bio);
+void tv_parallel_timeout(struct timer_list *t);
 int tv_parallel_submit(struct tieredvol_ctx *ctx, struct bio *bio,
 		       int n_sub, u64 *d_start, u64 *d_sz, int *d_id);
 
@@ -310,6 +328,16 @@ int tv_wc_try_buffer(struct tieredvol_ctx *ctx, struct bio *bio,
 /* ---- tieredvol_sysfs.c exports ---- */
 void tv_sysfs_init(void);
 void tv_sysfs_exit(void);
+
+/* ---- tieredvol_badmap.c exports ---- */
+void tv_badmap_init(struct tieredvol_ctx *ctx);
+void tv_badmap_destroy(struct tieredvol_ctx *ctx);
+bool tv_badmap_test(struct tieredvol_ctx *ctx, int disk, u64 chunk_no);
+void tv_badmap_set(struct tieredvol_ctx *ctx, int disk, u64 chunk_no);
+void tv_badmap_clear(struct tieredvol_ctx *ctx, int disk, u64 chunk_no);
+
+/* ---- Badmap rebuild ---- */
+void tv_badmap_rebuild(struct tieredvol_ctx *ctx);
 
 /* ---- tieredvol_message.c exports ---- */
 int tieredvol_message(struct dm_target *ti, unsigned int argc,

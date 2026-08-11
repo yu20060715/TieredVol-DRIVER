@@ -30,11 +30,41 @@ void tv_parallel_end_io(struct bio *bio)
 	bio_put(bio);
 
 	if (atomic_dec_and_test(&block->pending)) {
-		bio_endio(block->orig_bio);
+		del_timer_sync(&block->timer);
+		if (!atomic_read(&block->timed_out))
+			bio_endio(block->orig_bio);
 		kfree(block);
 	}
 }
 EXPORT_SYMBOL_GPL(tv_parallel_end_io);
+
+void tv_parallel_timeout(struct timer_list *t)
+{
+	struct tv_parallel_block *block = from_timer(block, t, timer);
+	struct tieredvol_ctx *ctx = block->ctx;
+	int i;
+
+	if (atomic_read(&block->pending) == 0)
+		return;
+
+	pr_warn("tieredvol: parallel submit timeout (%d pending), degrading disks\n",
+		atomic_read(&block->pending));
+
+	for (i = 0; i < block->n_sub; i++) {
+		int d = block->subs[i].disk_id;
+
+		if (d >= 0 && d < ctx->ndisks && !ctx->deg.degraded[d]) {
+			ctx->deg.degraded[d] = true;
+			pr_warn("tieredvol: disk[%d] DEGRADED by parallel timeout\n",
+				d);
+		}
+	}
+
+	atomic_set(&block->timed_out, 1);
+	smp_mb();
+	bio_io_error(block->orig_bio);
+}
+EXPORT_SYMBOL_GPL(tv_parallel_timeout);
 
 /* ---- Stripe-split helpers ---- */
 
@@ -138,8 +168,13 @@ int tv_parallel_submit(struct tieredvol_ctx *ctx, struct bio *bio,
 	}
 
 	atomic_set(&block->pending, n_sub);
+	atomic_set(&block->timed_out, 0);
 	block->orig_bio = bio;
 	block->ctx = ctx;
+	block->n_sub = n_sub;
+
+	timer_setup(&block->timer, tv_parallel_timeout, 0);
+	mod_timer(&block->timer, jiffies + TV_PARALLEL_TIMEOUT);
 
 	for (ci = 0; ci < n_sub; ci++) {
 		int d = d_id[ci];

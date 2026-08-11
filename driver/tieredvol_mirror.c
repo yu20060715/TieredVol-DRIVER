@@ -406,6 +406,16 @@ int tieredvol_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 				       "DEGRADED err=%d", errs);
 				schedule_work(&ctx->trigger_event);
 			}
+
+			/* Mark bad block on WRITE error */
+			if (bio_data_dir(bio) == WRITE) {
+				u64 phy_byte = (u64)bio->bi_iter.bi_sector << 9;
+				u64 chunk_no = phy_byte / ctx->meta.chunk_size;
+
+				tv_badmap_set(ctx, disk_id, chunk_no);
+				tv_log(TV_LOG_ERR, disk_id, TV_LOG_IO,
+				       "WRITE err mark bad chunk %llu", chunk_no);
+			}
 		}
 
 		if (bio_data_dir(bio) == READ && disk_id >= 0) {

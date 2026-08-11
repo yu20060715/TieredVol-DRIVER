@@ -130,6 +130,35 @@ static int msg_reset_io_stats(struct dm_target *ti, unsigned int argc,
 	return 0;
 }
 
+static int msg_show_bench(struct dm_target *ti, unsigned int argc,
+			  char **argv, char *result, unsigned int maxlen)
+{
+	struct tieredvol_ctx *ctx = ti->private;
+	int i, off = 0;
+	u64 now_ns = ktime_get_ns();
+
+	for (i = 0; i < ctx->ndisks && off < (int)maxlen - 2; i++) {
+		u64 elapsed_ns = now_ns - ctx->bench[i].start_time;
+		u64 rd_bytes = atomic64_read(&ctx->io.total_read_bytes[i]);
+		u64 wr_bytes = atomic64_read(&ctx->io.total_write_bytes[i]);
+		u64 rd_bps = 0, wr_bps = 0;
+
+		if (elapsed_ns > 0) {
+			rd_bps = rd_bytes * 1000000000ULL / elapsed_ns;
+			wr_bps = wr_bytes * 1000000000ULL / elapsed_ns;
+		}
+
+		off += snprintf(result + off, maxlen - off,
+				"%s%s:rd=%lluM wr=%lluM",
+				i > 0 ? " " : "",
+				ctx->meta.disk_names[i],
+				rd_bps / (1024 * 1024),
+				wr_bps / (1024 * 1024));
+	}
+	pr_info("tieredvol: %s\n", result);
+	return 0;
+}
+
 /* clang-format off */
 const struct tv_msg_handler tv_msg_stats[] = {
 	{ "reset_stats",      1, 1, msg_reset_stats },
@@ -138,6 +167,7 @@ const struct tv_msg_handler tv_msg_stats[] = {
 	{ "show_inflight",    1, 1, msg_show_inflight },
 	{ "show_io_stats",    1, 1, msg_show_io_stats },
 	{ "reset_io_stats",   1, 1, msg_reset_io_stats },
+	{ "show_bench",       1, 1, msg_show_bench },
 };
 /* clang-format on */
 

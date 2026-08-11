@@ -35,27 +35,53 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 
 	logical = (u64)bio->bi_iter.bi_sector << TV_SECTOR_SHIFT;
 
-	switch (ctx->adaptive.policy) {
-	case TV_POLICY_ADAPTIVE:
-		cur = tv_map_logical_adaptive(logical, &ctx->meta,
-					      ctx->adaptive.ema_load,
-					      ctx->adaptive.stale,
-					      ctx->deg.degraded,
-					      ctx->ndisks,
-					      ctx->io.total_write_bytes,
-					      ctx->adaptive.wear_bias,
-					      ctx->meta.chunk_size,
-					      ctx->adaptive.ema_latency_ns);
-		break;
-	case TV_POLICY_RANDOM:
-		cur = tv_map_logical_random(logical, &ctx->meta,
-					    ctx->meta.chunk_size);
-		break;
-	case TV_POLICY_STATIC:
-	default:
-		cur = tv_map_logical(logical, &ctx->meta,
-				     ctx->meta.chunk_size);
-		break;
+	{
+		/* Find segment to determine per-segment policy */
+		int seg_idx = -1;
+		int lo = 0, hi = (int)ctx->meta.segment_count - 1;
+
+		while (lo <= hi) {
+			int mid = lo + (hi - lo) / 2;
+			const struct tieredvol_segment *seg =
+				&ctx->meta.segments[mid];
+
+			if (logical < seg->logical_begin)
+				hi = mid - 1;
+			else if (logical >= seg->logical_end)
+				lo = mid + 1;
+			else {
+				seg_idx = mid;
+				break;
+			}
+		}
+
+		int pol = seg_idx >= 0 ?
+			ctx->meta.segments[seg_idx].policy : -1;
+		if (pol < 0)
+			pol = ctx->adaptive.policy;
+
+		switch (pol) {
+		case TV_POLICY_ADAPTIVE:
+			cur = tv_map_logical_adaptive(logical, &ctx->meta,
+						      ctx->adaptive.ema_load,
+						      ctx->adaptive.stale,
+						      ctx->deg.degraded,
+						      ctx->ndisks,
+						      ctx->io.total_write_bytes,
+						      ctx->adaptive.wear_bias,
+						      ctx->meta.chunk_size,
+						      ctx->adaptive.ema_latency_ns);
+			break;
+		case TV_POLICY_RANDOM:
+			cur = tv_map_logical_random(logical, &ctx->meta,
+						    ctx->meta.chunk_size);
+			break;
+		case TV_POLICY_STATIC:
+		default:
+			cur = tv_map_logical(logical, &ctx->meta,
+					     ctx->meta.chunk_size);
+			break;
+		}
 	}
 
 	if (cur.disk < 0 || cur.disk >= ctx->ndisks) {
@@ -65,6 +91,25 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 		       "map fail sec=%llu", bio->bi_iter.bi_sector);
 		bio_io_error(bio);
 		return DM_MAPIO_SUBMITTED;
+	}
+
+	/* ---- Phase D: Bad block bitmap check ---- */
+	{
+		u64 chunk_no = cur.offset / ctx->meta.chunk_size;
+
+		if (bio_data_dir(bio) == READ &&
+		    tv_badmap_test(ctx, cur.disk, chunk_no)) {
+			zero_fill_bio(bio);
+			bio_endio(bio);
+			return DM_MAPIO_SUBMITTED;
+		}
+		if (bio_data_dir(bio) == WRITE &&
+		    tv_badmap_test(ctx, cur.disk, chunk_no)) {
+			tv_log(TV_LOG_WARN, cur.disk, TV_LOG_IO,
+			       "skip bad chunk %llu disk[%d]", chunk_no, cur.disk);
+			bio_endio(bio);
+			return DM_MAPIO_SUBMITTED;
+		}
 	}
 
 	/* ---- Phase 1 C: Write coalescing ---- */
@@ -263,6 +308,9 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	init_completion(&ctx->rebuild.done_w);
 	tv_wc_init_ctx(ctx);
 
+	for (i = 0; i < ctx->ndisks; i++)
+		ctx->bench[i].start_time = ktime_get();
+
 	timer_setup(&ctx->adaptive.decay_timer, tv_decay_timer_fn, 0);
 	mod_timer(&ctx->adaptive.decay_timer, jiffies + HZ);
 
@@ -270,6 +318,34 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		pr_info("tieredvol: disk[%d] %s -> %pg (%llu sectors)\n",
 			i, ctx->meta.disk_names[i], ctx->devs[i]->bdev,
 			(unsigned long long)ctx->disk_sectors[i]);
+
+	tv_badmap_init(ctx);
+
+	/* Load bad block ranges from metadata into bitmaps */
+	for (i = 0; i < ctx->ndisks; i++) {
+		const char *ranges = ctx->meta.badmap_ranges[i];
+
+		if (ranges && *ranges) {
+			const char *p = ranges;
+			u64 start, end;
+
+			pr_info("tieredvol: badmap disk[%d] ranges: %s\n",
+				i, ranges);
+			while (*p) {
+				while (*p == ',') p++;
+				if (!*p) break;
+				if (sscanf(p, "%llu-%llu", &start, &end) == 2) {
+					u64 c;
+					for (c = start; c <= end && c < ctx->badmaps[i].n_chunks; c++)
+						set_bit(c, ctx->badmaps[i].bitmap);
+				} else if (sscanf(p, "%llu", &start) == 1) {
+					if (start < ctx->badmaps[i].n_chunks)
+						set_bit(start, ctx->badmaps[i].bitmap);
+				}
+				while (*p && *p != ',') p++;
+			}
+		}
+	}
 
 	if (ctx->meta.segment_count == 0) {
 		ti->error = "tieredvol: no segments";
@@ -285,6 +361,45 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 				"tieredvol: segments not sorted by logical_begin";
 			ret = -EINVAL;
 			goto free_error_count;
+		}
+	}
+
+	/* Validate mirror disk capacity */
+	{
+		u32 si;
+
+		for (si = 0; si < ctx->meta.segment_count; si++) {
+			struct tieredvol_segment *seg =
+				&ctx->meta.segments[si];
+			u64 seg_sectors;
+			u64 mirror_sectors;
+
+			if (!seg->mirror_enabled)
+				continue;
+
+			if (seg->mirror_disk >= ctx->ndisks) {
+				ti->error =
+					"tieredvol: mirror_disk out of range";
+				ret = -EINVAL;
+				goto free_error_count;
+			}
+
+			seg_sectors = (seg->logical_end -
+				       seg->logical_begin) >> 9;
+			mirror_sectors =
+				ctx->disk_sectors[seg->mirror_disk];
+
+			if (mirror_sectors < seg_sectors) {
+				pr_err("tieredvol: segment[%u] needs %llu sectors, mirror disk[%u] has %llu\n",
+				       si,
+				       (unsigned long long)seg_sectors,
+				       seg->mirror_disk,
+				       (unsigned long long)mirror_sectors);
+				ti->error =
+					"tieredvol: mirror disk too small for segment";
+				ret = -EINVAL;
+				goto free_error_count;
+			}
 		}
 	}
 
@@ -377,6 +492,7 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 free_error_count:
 	timer_delete_sync(&ctx->adaptive.decay_timer);
+	tv_badmap_destroy(ctx);
 	kfree(ctx->deg.error_count);
 put_devices:
 	for (i = i - 1; i >= 0; i--)
@@ -408,6 +524,7 @@ static void tieredvol_dtr(struct dm_target *ti)
 			kthread_stop(ctx->rebuild.thread);
 	}
 
+	tv_badmap_destroy(ctx);
 	kfree(ctx->deg.error_count);
 
 	for (i = 0; i < ctx->ndisks; i++)

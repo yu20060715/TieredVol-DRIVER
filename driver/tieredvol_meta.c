@@ -202,6 +202,44 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 			off += scnprintf(buf + off, 65536 - off,
 					 "seg%u_mirror=%u\n", i,
 					 seg->mirror_disk);
+		if (seg->policy >= 0)
+			off += scnprintf(buf + off, 65536 - off,
+					 "seg%u_policy=%d\n", i,
+					 seg->policy);
+	}
+
+	/* Save bad block bitmaps as ranges */
+	for (u32 i = 0; i < ctx->meta.disk_count; i++) {
+		struct tieredvol_badmap *bm = &ctx->badmaps[i];
+		u64 start = 0;
+		int range_count = 0;
+
+		if (!bm->bitmap || bm->n_chunks == 0)
+			continue;
+
+		off += scnprintf(buf + off, 65536 - off, "badmap_%u=", i);
+
+		while (start < bm->n_chunks) {
+			/* Find next set bit */
+			start = find_next_bit(bm->bitmap, bm->n_chunks, start);
+			if (start >= bm->n_chunks)
+				break;
+
+			/* Find end of consecutive run */
+			u64 end = find_next_zero_bit(bm->bitmap, bm->n_chunks, start);
+			if (end > bm->n_chunks)
+				end = bm->n_chunks;
+
+			if (range_count > 0)
+				off += scnprintf(buf + off, 65536 - off, ",");
+			if (end == start + 1)
+				off += scnprintf(buf + off, 65536 - off, "%llu", start);
+			else
+				off += scnprintf(buf + off, 65536 - off, "%llu-%llu", start, end - 1);
+			range_count++;
+			start = end;
+		}
+		off += scnprintf(buf + off, 65536 - off, "\n");
 	}
 
 	off += scnprintf(buf + off, 65536 - off, "[runtime]\n");
@@ -314,6 +352,10 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 	ret = 0;
 
 	memset(meta, 0, sizeof(*meta));
+
+	/* Set default per-segment policy to -1 (inherit from ctx) */
+	for (u32 si = 0; si < TV_MAX_SEGS; si++)
+		meta->segments[si].policy = -1;
 
 	/* CRC32 pre-scan: find crc32= line before main parse loop.
 	 * Must not destroy the buffer — do NOT use parse_line() which writes \0.
@@ -480,7 +522,20 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			}
 			seg->mirror_enabled = true;
 			seg->mirror_disk = mirror_idx;
+		} else if (strcmp(suf, "_policy") == 0) {
+			long pv;
+
+			if (kstrtol(v, 10, &pv) == 0)
+				seg->policy = (int)pv;
 		}
+		} else if (strncmp(k, "badmap_", 7) == 0) {
+			unsigned long disk_idx;
+
+			if (kstrtoul(k + 7, 10, &disk_idx) == 0 &&
+			    disk_idx < TV_MAX_DISKS) {
+				strncpy(meta->badmap_ranges[disk_idx], v, 255);
+				meta->badmap_ranges[disk_idx][255] = '\0';
+			}
 		} else if (strcmp(k, "policy") == 0) {
 			long v2;
 
