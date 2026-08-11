@@ -138,6 +138,26 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
+## Mirror 損耗（2026-08-12）
+
+同條件對照：`tv_s2`（A+B stripe，無 mirror）vs `tv_mir`（同 stripe + mirror→C=sdc）。libaio。
+
+| 工作負載 | tv_s2 | tv_mir | 損耗 |
+|----------|-------|--------|------|
+| 1M / depth32 / 8G 寫 | 442 MiB/s | 442 MiB/s | **0%** |
+| 1M / depth32 / 8G 讀 | 446 MiB/s | 446 MiB/s | **0%** |
+| 1M / depth32 / 2G 寫（SLC 溫期） | 441 MiB/s | 441 MiB/s | **0%** |
+| 4K / depth8 / 2G 寫 | 396 MiB/s | 280 MiB/s | **29%** |
+
+**重要 caveat**：本次實測時 nvme1n1 已節流（raw 現測僅 393 MiB/s，早先仲裁 2720）→ 1M 寫的瓶頸在 primary（~442）而非 mirror 碟 C（run 期間 sdc 吃到 464 MiB/s，完全跟上）。因此：
+- **大塊寫/讀損耗 0%** 是「primary 慢於 mirror 碟」時的結果。若 primary 恢復全速（2720）而 C 只有 ~489，mirror 會卡在 C，理論損耗 ≈ 1 − 489/2720 ≈ **82%**（寫放大本質，非 driver 開銷）。
+- **4K 小塊 29%** 才是 driver COW 開銷的直接量度：每筆 4K COW 需 `alloc_page` + 2×kmap + `memcpy` + `bio_add_page` + completion 追蹤（tieredvol_mirror.c:276-325），與 primary 無關。
+- 讀路徑完全不碰 mirror（除非 badmap 回補），故讀損耗恆為 0%。
+
+**session 累計 mirror 計數器**：`mirror=606208 ops / 12 GiB，err=0`；全碟狀態 A。
+
+---
+
 ## 結論
 
 1. **疊碟可擴展**：寫入吞吐隨碟數上升 2083 → 2587 → 2788 → 2972 MB/s（疊碟後超過單碟基線）。
@@ -146,6 +166,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 4. **Mirror 全功能可用**：同步/讀回/rebuild/跨碟界全部正確，`mirror_err=0`；rebuild 崩潰已修復。
 5. **STALE 修正**：改 hung 偵測後，閒置/I/O/rebuild 期間 0 誤報。
 6. **WC 循序有效**：+24% IOPS；隨機無合併機會（設計特性，bio 合併為未來增強）。
+7. **Mirror 損耗**：大塊寫/讀 0%（primary 為瓶頸時）、4K 小塊 29%（COW 開銷）；mirror 碟比 primary 慢時損耗由寫放大本質決定。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`
 （disk0=nvme1n1, disk1=nvme0n1, disk2=sdc, disk3=sdb）。
