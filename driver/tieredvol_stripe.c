@@ -7,6 +7,14 @@
 
 /* ---- Parallel stripe-split completion ---- */
 
+static void tv_parallel_block_release(struct kref *kref)
+{
+	struct tv_parallel_block *block =
+		container_of(kref, struct tv_parallel_block, kref);
+
+	kfree(block);
+}
+
 void tv_parallel_end_io(struct bio *bio)
 {
 	struct tv_parallel_sub *ps = bio->bi_private;
@@ -25,15 +33,27 @@ void tv_parallel_end_io(struct bio *bio)
 	}
 
 	if (bio->bi_status != BLK_STS_OK)
-		block->orig_bio->bi_status = bio->bi_status;
+		atomic_set(&block->err_status, (int)bio->bi_status);
 
 	bio_put(bio);
 
 	if (atomic_dec_and_test(&block->pending)) {
-		del_timer_sync(&block->timer);
-		if (!atomic_read(&block->timed_out))
+		/*
+		 * This runs in hardirq context (bio completion from the NVMe
+		 * IRQ). del_timer_sync() is forbidden here: it busy-spins
+		 * waiting for the timeout callback and can deadlock. Use the
+		 * non-blocking del_timer() to detach a still-pending timer;
+		 * if the callback is already running it holds a kref, keeping
+		 * block alive until it finishes. The completed handoff makes
+		 * sure exactly one side completes orig_bio.
+		 */
+		del_timer(&block->timer);
+		if (atomic_cmpxchg(&block->completed, 0, 1) == 0) {
+			block->orig_bio->bi_status =
+				(blk_status_t)atomic_read(&block->err_status);
 			bio_endio(block->orig_bio);
-		kfree(block);
+		}
+		kref_put(&block->kref, tv_parallel_block_release);
 	}
 }
 EXPORT_SYMBOL_GPL(tv_parallel_end_io);
@@ -41,11 +61,21 @@ EXPORT_SYMBOL_GPL(tv_parallel_end_io);
 void tv_parallel_timeout(struct timer_list *t)
 {
 	struct tv_parallel_block *block = from_timer(block, t, timer);
-	struct tieredvol_ctx *ctx = block->ctx;
+	struct tieredvol_ctx *ctx;
 	int i;
 
-	if (atomic_read(&block->pending) == 0)
+	/*
+	 * The completion path may have freed block already (it deletes this
+	 * timer without waiting). Take a reference to guarantee block stays
+	 * alive for the whole callback.
+	 */
+	if (!kref_get_unless_zero(&block->kref))
 		return;
+
+	ctx = block->ctx;
+
+	if (atomic_read(&block->pending) == 0)
+		goto out;
 
 	pr_warn("tieredvol: parallel submit timeout (%d pending), degrading disks\n",
 		atomic_read(&block->pending));
@@ -60,9 +90,10 @@ void tv_parallel_timeout(struct timer_list *t)
 		}
 	}
 
-	atomic_set(&block->timed_out, 1);
-	smp_mb();
-	bio_io_error(block->orig_bio);
+	if (atomic_cmpxchg(&block->completed, 0, 1) == 0)
+		bio_io_error(block->orig_bio);
+out:
+	kref_put(&block->kref, tv_parallel_block_release);
 }
 EXPORT_SYMBOL_GPL(tv_parallel_timeout);
 
@@ -167,8 +198,10 @@ int tv_parallel_submit(struct tieredvol_ctx *ctx, struct bio *bio,
 		clones[ci]->bi_iter.bi_size = d_sz[ci];
 	}
 
+	kref_init(&block->kref);
 	atomic_set(&block->pending, n_sub);
-	atomic_set(&block->timed_out, 0);
+	atomic_set(&block->completed, 0);
+	atomic_set(&block->err_status, 0);
 	block->orig_bio = bio;
 	block->ctx = ctx;
 	block->n_sub = n_sub;

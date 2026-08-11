@@ -10,6 +10,7 @@
 #include <linux/bio.h>
 #include <linux/completion.h>
 #include <linux/workqueue.h>
+#include <linux/kref.h>
 #include "tieredvol_meta_format.h"
 
 /* Aliases: canonical constants live in tieredvol_meta_format.h */
@@ -301,7 +302,9 @@ struct tv_parallel_block {
 	struct bio *orig_bio;
 	struct tieredvol_ctx *ctx;
 	int n_sub;
-	atomic_t timed_out;
+	atomic_t completed;
+	atomic_t err_status;
+	struct kref kref;
 	struct timer_list timer;
 	struct tv_parallel_sub subs[];
 };
