@@ -6,6 +6,7 @@
 |------|------|
 | `DESIGN.md` | 設計本質 + 承重牆（**動手改 code 前必讀**） |
 | `ARCHITECTURE.md` | 整體資料流與模組職責 |
+| `RESULTS.md` | 疊碟測試結果（現況拓撲，2026-08-11） |
 | `TEST_PLAN.md` | 疊碟驗收計畫（主目標：1→2→3→4 碟） |
 | `MAPPING.md` | Logical→Physical 映射演算法 |
 | `MIRROR.md` | Mirror RAID1 實作 |

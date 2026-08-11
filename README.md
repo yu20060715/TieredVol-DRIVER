@@ -45,7 +45,7 @@ Application
 
 > **⚠ 舊拓撲 + io_uring 數字（參考用）**：上表是舊拓撲（nvme0=WD @ PCIe3.0 x4、nvme1=P3）
 > 以 io_uring QD=256 測得；io_uring + dm 深佇列會把數字灌高，**不能作為疊碟驗收依據**。
-> 疊碟（1→2→3→4）驗收以 **libaio + 計數器精確比對** 為準，見 `docs/TEST_PLAN.md`。
+> 疊碟（1→2→3→4）驗收以 **libaio + 計數器精確比對** 為準，最新實測見 `docs/RESULTS.md`。
 
 Hardware（現況拓撲）: A=WD SN550 500G `nvme1n1` (PCIe 3.0 x4, ~2563 MB/s), B=P3 Plus 1T `nvme0n1` (PCIe 2.0 x1, ~413 MB/s), C=MX500 500G `sdc` (~517 MB/s), D=WD Blue 250G `sdb` (~227 MB/s), E=BX100 233G `sda` (未入 config)。
 
@@ -224,6 +224,7 @@ TieredVol-DRIVER/
 ├── docs/
 │   ├── ARCHITECTURE.md            # Kernel 架構總覽
 │   ├── DESIGN.md                  # 設計本質 + 不要亂改清單（先讀）
+│   ├── RESULTS.md                 # 疊碟測試結果（現況拓撲）
 │   ├── TEST_PLAN.md               # 疊碟驗收計畫（主目標）
 │   ├── CONFIG.md                  # 設定檔參考
 │   ├── USAGE.md                   # Usage tutorial
