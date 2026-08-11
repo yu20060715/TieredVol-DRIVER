@@ -22,7 +22,6 @@ seg0_count=4
 seg0_disks=0,1,2,3
 seg0_weight=6,3,2,1
 seg0_stripe=12582912
-seg0_mirror=3
 seg1_begin=1073741824
 seg1_end=2147483648
 seg1_count=2
@@ -72,6 +71,11 @@ chunk_size 建議與 filesystem block size 或常用 I/O size 一致（1MB = 104
 
 不指定則 `tiered_setup --create` 會自動測速計算。
 
+> **權重推導方式**：以**平行仲裁**（所有碟同時打 raw，取實際並行吞吐）為準，
+> 不要用單碟 solo 測速（solo 會因 DMI 池 / PCIe 插槽互搶而失真）。
+> 現有 `/home/yu/tv3x.conf`、`tv4x.conf` 是舊拓撲（nvme0=WD 快、nvme1=P3 慢）調的，
+> **不適用於目前拓撲**（nvme0=P3 @ PCIe2.0 x1、nvme1=WD @ PCIe3.0 x4），需重新調校。
+
 ### segment 範圍
 
 當 disk 容量不同時，依容量遞增排序，分段建立 segment：
@@ -102,12 +106,28 @@ sudo tiered_setup --create --name pool --disks nvme0n1:100,sdb:50
 
 | 命令 | 參數 | 說明 |
 |------|------|------|
+| `status` | - | 顯示 volume 狀態與每碟 I/O bytes（驗收用） |
 | `show_stats` | - | 顯示 I/O stats |
-| `show_config` | - | 顯示 config 內容 |
+| `show_io_stats` | - | 顯示每碟 I/O bytes |
+| `show_inflight` | - | 顯示 inflight bio 統計 |
 | `show_mirror` | - | 顯示 mirror stats |
+| `show_degraded` | - | 顯示 degraded 狀態 |
+| `show_rebuild` | - | 顯示 rebuild 進度 |
+| `show_badmap` | - | 顯示 per-disk badmap chunk 統計 |
+| `show_wear` | - | 顯示磨損 / wear stats |
+| `show_errors` | - | 顯示錯誤計數 |
+| `show_adaptive` | - | 顯示 adaptive policy 狀態 |
+| `show_bench` | - | 顯示內建 benchmark 結果 |
 | `show_log` | - | 顯示 log buffer |
-| `set_policy` | static/adaptive/random | 切換 dispatch policy |
-| `reset_stats` | - | 重置 I/O stats |
+| `set_policy` | static/adaptive/random | 切換全域 dispatch policy |
+| `set_seg_policy` | static/adaptive/random | 切換單一 segment policy |
+| `set_mirror` | disk_index | 設定 mirror disk（不可為參與碟） |
+| `start_rebuild` / `stop_rebuild` | - | 手動觸發 / 停止 rebuild |
+| `set_badmap` | disk:chunk | 將 chunk 標記為 bad |
+| `set_loglevel` | int | 設定 log 等級 |
+| `reset_stats` / `reset_io_stats` | - | 重置 I/O stats |
+| `reset_errors` | - | 重置錯誤計數 |
+| `reset_wear` | - | 重置 wear 統計 |
 
 ```bash
 sudo dmsetup message <name> 0 show_stats
@@ -118,5 +138,6 @@ sudo dmsetup message <name> 0 set_policy adaptive
 
 - Segment 必須依 `begin` 遞增排序，不可重疊
 - 所有 disk index 必須小於 `disk_count`
-- mirror disk 不可與 segment 的任一 primary disk 相同
+- mirror disk 不可與 segment 的任一 primary disk 相同；若要 mirror，
+  需有**不參與該 segment** 的第 N+1 顆碟（例如 `disk_count=5`、`seg0_disks=0,1,2,3`、`seg0_mirror=4`）
 - Weight 上限 16，最少 1

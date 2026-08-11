@@ -4,11 +4,14 @@
 
 | 文件 | 說明 |
 |------|------|
+| `DESIGN.md` | 設計本質 + 承重牆（**動手改 code 前必讀**） |
 | `ARCHITECTURE.md` | 整體資料流與模組職責 |
+| `TEST_PLAN.md` | 疊碟驗收計畫（主目標：1→2→3→4 碟） |
 | `MAPPING.md` | Logical→Physical 映射演算法 |
 | `MIRROR.md` | Mirror RAID1 實作 |
 | `WC.md` | Write Coalescing 寫入合併 |
 | `CONFIG.md` | 設定檔完整參考 |
+| `ROADMAP.md` | Roadmap（已實作標記） |
 | `PARTITION_SPLITTING.md` | Segment 切分原理 |
 
 ## 系統需求

@@ -1,33 +1,37 @@
 # TieredVol-DRIVER Roadmap
 
+> 狀態以 driver 原始碼為準（2026-08 實地對照）。
+
 ## Short-term（thesis submission）
 
-- [ ] **[BUG] Mirror capacity check**
-      `tieredvol_ctr` 沒檢查 mirror 碟容量 ≥ segment 總容量。若 mirror 碟太小，
-      寫超過會靜默失敗。要在 `tieredvol_core.c` 加上驗證：`disk_sectors[mirror_disk] * SECTOR_SIZE >= seg_size`。
+- [x] **[BUG] Mirror capacity check**
+      `tieredvol_ctr` 檢查 mirror 碟容量 ≥ segment 總容量（`tieredvol_core.c`
+      `"Validate mirror disk capacity"`）。已修，mirror 碟不足會拒絕 load。
 
-- [ ] **Bad block bitmap（formula + bitmap hybrid）**
-      Per-disk bitmap (1 bit / chunk), formula stays O(1), filter bad chunks at dispatch time.
-      Read → return zero; Write → redirect to next healthy disk in same stripe.
+- [x] **Bad block bitmap（formula + bitmap hybrid）**
+      Per-disk bitmap (1 bit / chunk)，formula 保持 O(1)，dispatch 時過濾 bad chunk
+      （`tieredvol_core.c` Phase D）：Read → `zero_fill_bio`；Write → skip。
+      實作於 `tieredvol_badmap.c`（init/test/set/clear）。
 
-- [ ] **Write error recovery**
-      On write failure: retry once, then mark chunk bad, fall back to mirror or zero-fill.
-      No data corruption from partial stripe writes.
+- [x] **Write error recovery**
+      寫失敗：**無 retry**，直接 `tv_badmap_set` 標記 chunk bad（`tieredvol_mirror.c`
+      `"Mark bad block on WRITE error"`），並依 `error_threshold` 標記 disk degraded。
+      後續讀該 chunk 回 zero、寫則 skip。
 
-- [ ] **Parallel submit timeout watchdog**
-      Timer-based watchdog for tv_parallel_block. If a sub-bio never completes,
-      force-complete with error and mark disks degraded.
+- [x] **Parallel submit timeout watchdog**
+      `tv_parallel_timeout`（`tieredvol_stripe.c`）：timer + `TV_PARALLEL_TIMEOUT`，
+      sub-bio 未完成即強制完成並標記 disk degraded。
 
 ## Medium-term
 
-- [ ] **Background rebuild for bad blocks**
-      Kernel thread that scans bitmap, rewrites bad chunks from mirror or recomputes
-      from remaining disks in the segment.
+- [x] **Background rebuild for bad blocks**
+      `tv_badmap_rebuild`（`tieredvol_badmap.c`）：掃描 bitmap，重新 read bad chunk，
+      成功即 clear bit。注意：現為「重讀清標」，非從 mirror 重算/重寫。
 
-- [ ] **Per-segment policy switching**
-      Dynamically switch static ↔ adaptive per segment. Safe because policy only
-      changes disk selection strategy, not stripe geometry — mapping stays valid.
+- [x] **Per-segment policy switching**
+      `set_seg_policy`（`tieredvol_msg_policy.c`）。policy 只改 disk 選擇策略、
+      不改 stripe 幾何，映射仍有效。
 
-- [ ] **Runtime benchmark display (read-only)**
-      Periodic speed test exposed via sysfs / dmsetup message. User reads it,
-      decides whether to edit .conf and reload. No automatic weight changes.
+- [x] **Runtime benchmark display (read-only)**
+      `show_bench`（`tieredvol_msg_stats.c`）。使用者讀取後自行決定是否改 .conf 重載，
+      無自動調權重。

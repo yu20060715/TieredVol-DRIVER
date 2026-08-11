@@ -43,9 +43,13 @@ Application
 | 3-disk [nvme,sdb,sdc] | 2893 MB/s | 3938 MB/s | 83%/100% | +111%/+174% |
 | 2-disk [nvme,sdb] | 2179 MB/s | 3261 MB/s | 82%/97% | +129%/+238% |
 
-Hardware: NVMe P3 Plus 1T (PCIe 3.0 x4, ~2783 MB/s), SATA MX500 (~481 MB/s), WD Blue (~492 MB/s), BX100 (~366 MB/s).
+> **⚠ 舊拓撲 + io_uring 數字（參考用）**：上表是舊拓撲（nvme0=WD @ PCIe3.0 x4、nvme1=P3）
+> 以 io_uring QD=256 測得；io_uring + dm 深佇列會把數字灌高，**不能作為疊碟驗收依據**。
+> 疊碟（1→2→3→4）驗收以 **libaio + 計數器精確比對** 為準，見 `docs/TEST_PLAN.md`。
 
-vs LVM: LVM fixed stripe 4-disk W 1407 / R 1829 MB/s. TieredVol weighted striping + adaptive EMA beats LVM by 100-238%.
+Hardware（現況拓撲）: A=WD SN550 500G `nvme1n1` (PCIe 3.0 x4, ~2563 MB/s), B=P3 Plus 1T `nvme0n1` (PCIe 2.0 x1, ~413 MB/s), C=MX500 500G `sdc` (~517 MB/s), D=WD Blue 250G `sdb` (~227 MB/s), E=BX100 233G `sda` (未入 config)。
+
+vs LVM: LVM fixed stripe 4-disk W 1407 / R 1829 MB/s（舊拓撲，io_uring）。TieredVol weighted striping + adaptive EMA 曾達 LVM 的 100-238%。
 
 ### What Is Intentionally Excluded
 
@@ -71,9 +75,9 @@ make module
 # Create a weighted volume (loads kernel module automatically)
 sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc
 
-# Or manual fio:
-sudo fio --name=bench --filename=/dev/mapper/fastpool --rw=write --bs=2m \
-  --size=2G --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1 --end_fsync=1
+# Or manual fio (libaio — 別用 io_uring QD=256，會灌高假數字):
+sudo fio --name=bench --filename=/dev/mapper/fastpool --rw=write --bs=1M \
+  --size=8G --direct=1 --ioengine=libaio --iodepth=32 --numjobs=1 --end_fsync=1
 
 # Remove
 sudo ./tiered_setup --remove --name fastpool
@@ -109,11 +113,11 @@ NVMe idle waiting for SATA     All disks finish at approximately
 # Create weighted volume (kernel module)
 sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb
 
-# Benchmark the volume
-sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=128k --size=5G \
-  --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1
-sudo fio --filename=/dev/mapper/fastpool --rw=read --bs=128k --size=5G \
-  --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1
+# Benchmark the volume (libaio，見 docs/TEST_PLAN.md)
+sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=8G \
+  --direct=1 --ioengine=libaio --iodepth=32 --numjobs=1
+sudo fio --filename=/dev/mapper/fastpool --rw=read --bs=1M --size=8G \
+  --direct=1 --ioengine=libaio --iodepth=32 --numjobs=1
 
 # Show volume metadata
 sudo dmsetup table fastpool
@@ -218,8 +222,16 @@ TieredVol-DRIVER/
 │   ├── test_partition.c            # Weight/segment tests
 │   └── test_metadata.c             # Metadata round-trip tests
 ├── docs/
-│   ├── USAGE.md                    # Usage tutorial
-│   └── PARTITION_SPLITTING.md      # Weighted striping algorithm
+│   ├── ARCHITECTURE.md            # Kernel 架構總覽
+│   ├── DESIGN.md                  # 設計本質 + 不要亂改清單（先讀）
+│   ├── TEST_PLAN.md               # 疊碟驗收計畫（主目標）
+│   ├── CONFIG.md                  # 設定檔參考
+│   ├── USAGE.md                   # Usage tutorial
+│   ├── MAPPING.md                 # 映射/權重實驗紀錄
+│   ├── MIRROR.md                  # Mirror/RAID1 設計
+│   ├── WC.md                      # Write coalescing 設計
+│   ├── ROADMAP.md                 # Roadmap（已實作標記）
+│   └── PARTITION_SPLITTING.md     # Weighted striping algorithm
 └── scripts/
     └── install_deps.sh             # Install dependencies + build
 ```

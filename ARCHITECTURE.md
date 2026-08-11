@@ -31,9 +31,10 @@ TieredVol-DRIVER is a **kernel device-mapper target** that implements weighted I
 │    dtr()  解構器：釋放所有資源                                │
 │    map()  I/O 分派熱路徑 (B 路徑: 跨磁碟 clone, C 路徑: WC)  │
 │                                                              │
-│  tieredvol_stripe.c    ★ 跨條紋 split helper                 │
+│  tieredvol_stripe.c    ★ 跨條紋 split helper + parallel 完成    │
 │    tv_stripe_calc_boundaries() / tv_stripe_compute_ranges()   │
 │    tv_parallel_submit()    平行 clone/submit helper           │
+│    tv_parallel_end_io()    平行 write 完成收集 (stripe.c)      │
 │                                                              │
 │  tieredvol_map.c       ★ 條紋計算引擎                        │
 │    tv_map_logical()          靜態權重條紋                     │
@@ -42,7 +43,8 @@ TieredVol-DRIVER is a **kernel device-mapper target** that implements weighted I
 │                                                              │
 │  tieredvol_meta.c      內核態 metadata 讀寫 + CRC32C         │
 │  tieredvol_mirror.c    鏡像 I/O、讀取重試、資料重建、         │
-│                        tv_parallel_end_io (stripe completion) │
+│                        tieredvol_end_io (完成/統計)           │
+│  tieredvol_badmap.c    per-disk bad block bitmap + rebuild    │
 │  tieredvol_wc.c        ★ Write-coalescing 緩衝 + flush       │
 │    tv_wc_init_ctx() / tv_wc_destroy_ctx() 生命週期            │
 │    tv_wc_try_buffer()       嘗試緩衝 bio (C 路徑入口)         │
@@ -243,18 +245,19 @@ tv_decay_timer_fn (100ms busy / 1s idle)
 
 | Module | Lines | Purpose |
 |--------|------:|---------|
-| `tieredvol_core.c` | 639 | DM lifecycle, map, module init/exit |
-| `tieredvol_stripe.c` | 159 | Stripe-split helpers + parallel end_io |
+| `tieredvol_core.c` | 701 | DM lifecycle, map, module init/exit |
+| `tieredvol_stripe.c` | 227 | Stripe-split helpers + parallel submit/end_io |
 | `tieredvol_map.c` | 236 | Stripe calculation: static, adaptive, random |
-| `tieredvol_meta.c` | 535 | Kernel metadata read/write + CRC32C |
-| `tieredvol_mirror.c` | 558 | Mirror I/O, read retry, rebuild, mirror init/destroy ctx |
+| `tieredvol_meta.c` | 590 | Kernel metadata read/write + CRC32C |
+| `tieredvol_mirror.c` | 634 | Mirror I/O, read retry, rebuild, tieredvol_end_io |
+| `tieredvol_badmap.c` | 149 | Per-disk bad block bitmap + rebuild |
 | `tieredvol_wc.c` | 202 | Write-coalescing buffer + flush, init/destroy ctx (Phase 1 C) |
 | `tieredvol_log.c` | 146 | Log ring buffer + EMA decay timer |
 | `tieredvol_sysfs.c` | 273 | sysfs interface |
 | `tieredvol_message.c` | 60 | dmsetup message dispatch |
-| `msg_stats.c` | 144 | Statistics handlers |
-| `msg_policy.c` | 170 | Policy/adaptive handlers |
-| `msg_mirror.c` | 255 | Mirror/rebuild handlers |
+| `msg_stats.c` | 174 | Statistics handlers |
+| `msg_policy.c` | 202 | Policy/adaptive handlers |
+| `msg_mirror.c` | 331 | Mirror/rebuild handlers |
 | `msg_config.c` | 86 | Config/log handlers |
 
 ## vs TieredVol (Userspace)
