@@ -75,11 +75,32 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
-## 次要測試（**待辦**）
+## Mirror / Rebuild 專項（2026-08-12）— **已完成**
+
+拓撲：`/home/yu/tv_mir.conf`（A=nvme1n1 權重8 + B=nvme0n1 權重1 的 8:1 stripe、mirror→C=sdc，chunk=1MiB、stripe=9MiB）。
+
+### 本日根因修正
+1. **Rebuild 崩潰（⑤，首次執行即爆）**：`tv_rebuild_thread` 只 `alloc_page` 單頁卻把整 chunk(1MiB) 塞進 `bio_add_page`。6.x `bio_add_page` **不截斷長度**（multi-page bvec 語意、回傳傳入值）→ 長度檢查形同虛設，送出「bi_size=1MiB(手動)+1MiB(bio_add_page)=2MiB、實體僅 1 頁」的 bio → `__blk_rq_map_sg` WARN + `iommu_dma_map_sg` NULL deref → oops 級聯 → 系統凍結重啟。修法：`alloc_pages(GFP_NOIO, get_order(sz))` compound page 涵蓋整個 chunk、**移除手動 `bi_iter.bi_size`**、`sz = min(chunk_bytes, cur.length)` 並以 `sz` 推進（一併修跨 stripe 邊界越界讀隱患）。
+2. **STALE 洪水**：原「無 in-flight I/O 滿 5s 即 STALE」把閒置碟標 STALE（與 MAPPING.md 設計相反）且無窮刷 log。改為 **hung 偵測**：僅「有 in-flight 卻連續 5s 零完成」才標 STALE，閒置碟永不標；排空/恢復完成立即 RECOVERED。
+3. **ctr 錯誤路徑**：`tv_mirror_init_ctx` 成功後若後續 ctr 失敗（chunk 幾何、`dm_set_target_max_io_len`），補 `tv_mirror_destroy_ctx()` 防 mempool/percpu 洩漏。
+4. Mirror 寫入（copy 式 COW，本日修復前已完成）已過 5GB soak 驗證。
+
+### 測試結果（本日實測）
+- **rebuild smoke 64MiB**：2s 完成，sdc[0,64M)==pat64、裝置讀回全對。
+- **rebuild 完整 260MiB**（先破壞 sdc[256M,260M) 為 0xAA）：1.3s 完成，sdc[256M,264M) 還原==pat64、裝置讀回全對。
+- **mirror 同步 + 修復回歸**：寫入後 sdc 逐 byte 相符；64M 寫+讀回+COW 全對。
+- **STALE 驗證**：閒置 60s、I/O burst、rebuild 期間 0 筆 STALE/RECOVERED（原每 5s 一筆）。
+- dmesg：全程 0 WARNING/Oops/BUG。
+
+---
+
+## 次要測試（**已完成**）
 
 ### WC 專項：小寫入合併效益
 
 `fio --bs=4K --size=1G --iodepth=1`（單 depth，避免平行蓋掉 WC 效果）
+
+> **注意**：`wc_enabled` 是 **module param**。W1/W3 需 `dmsetup remove` + `rmmod` 後 `insmod tieredvol.ko wc_enabled=1`、W2/W4 用 `wc_enabled=0`。用單碟 conf（`/etc/tieredvol/tv_s1.conf`）隔離 WC 效應。
 
 | ID | WC | 描述 |
 |----|----|------|
@@ -94,9 +115,9 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 | ID | 測試 | 步驟 | 預期 |
 |----|------|------|------|
-| M1 | Mirror write + 拔碟 | 1. 建 A+B（mirror→C）<br>2. 寫 256M<br>3. offline A<br>4. 讀 256M | 讀取成功（從 mirror 回補） |
-| M2 | Mirror rebuild | M1 後加回 A，觸發 rebuild | mirror_err=0、資料完整 |
-| M3 | Cross-disk mirror | 4K iodepth=1 寫入，跨 disk boundary 也正確 mirror | mirror_err=0、ratio 正確 |
+| M1 | Mirror write + primary 失效 | 1. 建 A+B（mirror→C）<br>2. 寫 256M 同步 mirror<br>3. 破壞 primary + set_badmap<br>4. 讀 256M | 讀取由 mirror 回補 | ✅ 完成（badmap 模擬，非實體拔碟） |
+| M2 | Mirror rebuild | 破壞 mirror → `start_rebuild` 還原 | mirror_err=0、資料完整 | ✅ 完成（先修復 rebuild 崩潰） |
+| M3 | Cross-disk mirror | 4K iodepth=1 寫入，跨 disk boundary 也正確 mirror | mirror_err=0、ratio 正確 | ✅ 完成（見下） |
 
 ### 功能驗證
 
@@ -106,7 +127,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | F2 | Lifecycle | create → bench → show_stats → remove → recreate | 全部成功 |
 | F3 | DM message | show_mirror / show_stats / show_log / set_policy / reset_stats | 正確輸出 |
 | F4 | Data integrity | `fio --verify=crc32c --do_verify=1 --bs=4K --size=2G` | 0 mismatch |
-| F5 | Badmap | `dmsetup message` set_badmap → 讀該 chunk | 讀作 0，不 I/O error |
+| F5 | Badmap | `dmsetup message` set_badmap → 讀該 chunk | 有 mirror：讀回 mirror 資料；無 mirror：zero-fill。不 I/O error |
 
 ---
 
@@ -115,6 +136,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | 測試 | 狀態 | 結果位置 |
 |------|------|----------|
 | S1–S4 疊碟 + CAP | **完成**（2026-08-11） | `docs/RESULTS.md` |
-| WC 專項 W1–W4 | 待辦 | - |
-| Mirror 專項 M1–M3 | 待辦 | - |
-| 功能驗證 F1–F5 | 待辦 | - |
+| Mirror / Rebuild 專項（含 5 項修復） | **完成**（2026-08-12） | 本文件 + `docs/RESULTS.md` |
+| WC 專項 W1–W4 | **完成**（2026-08-12） | `docs/RESULTS.md` |
+| Mirror 專項 M3（跨碟 4K） | **完成**（2026-08-12） | `docs/RESULTS.md` |
+| 功能驗證 F1–F5 | **完成**（2026-08-12） | `docs/RESULTS.md` |

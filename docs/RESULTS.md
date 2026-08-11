@@ -85,11 +85,67 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
+## Mirror / Rebuild（2026-08-12）
+
+拓撲 `tv_mir.conf`：A=nvme1n1(w8) + B=nvme0n1(w1) stripe、mirror→C=sdc，chunk 1MiB、stripe 9MiB。
+
+### 修復與根因
+- **Rebuild 首次執行崩潰（系統凍結重啟）**：rebuild bio 只 `alloc_page` 單頁卻 `bio_add_page(...,1MiB,0)`。6.x `bio_add_page` 不截斷長度（multi-page bvec、回傳傳入值）→ 檢查失效 → 送出「bi_size 2MiB / 實體 1 頁」bio → `__blk_rq_map_sg` WARN → `iommu_dma_map_sg` NULL deref → oops 級聯。修法：`alloc_pages(GFP_NOIO, get_order(sz))`、移除手動 `bi_size`、`sz=min(chunk,cur.length)`。
+- **STALE 洪水**：改為 hung 偵測（僅 in-flight 且 5s 零完成才 STALE）；閒置 60s / I/O burst / rebuild 期間 0 筆 STALE/RECOVERED。
+- **ctr 洩漏**：補 `tv_mirror_destroy_ctx()`。
+
+### 實測結果
+- rebuild smoke 64MiB：2s、sdc[0,64M)==pat64 ✅
+- rebuild 完整 260MiB（sdc[256M,260M) 先破壞為 0xAA）：1.3s、還原==pat64、裝置讀回全對 ✅
+- mirror 同步逐 byte 相符 ✅、64M 寫+讀回+COW 回歸 ✅
+- 全程 0 WARNING/Oops/BUG。
+
+---
+
+## WC 專項 W1–W4（2026-08-12）
+
+單碟 `/etc/tieredvol/tv_s1.conf`、`fio --bs=4K --size=1G --iodepth=1 --direct=1 --ioengine=libaio`。
+
+| ID | WC | 模式 | IOPS | BW |
+|----|----|------|------|-----|
+| W1 | on | 隨機寫 | 34.9k | 136MiB/s |
+| W2 | off | 隨機寫 | 38.9k | 152MiB/s |
+| W3 | on | 循序寫 | 40.2k | 157MiB/s |
+| W4 | off | 循序寫 | 32.4k | 127MiB/s |
+
+**結論**：WC 為「提交批次化」而非「bio 合併」——每筆仍是 4K bio，但 flush 一次批次下送，讓磁碟看到循序局部性：
+- **循序 +24%**（40.2k vs 32.4k IOPS）✅ 符合預期。
+- **隨機無合併機會**（跨 stripe 每次觸發 flush），-10%（34.9k vs 38.9k），屬設計特性非 bug。
+- 若要隨機小寫入也受惠，需將 WC 改為真正的 bio 合併（compound page 聚合同 chunk）— 未來增強方向。
+
+## Mirror M1–M3（2026-08-12）
+
+- **M1（primary 失效由 mirror 回補）**：寫 256M（pat64×4）→ mirror 同步逐 byte 相符 → primary（nvme1n1[0,224M)+nvme0n1[0,28M)）填 0xAA + badmap disk0/disk1 全部 252 chunk → 讀回 256M **全對（資料只可能來自 mirror）**；mirror_wr=2095/268435456 mirror_err=0。
+- **M2（rebuild 還原 mirror）**：還原 primary → 破壞 sdc[64M,68M) → `start_rebuild 0 268435456`（256M，1.25s）→ sdc[64M,68M) 還原正確、整碟 mirror==pat64×4、裝置讀回全對、mirror_err=0。
+- **M3（跨碟界 mirror）**：`dm_set_target_max_io_len`=1MiB(=chunk) 保證單一 bio 不會跨碟；跨碟正確性由 chunk 切分 + 整 bio COW 保證。實測 boundary 兩側（logical 8MiB-4K 與 8MiB）各寫 4K：裝置讀回全對、mirror 逐 byte 相符、nvme1n1/nvme0n1 各存正確一半 ✅。
+
+## 功能驗證 F1–F5（2026-08-12）
+
+| ID | 測試 | 結果 |
+|----|------|------|
+| F1 | loop 拒絕 | `/dev/loop13` 明確拒絕（`virtual device rejected`），dmsetup create RC=1 ✅ |
+| F2 | Lifecycle | create → bench → show_stats → remove → recreate → 讀取全成功 ✅ |
+| F3 | DM messages | show_mirror/show_log（dmesg）、set_policy random/static（status 顯示 policy=2/0）、reset_stats（per-disk 歸零）、status 含 mirror/err/碟狀態 ✅ |
+| F4 | crc32c 2G | `fio --verify=crc32c --do_verify=1` 0 mismatch、err=0（寫 248MiB/s、verify 371MiB/s）✅ |
+| F5 | Badmap | 無 mirror：badmap chunk 讀出全 0、不 I/O error；未 badmap chunk 讀取正常；有 mirror（M1）：讀回真資料 ✅ |
+
+> 註：`dmsetup message` 不印 handler 的 `result` 字串（dmsetup 行為），部分 handler 另以 `pr_info` 落 dmesg；`dmsetup status`（STATUSTYPE_INFO）為完整可見介面。
+
+---
+
 ## 結論
 
 1. **疊碟可擴展**：寫入吞吐隨碟數上升 2083 → 2587 → 2788 → 2972 MB/s（疊碟後超過單碟基線）。
 2. **分布精確**：計數器與宣告權重、確定性映射預測完全一致（0 誤差）。
 3. **資料完整**：crc32c 寫入 + verify 0 mismatch，`err=0`。
+4. **Mirror 全功能可用**：同步/讀回/rebuild/跨碟界全部正確，`mirror_err=0`；rebuild 崩潰已修復。
+5. **STALE 修正**：改 hung 偵測後，閒置/I/O/rebuild 期間 0 誤報。
+6. **WC 循序有效**：+24% IOPS；隨機無合併機會（設計特性，bio 合併為未來增強）。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`
 （disk0=nvme1n1, disk1=nvme0n1, disk2=sdc, disk3=sdb）。

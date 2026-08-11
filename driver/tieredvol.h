@@ -17,7 +17,12 @@
 #define TV_MAX_DISKS    TV_META_MAX_DISKS
 #define TV_MAX_SEGS     TV_META_MAX_SEGS
 #define TV_SECTOR_SHIFT 9
-#define TV_PENDING_RING_SIZE 64
+/* Per-CPU ring entries. Kept at 512 because alloc_percpu() rejects a single
+ * allocation > PCPU_MIN_UNIT_SIZE (32KB); 1024 read entries + head/count
+ * would be 32776B > 32768B. 512 doubles the headroom over the measured
+ * 256-in-flight saturation point (iodepth=32 x 8 stripe sub-writes).
+ */
+#define TV_PENDING_RING_SIZE 512
 
 struct tieredvol_segment {
 	u64 logical_begin;
@@ -79,8 +84,7 @@ struct tv_adaptive_state {
 	u64 stale_after_ns;
 	bool stale[TV_MAX_DISKS];
 	u64 stale_marked_ns[TV_MAX_DISKS];
-	u64 grace_until_ns[TV_MAX_DISKS];
-	u64 last_finish_ns[TV_MAX_DISKS];
+	u64 stuck_start_ns[TV_MAX_DISKS];
 	struct timer_list decay_timer;
 	u32 wear_bias;
 	enum tv_policy policy;
@@ -121,6 +125,9 @@ struct tv_bench_stats {
 	ktime_t start_time;
 };
 
+struct tv_pending_read_cpu;
+struct tv_pending_write_cpu;
+
 struct tieredvol_ctx {
 	struct dm_target *ti;
 	struct tieredvol_metadata meta;
@@ -148,6 +155,8 @@ struct tieredvol_ctx {
 	struct work_struct trigger_event;
 	mempool_t *mirror_pw_pool;
 	mempool_t *retry_ctx_pool;
+	struct tv_pending_read_cpu __percpu *pcpu_reads;
+	struct tv_pending_write_cpu __percpu *pcpu_writes;
 	struct tv_bench_stats bench[TV_MAX_DISKS];
 };
 
@@ -244,17 +253,21 @@ struct tv_mirror_pw_ctx {
 	sector_t sector;
 	unsigned int size;
 };
-void tv_pw_add(struct block_device *bdev, sector_t sector, unsigned int size);
-void tv_pending_add(struct block_device *bdev, sector_t sector,
-		    unsigned int size, int mirror_disk,
+void tv_pw_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
+	       sector_t sector, unsigned int size);
+void tv_pending_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
+		    sector_t sector, unsigned int size, int mirror_disk,
 		    sector_t mirror_sector);
-int tv_pending_find_and_remove(struct block_device *bdev, sector_t sector,
-			       unsigned int size, sector_t *mirror_sector_out);
+int tv_pending_find_and_remove(struct tieredvol_ctx *ctx,
+			       struct block_device *bdev, sector_t sector,
+			       unsigned int size,
+			       sector_t *mirror_sector_out);
 void tv_ts_submit(int disk_idx, sector_t sector, unsigned int size);
 u64 tv_ts_complete(int disk_idx, sector_t sector, unsigned int size);
 void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 		       struct tieredvol_map cur, u64 logical);
 void tv_mirror_end_io(struct bio *bio);
+void tv_read_retry_work(struct work_struct *work);
 int tieredvol_end_io(struct dm_target *ti, struct bio *bio,
 		     blk_status_t *error);
 void tv_decay_timer_fn(struct timer_list *timer);

@@ -72,7 +72,7 @@ void tv_decay_timer_fn(struct timer_list *timer)
 	int next_interval;
 
 	for (i = 0; i < ctx->ndisks; i++) {
-		u64 snapshot = (u64)atomic_xchg(&ctx->io.in_flight_bytes[i], 0);
+		u64 snapshot = (u64)atomic_read(&ctx->io.in_flight_bytes[i]);
 		u64 completions = (u64)atomic64_xchg(&ctx->io.interval_completions[i], 0);
 
 		total_activity += snapshot + completions;
@@ -101,42 +101,41 @@ void tv_decay_timer_fn(struct timer_list *timer)
 				 avg_latency * alpha) >> 10;
 		}
 
-		if (ctx->adaptive.stale_after_ns > 0 && snapshot > 0)
-			ctx->adaptive.last_finish_ns[i] = now;
-
-		if (ctx->adaptive.stale_after_ns > 0 &&
-		    !ctx->adaptive.stale[i] &&
-		    ctx->adaptive.last_finish_ns[i] > 0 &&
-		    now > ctx->adaptive.grace_until_ns[i] &&
-		    (now - ctx->adaptive.last_finish_ns[i]) >
-			    ctx->adaptive.stale_after_ns) {
-			ctx->adaptive.stale[i] = true;
-			ctx->adaptive.stale_marked_ns[i] = now;
-			pr_info("tieredvol: disk[%d] %s STALE (no I/O for %llu ms)\n",
-				i, ctx->meta.disk_names[i],
-				(now - ctx->adaptive.last_finish_ns[i]) /
-					1000000ULL);
-			tv_log(TV_LOG_WARN, i, TV_LOG_STALE,
-			       "STALE %llums",
-			       (now - ctx->adaptive.last_finish_ns[i]) /
-				       1000000ULL);
-		} else if (ctx->adaptive.stale[i] && snapshot > 0) {
-			ctx->adaptive.stale[i] = false;
-			ctx->adaptive.grace_until_ns[i] =
-				now + ctx->adaptive.stale_after_ns;
-			pr_info("tieredvol: disk[%d] %s RECOVERED (I/O resumed)\n",
-				i, ctx->meta.disk_names[i]);
-			tv_log(TV_LOG_INFO, i, TV_LOG_RECOVER, "RECOVERED io");
-		} else if (ctx->adaptive.stale[i] &&
-			   (now - ctx->adaptive.stale_marked_ns[i]) >
-				   2 * ctx->adaptive.stale_after_ns) {
-			ctx->adaptive.stale[i] = false;
-			ctx->adaptive.grace_until_ns[i] =
-				now + ctx->adaptive.stale_after_ns;
-			pr_info("tieredvol: disk[%d] %s RECOVERED (cooldown)\n",
-				i, ctx->meta.disk_names[i]);
-			tv_log(TV_LOG_INFO, i, TV_LOG_RECOVER,
-			       "RECOVERED cooldown");
+		/* Hung-disk detection: a disk is STALE only when it has
+		 * in-flight I/O that keeps failing to complete. Idle disks
+		 * are never marked stale, so there is no idle->STALE->I/O
+		 * RECOVERED log flood. A completion (or a drained queue)
+		 * clears the stuck window immediately.
+		 */
+		if (ctx->adaptive.stale_after_ns > 0) {
+			if (snapshot > 0 && completions == 0) {
+				if (!ctx->adaptive.stuck_start_ns[i])
+					ctx->adaptive.stuck_start_ns[i] = now;
+				if (!ctx->adaptive.stale[i] &&
+				    (now - ctx->adaptive.stuck_start_ns[i]) >
+					    ctx->adaptive.stale_after_ns) {
+					ctx->adaptive.stale[i] = true;
+					ctx->adaptive.stale_marked_ns[i] = now;
+					pr_info("tieredvol: disk[%d] %s STALE (no completions for %llu ms)\n",
+						i, ctx->meta.disk_names[i],
+						(now - ctx->adaptive.stuck_start_ns[i]) /
+							1000000ULL);
+					tv_log(TV_LOG_WARN, i, TV_LOG_STALE,
+					       "STALE no-completion %llums",
+					       (now - ctx->adaptive.stuck_start_ns[i]) /
+							1000000ULL);
+				}
+			} else if (ctx->adaptive.stuck_start_ns[i] ||
+				   ctx->adaptive.stale[i]) {
+				ctx->adaptive.stuck_start_ns[i] = 0;
+				if (ctx->adaptive.stale[i]) {
+					ctx->adaptive.stale[i] = false;
+					pr_info("tieredvol: disk[%d] %s RECOVERED (I/O resumed)\n",
+						i, ctx->meta.disk_names[i]);
+					tv_log(TV_LOG_INFO, i, TV_LOG_RECOVER,
+					       "RECOVERED io");
+				}
+			}
 		}
 	}
 

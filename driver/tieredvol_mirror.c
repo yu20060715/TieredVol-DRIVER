@@ -12,19 +12,34 @@
 #include <linux/delay.h>
 #include <linux/completion.h>
 #include <linux/kthread.h>
+#include <linux/highmem.h>
 #include <linux/device-mapper.h>
 #include "tieredvol.h"
 
 int tv_mirror_init_ctx(struct tieredvol_ctx *ctx)
 {
+	ctx->pcpu_reads = alloc_percpu(struct tv_pending_read_cpu);
+	if (!ctx->pcpu_reads)
+		return -ENOMEM;
+	ctx->pcpu_writes = alloc_percpu(struct tv_pending_write_cpu);
+	if (!ctx->pcpu_writes) {
+		free_percpu(ctx->pcpu_reads);
+		return -ENOMEM;
+	}
+
 	ctx->mirror_pw_pool = mempool_create_kmalloc_pool(
 		128, sizeof(struct tv_mirror_pw_ctx));
-	if (!ctx->mirror_pw_pool)
+	if (!ctx->mirror_pw_pool) {
+		free_percpu(ctx->pcpu_writes);
+		free_percpu(ctx->pcpu_reads);
 		return -ENOMEM;
+	}
 	ctx->retry_ctx_pool = mempool_create_kmalloc_pool(
 		32, sizeof(struct tv_retry_ctx));
 	if (!ctx->retry_ctx_pool) {
 		mempool_destroy(ctx->mirror_pw_pool);
+		free_percpu(ctx->pcpu_writes);
+		free_percpu(ctx->pcpu_reads);
 		return -ENOMEM;
 	}
 	return 0;
@@ -34,17 +49,17 @@ void tv_mirror_destroy_ctx(struct tieredvol_ctx *ctx)
 {
 	mempool_destroy(ctx->mirror_pw_pool);
 	mempool_destroy(ctx->retry_ctx_pool);
+	free_percpu(ctx->pcpu_writes);
+	free_percpu(ctx->pcpu_reads);
 }
 
 /* ---- Pending-read tracking (per-CPU, lockless) ---- */
 
-static DEFINE_PER_CPU(struct tv_pending_read_cpu, tv_pcpu_reads);
-
-void tv_pending_add(struct block_device *bdev, sector_t sector,
-		    unsigned int size, int mirror_disk,
+void tv_pending_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
+		    sector_t sector, unsigned int size, int mirror_disk,
 		    sector_t mirror_sector)
 {
-	struct tv_pending_read_cpu *pcpu = this_cpu_ptr(&tv_pcpu_reads);
+	struct tv_pending_read_cpu *pcpu = this_cpu_ptr(ctx->pcpu_reads);
 	unsigned int idx;
 
 	idx = (pcpu->head + pcpu->count) % TV_PENDING_RING_SIZE;
@@ -61,7 +76,8 @@ void tv_pending_add(struct block_device *bdev, sector_t sector,
 }
 EXPORT_SYMBOL_GPL(tv_pending_add);
 
-int tv_pending_find_and_remove(struct block_device *bdev, sector_t sector,
+int tv_pending_find_and_remove(struct tieredvol_ctx *ctx,
+			       struct block_device *bdev, sector_t sector,
 			       unsigned int size, sector_t *mirror_sector_out)
 {
 	int mirror_disk = -1;
@@ -69,7 +85,7 @@ int tv_pending_find_and_remove(struct block_device *bdev, sector_t sector,
 
 	get_cpu();
 	for_each_possible_cpu(cpu) {
-		struct tv_pending_read_cpu *pcpu = per_cpu_ptr(&tv_pcpu_reads, cpu);
+		struct tv_pending_read_cpu *pcpu = per_cpu_ptr(ctx->pcpu_reads, cpu);
 		unsigned int i;
 
 		for (i = 0; i < pcpu->count; i++) {
@@ -102,11 +118,10 @@ found:
 EXPORT_SYMBOL_GPL(tv_pending_find_and_remove);
 /* ---- Pending-write tracking (per-CPU, lockless) ---- */
 
-static DEFINE_PER_CPU(struct tv_pending_write_cpu, tv_pcpu_writes);
-
-void tv_pw_add(struct block_device *bdev, sector_t sector, unsigned int size)
+void tv_pw_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
+	       sector_t sector, unsigned int size)
 {
-	struct tv_pending_write_cpu *pcpu = this_cpu_ptr(&tv_pcpu_writes);
+	struct tv_pending_write_cpu *pcpu = this_cpu_ptr(ctx->pcpu_writes);
 	unsigned int idx;
 
 	idx = (pcpu->head + pcpu->count) % TV_PENDING_RING_SIZE;
@@ -121,17 +136,17 @@ void tv_pw_add(struct block_device *bdev, sector_t sector, unsigned int size)
 }
 EXPORT_SYMBOL_GPL(tv_pw_add);
 
-static void tv_pw_remove(struct block_device *bdev, sector_t sector,
-			  unsigned int size)
+static void tv_pw_remove(struct tieredvol_ctx *ctx, struct block_device *bdev,
+			 sector_t sector, unsigned int size)
 {
 	int cpu;
 
 	for_each_possible_cpu(cpu) {
-		struct tv_pending_write_cpu *pcpu = per_cpu_ptr(&tv_pcpu_writes, cpu);
+		struct tv_pending_write_cpu *pcpu = per_cpu_ptr(ctx->pcpu_writes, cpu);
 		unsigned int i;
 
 		for (i = 0; i < pcpu->count; i++) {
-			unsigned int idx = (pcpu->head + i) % 64;
+			unsigned int idx = (pcpu->head + i) % TV_PENDING_RING_SIZE;
 			struct tv_pending_write_entry *pw = &pcpu->entries[idx];
 
 			if (pw->bdev == bdev && pw->sector == sector &&
@@ -140,9 +155,9 @@ static void tv_pw_remove(struct block_device *bdev, sector_t sector,
 
 				for (j = i; j + 1 < pcpu->count; j++) {
 					unsigned int next =
-						(pcpu->head + j + 1) % 64;
+						(pcpu->head + j + 1) % TV_PENDING_RING_SIZE;
 
-					pcpu->entries[(pcpu->head + j) % 64] =
+					pcpu->entries[(pcpu->head + j) % TV_PENDING_RING_SIZE] =
 						pcpu->entries[next];
 				}
 				pcpu->count--;
@@ -152,17 +167,18 @@ static void tv_pw_remove(struct block_device *bdev, sector_t sector,
 	}
 }
 
-static bool tv_pw_is_pending(struct block_device *bdev, sector_t sector,
-			      unsigned int size)
+static bool tv_pw_is_pending(struct tieredvol_ctx *ctx,
+			     struct block_device *bdev, sector_t sector,
+			     unsigned int size)
 {
 	int cpu;
 
 	for_each_possible_cpu(cpu) {
-		struct tv_pending_write_cpu *pcpu = per_cpu_ptr(&tv_pcpu_writes, cpu);
+		struct tv_pending_write_cpu *pcpu = per_cpu_ptr(ctx->pcpu_writes, cpu);
 		unsigned int i;
 
 		for (i = 0; i < pcpu->count; i++) {
-			unsigned int idx = (pcpu->head + i) % 64;
+			unsigned int idx = (pcpu->head + i) % TV_PENDING_RING_SIZE;
 			struct tv_pending_write_entry *pw = &pcpu->entries[idx];
 
 			if (pw->bdev == bdev && pw->sector == sector &&
@@ -228,7 +244,10 @@ void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 	if (bio_data_dir(bio) == WRITE) {
 		struct bio *clone;
 		struct tv_mirror_pw_ctx *pwc;
+		struct bvec_iter it;
+		struct bio_vec bvl;
 		unsigned int bio_sz = bio->bi_iter.bi_size;
+		unsigned int nsegs = 0;
 
 		pwc = mempool_alloc(ctx->mirror_pw_pool, GFP_NOIO);
 		if (!pwc) {
@@ -238,15 +257,52 @@ void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 			return;
 		}
 
-		clone = bio_alloc_clone(
-			ctx->devs[seg->mirror_disk]->bdev, bio,
-			GFP_NOIO, &fs_bio_set);
+		bio_for_each_segment(bvl, bio, it)
+			nsegs++;
+
+		/*
+		 * Do NOT bio_alloc_clone() here: a clone shares orig's bvec
+		 * array, but that array is owned by the submitting (DIO) bio,
+		 * not by orig. The primary write completes on fast NVMe while
+		 * this clone is still queued on the slow SATA mirror disk; by
+		 * then the DIO bio has been freed and its bvec array recycled,
+		 * so dispatching the clone walks freed/reused memory and hits a
+		 * NULL deref in scsi_alloc_sgtables() (system freeze). Pin via
+		 * get_page() is also wrong: fio reuses the same user buffer for
+		 * the next I/O and overwrites the pages, corrupting mirror data.
+		 * Instead, build a fully self-contained bio that COPIES the data
+		 * into pages the mirror owns.
+		 */
+		clone = bio_alloc_bioset(ctx->devs[seg->mirror_disk]->bdev,
+					 nsegs, REQ_OP_WRITE, GFP_NOIO,
+					 &fs_bio_set);
 		if (!clone) {
 			mempool_free(pwc, ctx->mirror_pw_pool);
 			atomic64_inc(&ctx->mirror.mirror_errors);
 			tv_log(TV_LOG_ERR, cur.disk, TV_LOG_MIRROR,
 			       "mirror alloc fail seg%d", cur.seg_idx);
 			return;
+		}
+
+		it = bio->bi_iter;
+		bio_for_each_segment(bvl, bio, it) {
+			struct page *pg = alloc_page(GFP_NOIO);
+			void *src, *dst;
+
+			if (!pg)
+				goto fail_copy;
+
+			src = kmap_local_page(bvl.bv_page) + bvl.bv_offset;
+			dst = kmap_local_page(pg);
+			memcpy(dst, src, bvl.bv_len);
+			kunmap_local(dst);
+			kunmap_local(src);
+
+			if (bio_add_page(clone, pg, bvl.bv_len, 0) !=
+			    bvl.bv_len) {
+				__free_page(pg);
+				goto fail_copy;
+			}
 		}
 
 		clone->bi_iter.bi_sector = mirror_sec;
@@ -257,14 +313,33 @@ void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 		clone->bi_private = pwc;
 		clone->bi_end_io = tv_mirror_end_io;
 		atomic64_add(bio_sz, &ctx->mirror.mirror_write_bytes);
-		tv_pw_add(ctx->devs[seg->mirror_disk]->bdev,
+		atomic64_add(bio_sz,
+			     &ctx->io.total_write_bytes[seg->mirror_disk]);
+		atomic64_inc(&ctx->io.total_write_ops[seg->mirror_disk]);
+		tv_pw_add(ctx, ctx->devs[seg->mirror_disk]->bdev,
 			  mirror_sec, bio_sz);
 		submit_bio(clone);
 		tv_log(TV_LOG_INFO, cur.disk, TV_LOG_MIRROR,
 		       "mirrored %uKB seg%d->disk%d",
 		       bio_sz >> 10, cur.seg_idx, seg->mirror_disk);
+		goto done;
+
+fail_copy:
+		{
+			int i;
+
+			for (i = 0; i < clone->bi_vcnt; i++)
+				__free_page(clone->bi_io_vec[i].bv_page);
+		}
+		bio_put(clone);
+		mempool_free(pwc, ctx->mirror_pw_pool);
+		atomic64_inc(&ctx->mirror.mirror_errors);
+		tv_log(TV_LOG_ERR, cur.disk, TV_LOG_MIRROR,
+		       "mirror copy fail seg%d", cur.seg_idx);
+done:
+		return;
 	} else if (bio_data_dir(bio) == READ) {
-		tv_pending_add(ctx->devs[cur.disk]->bdev,
+		tv_pending_add(ctx, ctx->devs[cur.disk]->bdev,
 			       bio->bi_iter.bi_sector,
 			       bio->bi_iter.bi_size,
 			       (int)seg->mirror_disk,
@@ -276,15 +351,22 @@ EXPORT_SYMBOL_GPL(tv_mirror_handle);
 void tv_mirror_end_io(struct bio *bio)
 {
 	struct tv_mirror_pw_ctx *pwc = bio->bi_private;
+	int i;
 
 	if (bio->bi_status != BLK_STS_OK)
 		atomic64_inc(&pwc->ctx->mirror.mirror_errors);
 	else
 		atomic64_inc(&pwc->ctx->mirror.mirror_write_ops);
 
-	tv_pw_remove(pwc->bdev, pwc->sector, pwc->size);
-	mempool_free(pwc, pwc->ctx->mirror_pw_pool);
+	tv_pw_remove(pwc->ctx, pwc->bdev, pwc->sector, pwc->size);
+	/*
+	 * bi_iter is consumed by the device on completion, so walk the raw
+	 * bvec array to release every page the copy owns.
+	 */
+	for (i = 0; i < bio->bi_vcnt; i++)
+		__free_page(bio->bi_io_vec[i].bv_page);
 	bio_put(bio);
+	mempool_free(pwc, pwc->ctx->mirror_pw_pool);
 }
 EXPORT_SYMBOL_GPL(tv_mirror_end_io);
 
@@ -311,14 +393,14 @@ static void tv_mirror_retry_end_io(struct bio *bio)
 
 /* ---- Read retry work ---- */
 
-static void tv_read_retry_work(struct work_struct *work)
+void tv_read_retry_work(struct work_struct *work)
 {
 	struct delayed_work *dwork = to_delayed_work(work);
 	struct tv_retry_ctx *rc =
 		container_of(dwork, struct tv_retry_ctx, dwork);
 	struct bio *clone;
 
-	if (tv_pw_is_pending(rc->ctx->devs[rc->mirror_disk]->bdev,
+	if (tv_pw_is_pending(rc->ctx, rc->ctx->devs[rc->mirror_disk]->bdev,
 			     rc->sector, rc->size)) {
 		if (rc->retries-- > 0) {
 			schedule_delayed_work(&rc->dwork, msecs_to_jiffies(1));
@@ -349,6 +431,7 @@ fail:
 	bio_put(rc->orig_bio);
 	mempool_free(rc, rc->ctx->retry_ctx_pool);
 }
+EXPORT_SYMBOL_GPL(tv_read_retry_work);
 
 /* ---- DM end_io handler ---- */
 
@@ -423,7 +506,7 @@ int tieredvol_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 			sector_t mirror_sector;
 
 			mirror = tv_pending_find_and_remove(
-				bio->bi_bdev,
+				ctx, bio->bi_bdev,
 				bio->bi_iter.bi_sector,
 				bio->bi_iter.bi_size,
 				&mirror_sector);
@@ -459,7 +542,7 @@ int tieredvol_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 
 	/* Success path: only scan pending if mirror is configured */
 	if (bio_data_dir(bio) == READ && ctx->mirror_enabled_any) {
-		tv_pending_find_and_remove(bio->bi_bdev,
+		tv_pending_find_and_remove(ctx, bio->bi_bdev,
 					   bio->bi_iter.bi_sector,
 					   bio->bi_iter.bi_size,
 					   NULL);
@@ -483,7 +566,7 @@ int tv_rebuild_thread(void *data)
 	struct tieredvol_ctx *ctx = data;
 	struct tieredvol_segment *seg;
 	struct bio *bio_r, *bio_w;
-	unsigned int chunk_bytes;
+	unsigned int chunk_bytes, sz;
 	int backoff_ms = 10;
 
 	while (!kthread_should_stop()) {
@@ -518,7 +601,9 @@ int tv_rebuild_thread(void *data)
 				continue;
 			}
 
-			pg = alloc_page(GFP_NOIO);
+			sz = min_t(u64, chunk_bytes, cur.length);
+
+			pg = alloc_pages(GFP_NOIO, get_order(sz));
 			if (!pg) {
 				msleep(backoff_ms);
 				backoff_ms = min(backoff_ms * 2, 1000);
@@ -536,12 +621,10 @@ int tv_rebuild_thread(void *data)
 				continue;
 			}
 			bio_r->bi_iter.bi_sector = cur.offset >> TV_SECTOR_SHIFT;
-			bio_r->bi_iter.bi_size = chunk_bytes;
 			bio_r->bi_private = &ctx->rebuild.done_r;
 			bio_r->bi_end_io = tv_rebuild_end_io;
 
-			if (bio_add_page(bio_r, pg, chunk_bytes, 0) !=
-			    chunk_bytes) {
+			if (bio_add_page(bio_r, pg, sz, 0) != sz) {
 				put_page(pg);
 				bio_put(bio_r);
 				msleep(backoff_ms);
@@ -580,12 +663,10 @@ int tv_rebuild_thread(void *data)
 			}
 			bio_w->bi_iter.bi_sector =
 				ctx->rebuild.offset >> TV_SECTOR_SHIFT;
-			bio_w->bi_iter.bi_size = chunk_bytes;
 			bio_w->bi_private = &ctx->rebuild.done_w;
 			bio_w->bi_end_io = tv_rebuild_end_io;
 
-			if (bio_add_page(bio_w, pg, chunk_bytes, 0) !=
-			    chunk_bytes) {
+			if (bio_add_page(bio_w, pg, sz, 0) != sz) {
 				put_page(pg);
 				bio_put(bio_w);
 				msleep(backoff_ms);
@@ -610,7 +691,7 @@ int tv_rebuild_thread(void *data)
 			backoff_ms = 10;
 		}
 
-		ctx->rebuild.offset += chunk_bytes;
+		ctx->rebuild.offset += sz;
 
 		if ((ctx->rebuild.offset % (10 * 1024 * 1024)) == 0 ||
 		    ctx->rebuild.offset >= ctx->rebuild.total) {

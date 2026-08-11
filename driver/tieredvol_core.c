@@ -13,6 +13,7 @@
 #include <linux/string.h>
 #include <linux/kthread.h>
 #include <linux/kfifo.h>
+#include <linux/mempool.h>
 #include "tieredvol.h"
 
 #define DM_MSG_PREFIX "tieredvol"
@@ -96,9 +97,40 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 	/* ---- Phase D: Bad block bitmap check ---- */
 	{
 		u64 chunk_no = cur.offset / ctx->meta.chunk_size;
+		struct tieredvol_segment *seg;
 
 		if (bio_data_dir(bio) == READ &&
 		    tv_badmap_test(ctx, cur.disk, chunk_no)) {
+			seg = (cur.seg_idx >= 0 &&
+			       cur.seg_idx < (int)ctx->meta.segment_count) ?
+				&ctx->meta.segments[cur.seg_idx] : NULL;
+
+			/* Mirror read-back: a badmapped chunk on the primary
+			 * still returns real data from the mirror. Falls back
+			 * to zero-fill when no mirror or alloc fails. */
+			if (seg && seg->mirror_enabled) {
+				sector_t mirror_sec =
+					(logical - seg->logical_begin) >>
+					TV_SECTOR_SHIFT;
+				struct tv_retry_ctx *rc;
+
+				rc = mempool_alloc(ctx->retry_ctx_pool,
+						   GFP_ATOMIC);
+				if (rc) {
+					INIT_DELAYED_WORK(&rc->dwork,
+							  tv_read_retry_work);
+					rc->ctx = ctx;
+					rc->orig_bio = bio;
+					rc->sector = mirror_sec;
+					rc->size = bio->bi_iter.bi_size;
+					rc->mirror_disk = seg->mirror_disk;
+					rc->retries = 32;
+					bio_get(bio);
+					schedule_delayed_work(&rc->dwork, 0);
+					return DM_MAPIO_SUBMITTED;
+				}
+			}
+
 			zero_fill_bio(bio);
 			bio_endio(bio);
 			return DM_MAPIO_SUBMITTED;
@@ -212,6 +244,7 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	struct tieredvol_ctx *ctx;
 	int ret, i;
+	bool mirror_init_done = false;
 
 	if (argc != 1) {
 		ti->error = "tieredvol: expected 1 argument (config path)";
@@ -420,6 +453,7 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		ti->error = "tieredvol: mempool alloc failed";
 		goto free_error_count;
 	}
+	mirror_init_done = true;
 	}
 
 	/* Compute min_chunk_sectors and stripe_sectors */
@@ -492,6 +526,8 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 free_error_count:
 	timer_delete_sync(&ctx->adaptive.decay_timer);
+	if (mirror_init_done)
+		tv_mirror_destroy_ctx(ctx);
 	tv_badmap_destroy(ctx);
 	kfree(ctx->deg.error_count);
 put_devices:

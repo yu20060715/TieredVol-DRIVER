@@ -81,7 +81,7 @@ sector = `physical_offset >> 9`。
 
 評分 = load + latency + wear，選分數最低的 disk。
 
-Staleness 偵測：若某 disk 超過 `stale_ms` 沒收到 I/O，數據視為過時，該 disk 有更高機率被選中（確保資料新鮮度）。
+Hung-disk 偵測（STALE）：僅當某 disk 有 in-flight I/O 卻連續 `stale_ms` 零完成（卡死）時標記 STALE，adaptive 路由會避開該 disk；排空或恢復完成立即 RECOVERED。閒置 disk 永不標 STALE。
 
 ## Static Mapping 範例
 
