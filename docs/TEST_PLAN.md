@@ -109,6 +109,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | W4 | off | 4K 循序寫入，關 WC |
 
 **驗收**：W1/W3 的 IOPS 應顯著高於 W2/W4。
+> **最終 build 實測修正（2026-08-12，Bug1 修復後）**：4K 小寫入走 `-EAGAIN` 繞過 WC，故 wc=on 反而略慢 6–8%（W1=56.9k/W3=58.6k vs W2=60.8k/W4=63.9k IOPS）。原「WC 批次化 +24%」結論僅適用修復前舊 build，已被 `wc_suite.sh` 取代（見 `docs/RESULTS.md`）。
 
 ### Mirror 專項
 
@@ -156,7 +157,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | S1–S4 疊碟 + CAP | **完成**（2026-08-11；08-12 鎖修復後 6:1:1:1 重跑，15:35 冷態） | `docs/RESULTS.md` |
 | S4 8G 全量完整性 | **完成**（2026-08-12，crc32c 8G write+verify 0 mismatch、計數 6:1:1:1 恰合） | `/home/yu/verify8g_s4_*.log` |
 | Mirror / Rebuild 專項（含 5 項修復） | **完成**（2026-08-12） | 本文件 + `docs/RESULTS.md` |
-| WC 專項 W1–W4 | **完成**（2026-08-12） | `docs/RESULTS.md` |
+| WC 專項 W1–W4 | **完成**（2026-08-12，最終 build `wc_suite.sh` 重跑，4K 小寫入 wc=on 略慢 6–8% — 舊結論已取代） | `docs/RESULTS.md` |
 | Mirror 專項 M1–M3 | **完成**（2026-08-12，pw/pr 鎖修復後回歸全過） | `docs/RESULTS.md` |
 | LVM vs TieredVol 對比（2/3/4d + sweep） | **完成**（2026-08-12） | 本文件 + `docs/RESULTS.md` |
 | 功能驗證 F1–F5 | **完成**（2026-08-12 最終 build 重驗，`/home/yu/f_suite.sh` **17/17 PASS**） | `docs/RESULTS.md` |

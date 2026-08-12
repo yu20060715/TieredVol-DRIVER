@@ -86,8 +86,8 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ## 完整性與容量
 
-- **資料完整（修復後回歸）**：S4 上 `fio --verify=crc32c --do_verify=1 --size=2G` → **0 mismatch**；全程 `err=0`。
-  寫 445MiB/s、verify_read 264MiB/s（修復前因 WC 小寫入退化卡在 ~13MiB/s）。
+- **資料完整（修復後回歸）**：S4 上 `fio --verify=crc32c --do_verify=1` **8G 全量** → **0 mismatch**；全程 `err=0`（15:41 `verify8g_s4.sh`：寫 8G、verify_read 8G，2240/3493 MiB/s）。
+  2G/4K 版本（F4）同 0 mismatch。修復前因 WC 小寫入退化 verify 卡在 ~13MiB/s。
 - **容量擴展**：volume 大小由 `seg0_end` 宣告。S1–S4 用 20G carve 驗證分布；另建 100G carve
   （`0 209715200 tieredvol ...`）成功，1G 寫入分布仍精確。
 - 所有 volume 用後即 `dmsetup remove`，無殘留 device。
@@ -111,21 +111,22 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
-## WC 專項 W1–W4（2026-08-12）
+## WC 專項 W1–W4（2026-08-12，最終 build 重跑 `wc_suite.sh` 15:51）
 
 單碟 `/etc/tieredvol/tv_s1.conf`、`fio --bs=4K --size=1G --iodepth=1 --direct=1 --ioengine=libaio`。
+`wc_enabled` 為 module param，W1/W3 重載 `wc_enabled=1`（sysfs `Y`）、W2/W4 重載 `wc_enabled=0`（`N`）。
 
 | ID | WC | 模式 | IOPS | BW |
 |----|----|------|------|-----|
-| W1 | on | 隨機寫 | 34.9k | 136MiB/s |
-| W2 | off | 隨機寫 | 38.9k | 152MiB/s |
-| W3 | on | 循序寫 | 40.2k | 157MiB/s |
-| W4 | off | 循序寫 | 32.4k | 127MiB/s |
+| W1 | on | 隨機寫 | 56.9k | 222MiB/s |
+| W2 | off | 隨機寫 | 60.8k | 237MiB/s |
+| W3 | on | 循序寫 | 58.6k | 228MiB/s |
+| W4 | off | 循序寫 | 63.9k | 249MiB/s |
 
-**結論**：WC 為「提交批次化」而非「bio 合併」——每筆仍是 4K bio，但 flush 一次批次下送，讓磁碟看到循序局部性：
-- **循序 +24%**（40.2k vs 32.4k IOPS）✅ 符合預期。
-- **隨機無合併機會**（跨 stripe 每次觸發 flush），-10%（34.9k vs 38.9k），屬設計特性非 bug。
-- 若要隨機小寫入也受惠，需將 WC 改為真正的 bio 合併（compound page 聚合同 chunk）— 未來增強方向。
+**結論（Bug1 修復後）**：4K（`< chunk_size`）小寫入一律走 `-EAGAIN` 繞過 WC 直寫，故 wc on/off 差距僅 submit-path 簿記開銷：
+- **wc=on 全面略慢 6–8%**（222 vs 237、228 vs 249 MiB/s）——小寫入由 WC 收到負擔、無合併效益，符合「修復後小寫入不該走 WC」的設計。
+- WC 效益僅在**大寫入**（≥chunk 的批次提交），1M 路徑不受影響（疊碟回歸 1981–3091 MiB/s）。
+- 舊表（W3 on 40.2k > W4 off 32.4k，批次化 +24%）為 **Bug1 修復前**、無 log 佐證的紀錄，已由本表取代。
 
 ## Mirror M1–M3（2026-08-12）
 
@@ -158,7 +159,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | F4 | crc32c 2G | `fio --verify=crc32c --do_verify=1` 0 mismatch、err=0（寫 248MiB/s、verify 371MiB/s）✅ |
 | F5 | Badmap | 無 mirror：badmap chunk 讀出全 0、不 I/O error；未 badmap chunk 讀取正常；有 mirror（M1）：讀回真資料 ✅ |
 
-> **最終 build 重驗（2026-08-12 15:5x，`/home/yu/f_suite.sh`）**：F1–F5 全套重跑 **17/17 PASS**（F1 loop 拒絕 RC=1、F2 六步全成功、F3 六則 message 全 RC=0 + policy 切換正確、F4 crc32c 2G 0 mismatch、F5 badmap zero-fill/clear 讀回 0xAA 全對）。
+> **最終 build 重驗（2026-08-12 15:42，`/home/yu/f_suite.sh`）**：F1–F5 全套重跑 **17/17 PASS**（F1 loop 拒絕 RC=1、F2 六步全成功、F3 六則 message 全 RC=0 + policy 切換正確、F4 crc32c 2G 0 mismatch、F5 badmap zero-fill/clear 讀回 0xAA 全對）。
 
 > 註：`dmsetup message` 不印 handler 的 `result` 字串（dmsetup 行為），部分 handler 另以 `pr_info` 落 dmesg；`dmsetup status`（STATUSTYPE_INFO）為完整可見介面。
 
@@ -206,7 +207,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 3. **資料完整**：crc32c **8G 全量** 寫入 + verify 0 mismatch，`err=0`（WC 小寫入 bug 修復後）。
 4. **Mirror 全功能可用**：同步/讀回/rebuild/跨碟界全部正確，`mirror_err=0`；M1–M3 鎖修復後回歸全過。
 5. **鎖修復**：pending-write（`tv_pw_lock`）與 pending-read（`tv_pending_lock`）ring 均有全域 spinlock 保護，0 次 MISS / give-up / full。
-6. **WC 小寫入修復**：4K 寫 14→500 MiB/s；大寫入路徑不受影響（2737 MiB/s）。
+6. **WC 小寫入修復**：4K 寫 14→500 MiB/s；大寫入路徑不受影響（最終 build tv_s2 4K=612、1M=2661 MiB/s）。
 7. **Mirror 損耗**：1M 寫 81%（mirror 碟慢於 primary 的寫放大本質）、4K 小塊 52%（COW 開銷）、讀 0%。
 8. **vs LVM**：1M 順序寫/讀達 LVM striped 的 **1.96–3.5x**（快碟權重占比越高越明顯）；4K 小寫入 LVM 較快 1.32x（676 vs 511 MiB/s）。
 
