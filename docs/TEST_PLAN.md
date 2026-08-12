@@ -138,13 +138,13 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 | 碟數 | TieredVol W / R | LVM striped W / R | TV/LVM 寫 | TV/LVM 讀 |
 |------|------------------|-------------------|-----------|-----------|
-| 2d（A+B） | 2584 / 2762 | 786 / 796 | 3.29x | 3.47x |
-| 3d（A+B+C） | 2502 / 3120 | 1180 / 1190 | 2.12x | 2.62x |
-| 4d（A+B+C+D） | 2778 / 3490 | 1575 / 1590（256K 最佳） | 1.76x | 2.19x |
+| 2d（A+B） | 2661 / 2786 | 786 / 796 | 3.39x | 3.50x |
+| 3d（A+B+C） | 2787 / 3180 | 1180 / 1190 | 2.36x | 2.67x |
+| 4d（A+B+C+D） | 3091 / 3575 | 1575 / 1590（256K 最佳） | 1.96x | 2.25x |
 
 - **LVM 4d stripe sweep**：64K=1059/1513、128K=1525/1587、256K=**1575/1590**、1M=1572/1589（256K 最佳，128K 接近）。
 - **4K 小寫入（2G d32）**：TieredVol S4=511 vs LVM 4d=676 MiB/s → **LVM 較快 1.32x**（LVM 4K 平行散至 4 碟；TieredVol 4K 走 WC 繞過直寫，75% 落在 A 單碟）。
-- 結論：1M 順序大塊 TieredVol 全面領先（1.76–3.5x，快碟占比高）；4K 小塊 LVM 略勝。
+- 結論：1M 順序大塊 TieredVol 全面領先（1.96–3.5x，快碟占比高）；4K 小塊 LVM 略勝。
 - 操作：`pvcreate 4 碟 → vg_tv2 → lvcreate --stripes N --stripesize S`；測完 `vgchange -an/vgremove/pvremove` 全數還原裸碟（TieredVol 功能檢查通過）。
 
 ---

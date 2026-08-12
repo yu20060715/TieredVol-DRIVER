@@ -49,7 +49,7 @@ Application
 
 Hardware（現況拓撲，2026-08-12 重啟後碟位交換）: A=WD SN750 500G `nvme0n1` (PCIe 3.0 x4, 平行仲裁 ~2009 MB/s), B=P3 Plus 1T `nvme1n1` (PCIe 2.0 x1, ~389 MB/s), C=MX500 500G `sdc` (~470 MB/s), D=WD Blue 250G `sdb` (~346 MB/s), E=BX100 233G `sda` (未入 config)。權重 6:1:1:1。
 
-vs LVM（現行拓撲，2026-08-12，同 fio libaio d32，見 `docs/RESULTS.md`）：LVM striped 4-disk W 1575 / R 1590（256K 最佳）、3-disk W 1180 / R 1190、2-disk W 786 / R 796。TieredVol weighted striping 於 1M 順序寫/讀達 **LVM 的 1.76–3.5x**；僅 4K 小寫入 LVM 較快（676 vs 511 MiB/s）。舊拓撲 io_uring 數字（W 1407 / R 1829）僅參考。
+vs LVM（現行拓撲，2026-08-12，同 fio libaio d32，見 `docs/RESULTS.md`）：LVM striped 4-disk W 1575 / R 1590（256K 最佳）、3-disk W 1180 / R 1190、2-disk W 786 / R 796。TieredVol weighted striping 於 1M 順序寫/讀達 **LVM 的 1.96–3.5x**；僅 4K 小寫入 LVM 較快（676 vs 511 MiB/s）。舊拓撲 io_uring 數字（W 1407 / R 1829）僅參考。
 
 ### What Is Intentionally Excluded
 
