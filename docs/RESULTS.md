@@ -182,6 +182,23 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
+## LVM vs TieredVol 公平對比（2026-08-12，現行拓撲）
+
+雙方同參數：`fio libaio iodepth=32 direct=1 bs=1M size=8G end_fsync=1`（= 疊碟驗收標準）。
+
+| 碟數 | TieredVol W / R | LVM striped W / R | TV/LVM 寫 | TV/LVM 讀 |
+|------|------------------|-------------------|-----------|-----------|
+| 2d（A+B） | 2584 / 2762 | 786 / 796 | 3.29x | 3.47x |
+| 3d（A+B+C） | 2502 / 3120 | 1180 / 1190 | 2.12x | 2.62x |
+| 4d（A+B+C+D） | 2778 / 3490 | 1575 / 1590（256K） | 1.76x | 2.19x |
+
+- **LVM 4d stripe size sweep**（W/R MiB/s）：64K=1059/1513、128K=1525/1587、256K=**1575/1590**、1M=1572/1589 → **256K 最佳**（128K 接近，與歷史結論一致）。
+- **4K 小寫入**（2G, d32）：TieredVol S4=**511** vs LVM 4d=**676** MiB/s → **LVM 較快 1.32x**。原因：LVM 4K 平行散到 4 碟；TieredVol 4K 走 WC 繞過直寫、分布 6:1:1:1 使 75% 落單碟 A。
+- **結論**：1M 順序大塊 TieredVol 全面領先（1.76–3.5x，差距隨快碟權重占比上升）；4K 小塊是 LVM fixed stripe 的優勢區。
+- 操作流程：`pvcreate` 4 碟 → `vg_tv2` → `lvcreate --stripes N --stripesize S -L 20G`；測完 `vgchange -an`/`vgremove`/`pvremove` 還原裸碟，TieredVol 功能檢查通過（S4 建置/移除 OK）。
+
+---
+
 ## 結論
 
 1. **疊碟可擴展**：寫入吞吐隨碟數上升 1979 → 2584 → 2502 → 2778 MB/s（重測 S3∈[2502,3123]、S4∈[2778,3465]，**S4 恆 > S3**，擴展確認；先前 S4=2092 為舊 build 瞬態）。
@@ -191,6 +208,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 5. **鎖修復**：pending-write（`tv_pw_lock`）與 pending-read（`tv_pending_lock`）ring 均有全域 spinlock 保護，0 次 MISS / give-up / full。
 6. **WC 小寫入修復**：4K 寫 14→500 MiB/s；大寫入路徑不受影響（2737 MiB/s）。
 7. **Mirror 損耗**：1M 寫 81%（mirror 碟慢於 primary 的寫放大本質）、4K 小塊 52%（COW 開銷）、讀 0%。
+8. **vs LVM**：1M 順序寫/讀達 LVM striped 的 **1.76–3.5x**（快碟權重占比越高越明顯）；4K 小寫入 LVM 較快 1.32x（676 vs 511 MiB/s）。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`、`tv_mir.conf`
 （disk0=nvme0n1, disk1=nvme1n1, disk2=sdc, disk3=sdb）。
