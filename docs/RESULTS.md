@@ -59,7 +59,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | S1 | 1 (A) | 1 | 1981 | 3009 | A=8192（100% 精確） | - |
 | S2 | 2 (A+B) | 6:1 | 2661 | 2786 | A=7024 B=1170（精確） | - |
 | S3 | 3 (A+B+C) | 6:1:1 | 2787 | 3180 | A=6144 B=1024 C=1024（精確） | - |
-| S4 | 4 (A+B+C+D) | 6:1:1:1 | 3091 | 3575 | A=5462 B=910 C=910 D=910（精確） | crc32c 2G **0 mismatch** |
+| S4 | 4 (A+B+C+D) | 6:1:1:1 | 3091 | 3575 | A=5462 B=910 C=910 D=910（精確） | crc32c **8G 全量** 0 mismatch |
 | CAP | 4 (100G carve) | 6:1:1:1 | 2165 | - | A=684 B=114 C=113 D=113（1G 精確） | - |
 
 > 上表為 **2026-08-12 15:35 冷態完整回歸**（重載當前 build、四卷共存、寫+讀+完整性+CAP 同程序、碟温 ~39°C 起步）。
@@ -158,6 +158,8 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | F4 | crc32c 2G | `fio --verify=crc32c --do_verify=1` 0 mismatch、err=0（寫 248MiB/s、verify 371MiB/s）✅ |
 | F5 | Badmap | 無 mirror：badmap chunk 讀出全 0、不 I/O error；未 badmap chunk 讀取正常；有 mirror（M1）：讀回真資料 ✅ |
 
+> **最終 build 重驗（2026-08-12 15:5x，`/home/yu/f_suite.sh`）**：F1–F5 全套重跑 **17/17 PASS**（F1 loop 拒絕 RC=1、F2 六步全成功、F3 六則 message 全 RC=0 + policy 切換正確、F4 crc32c 2G 0 mismatch、F5 badmap zero-fill/clear 讀回 0xAA 全對）。
+
 > 註：`dmsetup message` 不印 handler 的 `result` 字串（dmsetup 行為），部分 handler 另以 `pr_info` 落 dmesg；`dmsetup status`（STATUSTYPE_INFO）為完整可見介面。
 
 ---
@@ -201,7 +203,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 1. **疊碟可擴展**：寫入吞吐隨碟數上升 1981 → 2661 → 2787 → 3091 MB/s（冷態完整回歸；熱載入下界 2502/2778，**S4 恆 > S3**，擴展確認；先前 S4=2092 為舊 build 瞬態）。
 2. **分布精確**：計數器與宣告權重（6:1:1:1）、確定性映射預測完全一致（0 誤差）。
-3. **資料完整**：crc32c 2G 寫入 + verify 0 mismatch，`err=0`（WC 小寫入 bug 修復後）。
+3. **資料完整**：crc32c **8G 全量** 寫入 + verify 0 mismatch，`err=0`（WC 小寫入 bug 修復後）。
 4. **Mirror 全功能可用**：同步/讀回/rebuild/跨碟界全部正確，`mirror_err=0`；M1–M3 鎖修復後回歸全過。
 5. **鎖修復**：pending-write（`tv_pw_lock`）與 pending-read（`tv_pending_lock`）ring 均有全域 spinlock 保護，0 次 MISS / give-up / full。
 6. **WC 小寫入修復**：4K 寫 14→500 MiB/s；大寫入路徑不受影響（2737 MiB/s）。

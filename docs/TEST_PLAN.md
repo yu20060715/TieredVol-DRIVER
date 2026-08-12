@@ -58,7 +58,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | S1 | 1 | A | [1] | 單碟基線、計數 100% | ✅ 完成 |
 | S2 | 2 | A+B | 6:1 | 分布精確 | ✅ 完成 |
 | S3 | 3 | A+B+C | 6:1:1 | 分布精確 | ✅ 完成 |
-| S4 | 4 | A+B+C+D | 6:1:1:1 | 分布精確 + 完整性 | ✅ 完成 |
+| S4 | 4 | A+B+C+D | 6:1:1:1 | 分布精確 + 完整性（crc32c 8G 全量） | ✅ 完成 |
 | CAP | 4 | 100G carve | 6:1:1:1 | 容量擴展 + 分布精確 | ✅ 完成 |
 
 結果與逐項對照（預測值 vs 計數器）見 [RESULTS.md](RESULTS.md)。
@@ -153,9 +153,10 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 | 測試 | 狀態 | 結果位置 |
 |------|------|----------|
-| S1–S4 疊碟 + CAP | **完成**（2026-08-11；08-12 鎖修復後 6:1:1:1 重跑） | `docs/RESULTS.md` |
+| S1–S4 疊碟 + CAP | **完成**（2026-08-11；08-12 鎖修復後 6:1:1:1 重跑，15:35 冷態） | `docs/RESULTS.md` |
+| S4 8G 全量完整性 | **完成**（2026-08-12，crc32c 8G write+verify 0 mismatch、計數 6:1:1:1 恰合） | `/home/yu/verify8g_s4_*.log` |
 | Mirror / Rebuild 專項（含 5 項修復） | **完成**（2026-08-12） | 本文件 + `docs/RESULTS.md` |
 | WC 專項 W1–W4 | **完成**（2026-08-12） | `docs/RESULTS.md` |
 | Mirror 專項 M1–M3 | **完成**（2026-08-12，pw/pr 鎖修復後回歸全過） | `docs/RESULTS.md` |
 | LVM vs TieredVol 對比（2/3/4d + sweep） | **完成**（2026-08-12） | 本文件 + `docs/RESULTS.md` |
-| 功能驗證 F1–F5 | **完成**（2026-08-12） | `docs/RESULTS.md` |
+| 功能驗證 F1–F5 | **完成**（2026-08-12 最終 build 重驗，`/home/yu/f_suite.sh` **17/17 PASS**） | `docs/RESULTS.md` |
