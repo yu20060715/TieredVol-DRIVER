@@ -154,6 +154,14 @@ int tv_wc_try_buffer(struct tieredvol_ctx *ctx, struct bio *bio,
 	if (seg->disk_count <= 1)
 		return -EAGAIN;
 
+	/* Small writes bypass WC: with a shallow I/O queue the accumulated
+	 * bytes can never reach stripe_size, so the 1-jiffy delayed flush
+	 * serializes every bio and tanks throughput (e.g. 4K -> ~13 MiB/s
+	 * vs 525 MiB/s direct). WC only helps large writes that actually
+	 * fill a stripe, so let bio < chunk_size submit directly. */
+	if (bio->bi_iter.bi_size < ctx->meta.chunk_size)
+		return -EAGAIN;
+
 	stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
 
 	/* Split at stripe boundary so each entry fits within one stripe */

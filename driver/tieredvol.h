@@ -231,7 +231,15 @@ struct tv_pending_read_cpu {
 	unsigned int count;
 };
 
-/* ---- Pending-write tracking (per-CPU, lockless) ---- */
+/* ---- Pending-write tracking (per-CPU, spinlock-protected) ----
+ * The write ring is written by tv_pw_add (submit path, this_cpu) and scanned
+ * by tv_pw_remove (completion softirq) / tv_pw_is_pending (read-retry work);
+ * those can run on the same CPU concurrently, so every access takes the
+ * global tv_pending_lock.  Unlocked per-CPU access races and leaves stale
+ * entries, which makes read-retry see a phantom pending write forever -> EIO.
+ * The pending-read ring (tv_pending_add / tv_pending_find_and_remove) shares
+ * the same lock for the same reason.
+ */
 struct tv_pending_write_entry {
 	struct block_device *bdev;
 	sector_t sector;
@@ -243,6 +251,8 @@ struct tv_pending_write_cpu {
 	unsigned int head;
 	unsigned int count;
 };
+
+extern spinlock_t tv_pending_lock;
 
 /* ---- tieredvol_mirror.c exports ---- */
 int tv_mirror_init_ctx(struct tieredvol_ctx *ctx);

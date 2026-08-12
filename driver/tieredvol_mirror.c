@@ -16,6 +16,9 @@
 #include <linux/device-mapper.h>
 #include "tieredvol.h"
 
+DEFINE_SPINLOCK(tv_pending_lock);
+EXPORT_SYMBOL_GPL(tv_pending_lock);
+
 int tv_mirror_init_ctx(struct tieredvol_ctx *ctx)
 {
 	ctx->pcpu_reads = alloc_percpu(struct tv_pending_read_cpu);
@@ -59,9 +62,12 @@ void tv_pending_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
 		    sector_t sector, unsigned int size, int mirror_disk,
 		    sector_t mirror_sector)
 {
-	struct tv_pending_read_cpu *pcpu = this_cpu_ptr(ctx->pcpu_reads);
+	struct tv_pending_read_cpu *pcpu;
+	unsigned long flags;
 	unsigned int idx;
 
+	spin_lock_irqsave(&tv_pending_lock, flags);
+	pcpu = this_cpu_ptr(ctx->pcpu_reads);
 	idx = (pcpu->head + pcpu->count) % TV_PENDING_RING_SIZE;
 	if (pcpu->count < TV_PENDING_RING_SIZE) {
 		pcpu->entries[idx].bdev = bdev;
@@ -73,6 +79,7 @@ void tv_pending_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
 	} else {
 		pr_warn_once("tieredvol: per-cpu pending-read full, dropping entry\n");
 	}
+	spin_unlock_irqrestore(&tv_pending_lock, flags);
 }
 EXPORT_SYMBOL_GPL(tv_pending_add);
 
@@ -81,9 +88,10 @@ int tv_pending_find_and_remove(struct tieredvol_ctx *ctx,
 			       unsigned int size, sector_t *mirror_sector_out)
 {
 	int mirror_disk = -1;
+	unsigned long flags;
 	int cpu;
 
-	get_cpu();
+	spin_lock_irqsave(&tv_pending_lock, flags);
 	for_each_possible_cpu(cpu) {
 		struct tv_pending_read_cpu *pcpu = per_cpu_ptr(ctx->pcpu_reads, cpu);
 		unsigned int i;
@@ -107,12 +115,12 @@ int tv_pending_find_and_remove(struct tieredvol_ctx *ctx,
 						pcpu->entries[next];
 				}
 				pcpu->count--;
-				goto found;
+				goto out;
 			}
 		}
 	}
-found:
-	put_cpu();
+out:
+	spin_unlock_irqrestore(&tv_pending_lock, flags);
 	return mirror_disk;
 }
 EXPORT_SYMBOL_GPL(tv_pending_find_and_remove);
@@ -122,8 +130,10 @@ void tv_pw_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
 	       sector_t sector, unsigned int size)
 {
 	struct tv_pending_write_cpu *pcpu = this_cpu_ptr(ctx->pcpu_writes);
+	unsigned long flags;
 	unsigned int idx;
 
+	spin_lock_irqsave(&tv_pending_lock, flags);
 	idx = (pcpu->head + pcpu->count) % TV_PENDING_RING_SIZE;
 	if (pcpu->count < TV_PENDING_RING_SIZE) {
 		pcpu->entries[idx].bdev = bdev;
@@ -133,14 +143,18 @@ void tv_pw_add(struct tieredvol_ctx *ctx, struct block_device *bdev,
 	} else {
 		pr_warn_once("tieredvol: per-cpu pending-write full, dropping entry\n");
 	}
+	spin_unlock_irqrestore(&tv_pending_lock, flags);
 }
 EXPORT_SYMBOL_GPL(tv_pw_add);
 
-static void tv_pw_remove(struct tieredvol_ctx *ctx, struct block_device *bdev,
+static bool tv_pw_remove(struct tieredvol_ctx *ctx, struct block_device *bdev,
 			 sector_t sector, unsigned int size)
 {
+	unsigned long flags;
 	int cpu;
+	bool found = false;
 
+	spin_lock_irqsave(&tv_pending_lock, flags);
 	for_each_possible_cpu(cpu) {
 		struct tv_pending_write_cpu *pcpu = per_cpu_ptr(ctx->pcpu_writes, cpu);
 		unsigned int i;
@@ -161,18 +175,25 @@ static void tv_pw_remove(struct tieredvol_ctx *ctx, struct block_device *bdev,
 						pcpu->entries[next];
 				}
 				pcpu->count--;
-				return;
+				found = true;
+				goto out;
 			}
 		}
 	}
+out:
+	spin_unlock_irqrestore(&tv_pending_lock, flags);
+	return found;
 }
 
 static bool tv_pw_is_pending(struct tieredvol_ctx *ctx,
 			     struct block_device *bdev, sector_t sector,
 			     unsigned int size)
 {
+	unsigned long flags;
 	int cpu;
+	bool pending = false;
 
+	spin_lock_irqsave(&tv_pending_lock, flags);
 	for_each_possible_cpu(cpu) {
 		struct tv_pending_write_cpu *pcpu = per_cpu_ptr(ctx->pcpu_writes, cpu);
 		unsigned int i;
@@ -182,11 +203,15 @@ static bool tv_pw_is_pending(struct tieredvol_ctx *ctx,
 			struct tv_pending_write_entry *pw = &pcpu->entries[idx];
 
 			if (pw->bdev == bdev && pw->sector == sector &&
-			    pw->size == size)
-				return true;
+			    pw->size == size) {
+				pending = true;
+				goto out;
+			}
 		}
 	}
-	return false;
+out:
+	spin_unlock_irqrestore(&tv_pending_lock, flags);
+	return pending;
 }
 
 /* ---- Timestamp ring for latency tracking (lockless, O(1) hash) ---- */
@@ -358,7 +383,9 @@ void tv_mirror_end_io(struct bio *bio)
 	else
 		atomic64_inc(&pwc->ctx->mirror.mirror_write_ops);
 
-	tv_pw_remove(pwc->ctx, pwc->bdev, pwc->sector, pwc->size);
+	if (!tv_pw_remove(pwc->ctx, pwc->bdev, pwc->sector, pwc->size))
+		pr_warn("tieredvol: pw_remove MISS sec=%llu size=%u (endio)\n",
+			(unsigned long long)pwc->sector, pwc->size);
 	/*
 	 * bi_iter is consumed by the device on completion, so walk the raw
 	 * bvec array to release every page the copy owns.
@@ -406,7 +433,29 @@ void tv_read_retry_work(struct work_struct *work)
 			schedule_delayed_work(&rc->dwork, msecs_to_jiffies(1));
 			return;
 		}
-		pr_warn("tieredvol: mirror retry gave up after 32 retries\n");
+		pr_warn("tieredvol: mirror retry gave up after 32 retries "
+			"(mirror_disk=%d sector=%llu size=%u bdev=%p)\n",
+			rc->mirror_disk, (unsigned long long)rc->sector,
+			rc->size,
+			rc->ctx->devs[rc->mirror_disk]->bdev);
+		{
+			int cpu, i;
+			for_each_possible_cpu(cpu) {
+				struct tv_pending_write_cpu *pcpu =
+					per_cpu_ptr(rc->ctx->pcpu_writes, cpu);
+				for (i = 0; i < pcpu->count; i++) {
+					unsigned int idx =
+						(pcpu->head + i) %
+						TV_PENDING_RING_SIZE;
+					struct tv_pending_write_entry *pw =
+						&pcpu->entries[idx];
+					pr_warn("  pw[%d] cpu%d bdev=%p sec=%llu size=%u\n",
+						idx, cpu, (void *)pw->bdev,
+						(unsigned long long)pw->sector,
+						pw->size);
+				}
+			}
+		}
 		goto fail;
 	}
 

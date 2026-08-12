@@ -47,7 +47,7 @@ Application
 > 以 io_uring QD=256 測得；io_uring + dm 深佇列會把數字灌高，**不能作為疊碟驗收依據**。
 > 疊碟（1→2→3→4）驗收以 **libaio + 計數器精確比對** 為準，最新實測見 `docs/RESULTS.md`。
 
-Hardware（現況拓撲）: A=WD SN550 500G `nvme1n1` (PCIe 3.0 x4, ~2563 MB/s), B=P3 Plus 1T `nvme0n1` (PCIe 2.0 x1, ~413 MB/s), C=MX500 500G `sdc` (~517 MB/s), D=WD Blue 250G `sdb` (~227 MB/s), E=BX100 233G `sda` (未入 config)。
+Hardware（現況拓撲，2026-08-12 重啟後碟位交換）: A=WD SN750 500G `nvme0n1` (PCIe 3.0 x4, 平行仲裁 ~2009 MB/s), B=P3 Plus 1T `nvme1n1` (PCIe 2.0 x1, ~389 MB/s), C=MX500 500G `sdc` (~470 MB/s), D=WD Blue 250G `sdb` (~346 MB/s), E=BX100 233G `sda` (未入 config)。權重 6:1:1:1。
 
 vs LVM: LVM fixed stripe 4-disk W 1407 / R 1829 MB/s（舊拓撲，io_uring）。TieredVol weighted striping + adaptive EMA 曾達 LVM 的 100-238%。
 

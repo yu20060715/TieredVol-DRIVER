@@ -6,18 +6,17 @@
 
 ---
 
-## 硬碟代號（目前拓撲）
+## 硬碟代號（目前拓撲，2026-08-12 重啟後）
 
 ```
-A = nvme1n1  WD SN550 (PCIe 3.0 x4, 快)    B = nvme0n1  P3 Plus (PCIe 2.0 x1, 慢)
+A = nvme0n1  WD SN750 (PCIe 3.0 x4, 快)    B = nvme1n1  P3 Plus (PCIe 2.0 x1, 慢)
 C = sdc      MX500 (SATA 6G)               D = sdb      WD Blue (SATA 6G)
 E = sda      BX100（未入 config）
 ```
 
 完整型號/容量/link 速度/平行仲裁測速見 [RESULTS.md](RESULTS.md)「硬碟對照」。
 
-> **插槽角色已交換**：現況 A 在 x4 = 快碟、B 在 x1 = 慢碟。早先實驗（tv3x/tv4x）是舊拓撲
-> （nvme0=WD 快、nvme1=P3 慢）調的權重，**已不適用**；現況權重以平行仲裁重新調校（8:1:2:1）。
+> **2026-08-12 重啟後碟位交換**：快碟現為 nvme0n1（WD SN750）、慢碟 nvme1n1（P3 Plus）；現況權重 **6:1:1:1**。
 
 ---
 
@@ -52,15 +51,15 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 ## 主測試：疊碟擴展（Scale-out）— **已完成**
 
 依目前拓撲由 1 碟往上疊，每步獨立 conf + dmsetup create。權重以**平行仲裁**
-（各碟同時打 raw、取實際並行吞吐，非 solo 測速）調校，現況為 **8:1:2:1**。
+（各碟同時打 raw、取實際並行吞吐，非 solo 測速）調校，現況為 **6:1:1:1**。
 
 | ID | 碟數 | 碟組合 | 權重 | 驗證 | 狀態 |
 |----|------|--------|------|------|------|
 | S1 | 1 | A | [1] | 單碟基線、計數 100% | ✅ 完成 |
-| S2 | 2 | A+B | 8:1 | 分布精確 | ✅ 完成 |
-| S3 | 3 | A+B+C | 8:1:2 | 分布精確 | ✅ 完成 |
-| S4 | 4 | A+B+C+D | 8:1:2:1 | 分布精確 + 完整性 | ✅ 完成 |
-| CAP | 4 | 100G carve | 8:1:2:1 | 容量擴展 + 分布精確 | ✅ 完成 |
+| S2 | 2 | A+B | 6:1 | 分布精確 | ✅ 完成 |
+| S3 | 3 | A+B+C | 6:1:1 | 分布精確 | ✅ 完成 |
+| S4 | 4 | A+B+C+D | 6:1:1:1 | 分布精確 + 完整性 | ✅ 完成 |
+| CAP | 4 | 100G carve | 6:1:1:1 | 容量擴展 + 分布精確 | ✅ 完成 |
 
 結果與逐項對照（預測值 vs 計數器）見 [RESULTS.md](RESULTS.md)。
 
@@ -115,9 +114,11 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 | ID | 測試 | 步驟 | 預期 |
 |----|------|------|------|
-| M1 | Mirror write + primary 失效 | 1. 建 A+B（mirror→C）<br>2. 寫 256M 同步 mirror<br>3. 破壞 primary + set_badmap<br>4. 讀 256M | 讀取由 mirror 回補 | ✅ 完成（badmap 模擬，非實體拔碟） |
-| M2 | Mirror rebuild | 破壞 mirror → `start_rebuild` 還原 | mirror_err=0、資料完整 | ✅ 完成（先修復 rebuild 崩潰） |
-| M3 | Cross-disk mirror | 4K iodepth=1 寫入，跨 disk boundary 也正確 mirror | mirror_err=0、ratio 正確 | ✅ 完成（見下） |
+| M1 | Mirror write + primary 失效 | 1. 建 A+B（mirror→C）<br>2. 寫 256M 同步 mirror<br>3. 破壞 primary + set_badmap<br>4. 讀 256M | 讀取由 mirror 回補 | ✅ 完成（badmap 模擬；pw 鎖修復後 retest 全過） |
+| M2 | Mirror rebuild | 破壞 mirror → `start_rebuild` 還原 | mirror_err=0、資料完整 | ✅ 完成（rebuild 崩潰已修；鎖修復後回歸 mirror==primary PASS） |
+| M3 | Cross-disk mirror | 4K iodepth=1 寫入，跨 disk boundary 也正確 mirror | mirror_err=0、ratio 正確 | ✅ 完成（鎖修復後回歸 +2 ops/+8K 精確） |
+
+> 測試陷阱：rebuild 的 bio 寫入不更新 block device page cache，驗證 mirror 碟必須用 `dd iflag=direct`，否則 buffered read 命中舊 cache 誤判「未還原」。
 
 ### 功能驗證
 
@@ -135,8 +136,8 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 | 測試 | 狀態 | 結果位置 |
 |------|------|----------|
-| S1–S4 疊碟 + CAP | **完成**（2026-08-11） | `docs/RESULTS.md` |
+| S1–S4 疊碟 + CAP | **完成**（2026-08-11；08-12 鎖修復後 6:1:1:1 重跑） | `docs/RESULTS.md` |
 | Mirror / Rebuild 專項（含 5 項修復） | **完成**（2026-08-12） | 本文件 + `docs/RESULTS.md` |
 | WC 專項 W1–W4 | **完成**（2026-08-12） | `docs/RESULTS.md` |
-| Mirror 專項 M3（跨碟 4K） | **完成**（2026-08-12） | `docs/RESULTS.md` |
+| Mirror 專項 M1–M3 | **完成**（2026-08-12，pw/pr 鎖修復後回歸全過） | `docs/RESULTS.md` |
 | 功能驗證 F1–F5 | **完成**（2026-08-12） | `docs/RESULTS.md` |
