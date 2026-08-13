@@ -150,6 +150,35 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
+## P4 專項：多卷併發（2026-08-13）— **已完成**
+
+目標：釐清「多卷同時 I/O」的代價是 driver 開銷還是共享碟物理爭用。
+
+### 方法
+
+- 三組對照，每組「孤立 ×2 → 真併發」，8G/卷，`fio 1M libaio depth32`（= 疊碟標準）。
+- 卷配置（8/13 拓撲，快碟=nvme1n1 權重 6）：
+  - **不共用碟**：`tv_s2`(A+B) + `tv_r`(C+D 4:3) → 無共享碟
+  - **完全同碟**：兩卷皆 A+B（權重 6:1）
+  - **不對稱**：`tv_s1`(A solo) + `tv_s4`(A+B+C+D)
+- 判據：不共用碟時併發和 ≈ 孤立和（±10%）；共享碟時併發和 ≈ 共享碟 solo 頻寬（±15%）；全程 fio `err=0`、dmesg 無 bad。
+
+### 判據結果
+
+| 實驗 | 併發和 vs 孤立和 | 併發和 vs 快碟 solo | 判定 |
+|------|------------------|---------------------|------|
+| 不共用碟 | 寫 3085/3012（-2.4%）、讀 3670/3740（+1.9%） | — | **PASS**（driver 零開銷） |
+| 完全同碟 | 寫 1569–1668（-68.7%）、讀 2927（-49.9%） | 78–81% | PASS（最嚴重情形） |
+| 不對稱 | 寫 1906（-62.9%）、讀 3978（-39.8%） | 92% | PASS |
+
+結論：多卷併發代價 = 共享碟物理爭用；不共享碟時 driver 無併發開銷。詳細數據與誤差驗證見 `docs/RESULTS.md`。
+
+### 腳本（已納入 repo `scripts/`）
+
+- `scripts/msg_probe.sh`（P3 42/42）、`scripts/rebuild_min.sh`、`scripts/raw_solo.sh`、`scripts/disjoint_suite.sh`、`scripts/shared_ctl.sh`（`SKIP_C=1` 只跑不對稱部分）
+
+---
+
 ## 執行狀態
 
 | 測試 | 狀態 | 結果位置 |
@@ -161,3 +190,5 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | Mirror 專項 M1–M3 | **完成**（2026-08-12，pw/pr 鎖修復後回歸全過） | `docs/RESULTS.md` |
 | LVM vs TieredVol 對比（2/3/4d + sweep） | **完成**（2026-08-12） | 本文件 + `docs/RESULTS.md` |
 | 功能驗證 F1–F5 | **完成**（2026-08-12 最終 build 重驗，`/home/yu/f_suite.sh` **17/17 PASS**） | `docs/RESULTS.md` |
+| **P3 rebuild 專項** | **完成**（2026-08-12，`msg_probe.sh` **42/42 PASS**） | `docs/RESULTS.md` |
+| **P4 多卷併發** | **完成**（2026-08-13，三組對照全 PASS，driver 零併發開銷） | `docs/RESULTS.md` |

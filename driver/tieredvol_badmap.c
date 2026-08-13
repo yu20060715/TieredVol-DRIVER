@@ -85,7 +85,7 @@ void tv_badmap_rebuild(struct tieredvol_ctx *ctx)
 	unsigned int chunk_bytes = ctx->meta.chunk_size;
 	struct page *pg;
 
-	pg = alloc_page(GFP_NOIO);
+	pg = alloc_pages(GFP_NOIO, get_order(chunk_bytes));
 	if (!pg) {
 		pr_err("tieredvol: rebuild OOM\n");
 		return;
@@ -114,7 +114,6 @@ void tv_badmap_rebuild(struct tieredvol_ctx *ctx)
 				continue;
 			}
 			bio->bi_iter.bi_sector = sector;
-			bio->bi_iter.bi_size = chunk_bytes;
 			bio->bi_private = &done;
 			bio->bi_end_io = tv_badmap_rebuild_endio;
 			if (bio_add_page(bio, pg, chunk_bytes, 0) !=

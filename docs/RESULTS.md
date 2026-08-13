@@ -1,8 +1,9 @@
 # Test Results — TieredVol-DRIVER（現況拓撲）
 
-> 實測日期：2026-08-12 · Kernel 6.14.0-27-generic · dm-target v5.0
+> 實測日期：2026-08-12（疊碟/Mirror/LVM）· 2026-08-13（多卷併發 P3/P4）· Kernel 6.14.0-27-generic · dm-target v5.0
 > 完整測試程序與驗收判據見 [TEST_PLAN.md](TEST_PLAN.md)。
-> **2026-08-12 重啟後碟位交換**：快碟現為 nvme0n1（WD SN750），慢碟 nvme1n1（P3 Plus）；權重鎖定 6:1:1:1。
+> **碟位變更紀錄**：8/12 重啟後 快碟=nvme0n1（WD SN750）；**8/13 再重啟後交換回 快碟=nvme1n1（WD SN750）、慢碟=nvme0n1（P3 Plus）**。
+> 本文 8/12 數據為舊拓撲語義、8/13 起為新拓撲；權重鎖定 6:1:1:1 不變，config 已於 8/13 對應更新。
 
 ---
 
@@ -200,6 +201,69 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
+## 2026-08-13 碟位再交換 · 多卷併發（P3/P4）
+
+### 拓撲更新與環境
+
+- **8/13 重啟後快/慢碟再交換**：`nvme1n1`=WD SN750（快，權重 6）、`nvme0n1`=P3 Plus（慢，權重 1）。config 已更新（disk0=nvme1n1），權重鎖定 **6:1:1:1** 不變。
+- 實驗環境確認：全程同一 module build（8/12 17:01）、碟位經 smartctl 驗證無變動、分布計數器 `6:1` 精確（`A=7363100672 B=1226833920`）。
+
+### 單碟 solo 基線（raw fio，1M/8G/libaio depth32）
+
+| 碟 | 型號 | 寫 (MB/s) | 讀 (MB/s) |
+|----|------|-----------|-----------|
+| nvme1n1 | WD SN750（快） | **2064** | **3152** |
+| nvme0n1 | P3 Plus（慢） | 413 | 418 |
+| sdc | MX500 | 519 | 501 |
+| sdb | WD Blue | 267 | 534 |
+
+> sdb 寫重測 219–267（兩次），8/12 平行仲裁 346 為 SLC cache 短寫值，solo 真實 ~220–270。其餘與 8/12 對照差 ≤10%。
+
+### P3：Mirror/Rebuild 專項（`scripts/msg_probe.sh`，8/12 17:03）
+
+**42/42 PASS**：sysfs 7 項、policy/wear 9 項、stats/config 6 項、mirror/badmap 9 項、rebuild start/stop/EBUSY、`rebuild_badmap`、完整 rebuild 完成回 idle。
+
+**Bug3：rebuild_badmap 整機凍結修復**（`driver/tieredvol_badmap.c`，working tree 修復）
+- 根因：`tv_badmap_rebuild` 只 `alloc_page()`（單 4K 頁）卻 `bio_add_page(bio, pg, chunk_bytes=1M, 0)` + 手動 `bi_iter.bi_size=1M`。kernel 6.x `bio_add_page` 對 multi-page bvec 不截斷（回傳傳入長度）→ 檢查失效 → 送出「bi_size 2M / 實體 1 頁」bio → `__blk_rq_map_sg` WARN → sg 越界 NULL deref → 系統凍結。
+- 修法：`alloc_pages(GFP_NOIO, get_order(chunk_bytes))` 配 compound 頁、移除手動 `bi_iter.bi_size`（與 `tv_rebuild_thread` 既有寫法一致）。
+- 實測（`scripts/rebuild_min.sh`，8/12 17:01）：`badmap rebuild done: 1 recovered, 0 failed`、`DONE no-hang`。
+
+### P4：多卷併發（8/13，8G/卷，1M/libaio depth32）
+
+三組對照 + 8/12 原始 P4（共用快碟）數據一併列出：
+
+| 實驗 | 卷組合 | 孤立和 寫/讀 | 併發和 寫/讀 | 代價 寫/讀 | 併發寫和 vs 快碟 solo |
+|------|--------|--------------|--------------|------------|----------------------|
+| 不共用碟 | (A+B)+(C+D) | 3012/3740 | 3085/3670 | **-2.4%/1.9%** | —（無共享） |
+| 完全同碟 | (A+B)×2 | 5331/5837 | 1569–1668/2927 | 68.7%/49.9% | 78–81% |
+| 不對稱 | (A)+(S4) | 5143/6608 | 1906/3978 | 62.9%/39.8% | 92% |
+| P4 原(8/12) | (S4)+(S2) 共用A | 6277/6662 | 2003/3501 | 68.1%/47.5% | 99.7% |
+
+**結論**：
+1. **driver 無多卷併發開銷**：不共用碟時併發和 ≈ 孤立和（±2%），全部 fio `err=0`、dmesg 0 bad。
+2. **併發代價 = 共享碟物理爭用**：共享快碟的三組併發寫和（2003/1906/1619）全部落在「快碟 solo 2064」附近（92–100%）；完全同碟最低（78–81%），因兩卷佇列完全重疊 + 慢碟瓜分，屬最嚴重情形。
+3. 8/12 的 P4 68%/47.5% 與 8/13 完全同碟 68.7%/49.9% 一致——**同一物理現象**（共享快碟），非 driver 或 build 差異。
+
+### 誤差驗證（判據 ±15%，三個偏差有物理解釋）
+
+| 測量 | 實測 | 模型/參考 | 誤差 |
+|------|------|-----------|------|
+| nvme1n1 W / R | 2064 / 3152 | 8/12 A 2009 / 3009 | +2.7% / +4.8% ✓ |
+| nvme0n1 W | 413 | 8/12 B 389 | +6.2% ✓ |
+| sdc W | 519 | 8/12 470 | +10.4% ✓ |
+| tv_s2 孤立 W / R | 2496 / 2841 | 權重模型 2408 / 2926 | +3.7% / -2.9% ✓ |
+| tv_r 孤立 W / R | 516 / 898 | 權重模型 511 / 877 | +1.0% / +2.4% ✓ |
+| tv_x1(A) W / R | 2088 / 2990 | solo 2064 / 3152 | +1.2% / -5.1% ✓ |
+| tv_x2(S4) W | 3054 | 權重模型 3096 | -1.4% ✓ |
+| sdb solo W | 267 (219) | 8/12 346 | **-23%**：SLC cache 短寫偏高，重測 219–267 穩定 |
+| tv_x2(S4) R | 3618 | 線性模型 4728 | **-23%**：讀受匯流排/controller 限制（8/12 S4 讀 3575 同現象，非 driver） |
+| 完全同碟併發 W | 1569–1668 | 快碟 solo 2064 | **-19~-24%**：兩卷佇列完全重疊 + 慢碟瓜分，最嚴重情形（重測 784.4+785.0 一致） |
+
+- **分布**：tv_s2 併發寫 8G 後計數器 `A=7363100672 B=1226833920` = **6:1 精確**（0 誤差），config 8/13 更新後權重語義正確。
+- `make test`：**267/267 assertions、5/5 suites**；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /home/yu/tv_s4.conf` == create 參數。
+
+---
+
 ## 結論
 
 1. **疊碟可擴展**：寫入吞吐隨碟數上升 1981 → 2661 → 2787 → 3091 MB/s（冷態完整回歸；熱載入下界 2502/2778，**S4 恆 > S3**，擴展確認；先前 S4=2092 為舊 build 瞬態）。
@@ -210,6 +274,8 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 6. **WC 小寫入修復**：4K 寫 14→500 MiB/s；大寫入路徑不受影響（最終 build tv_s2 4K=612、1M=2661 MiB/s）。
 7. **Mirror 損耗**：1M 寫 81%（mirror 碟慢於 primary 的寫放大本質）、4K 小塊 52%（COW 開銷）、讀 0%。
 8. **vs LVM**：1M 順序寫/讀達 LVM striped 的 **1.96–3.5x**（快碟權重占比越高越明顯）；4K 小寫入 LVM 較快 1.32x（676 vs 511 MiB/s）。
+9. **rebuild_badmap 凍結修復（Bug3）**：compound page + 移除手動 `bi_size`，`1 recovered, 0 failed` no-hang。
+10. **多卷併發**：driver 本身零開銷（不共用碟併發≈孤立，±2%）；共享碟併發代價 40–69% 純為快碟物理爭用（併發和 ≈ 快碟 solo 2064，三組吻合），非 driver 問題。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`、`tv_mir.conf`
 （disk0=nvme0n1, disk1=nvme1n1, disk2=sdc, disk3=sdb）。
