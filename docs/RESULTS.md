@@ -252,15 +252,19 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | nvme0n1 W | 413 | 8/12 B 389 | +6.2% ✓ |
 | sdc W | 519 | 8/12 470 | +10.4% ✓ |
 | tv_s2 孤立 W / R | 2496 / 2841 | 權重模型 2408 / 2926 | +3.7% / -2.9% ✓ |
-| tv_r 孤立 W / R | 516 / 898 | 權重模型 511 / 877 | +1.0% / +2.4% ✓ |
+| tv_r 孤立 W / R | 516 / 898 | 權重模型 511 / 877 | +1.0% / +2.4% ✓（511 採重測 sdb 寫 219） |
 | tv_x1(A) W / R | 2088 / 2990 | solo 2064 / 3152 | +1.2% / -5.1% ✓ |
 | tv_x2(S4) W | 3054 | 權重模型 3096 | -1.4% ✓ |
 | sdb solo W | 267 (219) | 8/12 346 | **-23%**：SLC cache 短寫偏高，重測 219–267 穩定 |
 | tv_x2(S4) R | 3618 | 線性模型 4728 | **-23%**：讀受匯流排/controller 限制（8/12 S4 讀 3575 同現象，非 driver） |
-| 完全同碟併發 W | 1569–1668 | 快碟 solo 2064 | **-19~-24%**：兩卷佇列完全重疊 + 慢碟瓜分，最嚴重情形（重測 784.4+785.0 一致） |
+| 完全同碟併發 W | 1569–1668 | 快碟 solo 2064 | **-19~-24%**：兩卷佇列完全重疊 + 慢碟瓜分，最嚴重情形（15:11 窗口內重測 784.4+785.0 一致；SLC 耗盡後重測 479 為狀態漂移，見下註） |
+
+> **SLC 快取窗口（方法論註記）**：本節併發數據於 15:04–15:10 同一窗口測得（快碟 SLC 快取有效，solo 2064）。
+> 窗口後（15:18 起）快碟 SLC 快取耗盡進入 TLC 直寫：solo 降至 ~409（`raw_solo_0813_1620.log`）、完全同碟併發重測僅 479（`reverify_same_disk_0813_1619.log`）。
+> 此漂移為 SSD 正常行為（當日累計寫入 >160G），**非 driver 退化**；SLC 耗盡後之量測須重啟/快取恢復後重測方與本節可比。
 
 - **分布**：tv_s2 併發寫 8G 後計數器 `A=7363100672 B=1226833920` = **6:1 精確**（0 誤差），config 8/13 更新後權重語義正確。
-- `make test`：**267/267 assertions、5/5 suites**；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /home/yu/tv_s4.conf` == create 參數。
+- `make test`：**267/267 assertions、5/5 suites**（49+25+14+170+9）；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /dev/nvme1n1 /dev/nvme0n1 /dev/sdc /dev/sdb`（4 碟展開清單，順序與 config disk0–3 一致）== create 參數 `0 41943040 tieredvol /home/yu/tv_s4.conf`。
 
 ---
 
@@ -278,4 +282,4 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 10. **多卷併發**：driver 本身零開銷（不共用碟併發≈孤立，±2%）；共享碟併發代價 40–69% 純為快碟物理爭用（併發和 ≈ 快碟 solo 2064，三組吻合），非 driver 問題。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`、`tv_mir.conf`
-（disk0=nvme0n1, disk1=nvme1n1, disk2=sdc, disk3=sdb）。
+（8/13 拓撲：disk0=nvme1n1, disk1=nvme0n1, disk2=sdc, disk3=sdb；8/12 舊拓撲為 disk0=nvme0n1, disk1=nvme1n1）。

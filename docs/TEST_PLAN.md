@@ -6,17 +6,17 @@
 
 ---
 
-## 硬碟代號（目前拓撲，2026-08-12 重啟後）
+## 硬碟代號（目前拓撲，2026-08-13 重啟後）
 
 ```
-A = nvme0n1  WD SN750 (PCIe 3.0 x4, 快)    B = nvme1n1  P3 Plus (PCIe 2.0 x1, 慢)
+A = nvme1n1  WD SN750 (PCIe 3.0 x4, 快)    B = nvme0n1  P3 Plus (PCIe 2.0 x1, 慢)
 C = sdc      MX500 (SATA 6G)               D = sdb      WD Blue (SATA 6G)
 E = sda      BX100（未入 config）
 ```
 
 完整型號/容量/link 速度/平行仲裁測速見 [RESULTS.md](RESULTS.md)「硬碟對照」。
 
-> **2026-08-12 重啟後碟位交換**：快碟現為 nvme0n1（WD SN750）、慢碟 nvme1n1（P3 Plus）；現況權重 **6:1:1:1**。
+> **2026-08-13 重啟後碟位再交換**：快碟現為 nvme1n1（WD SN750）、慢碟 nvme0n1（P3 Plus）；現況權重 **6:1:1:1**。（8/12 舊拓撲為 A=nvme0n1）
 
 ---
 
