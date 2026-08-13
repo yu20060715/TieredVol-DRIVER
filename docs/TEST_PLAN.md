@@ -2,7 +2,7 @@
 
 > 主目標：**證明「疊加硬碟」可行**（1→2→3→4 disk，分布精確、資料完整、容量擴展）。
 > 速度為參考指標，非驗收條件。
-> 實測結果已紀錄於 [RESULTS.md](RESULTS.md)（2026-08-11，現況拓撲）。
+> 實測結果已紀錄於 [RESULTS.md](RESULTS.md)（2026-08-14 兩組實驗定案）。
 
 ## 測試層架構（`make test` 2 suites）
 
@@ -20,17 +20,18 @@ tests/test_stripe_kernel.c # 直接 #include driver/tieredvol_stripe.c 於 users
 
 ---
 
-## 硬碟代號（目前拓撲，2026-08-13 晚重啟後）
+## 硬碟代號（目前拓撲，2026-08-14 下午）
 
 ```
-A = nvme0n1  WD SN750 (PCIe 3.0 x4, 快)    B = nvme1n1  P3 Plus (PCIe 2.0 x1, 慢)
-C = sdc      MX500 (SATA 6G)               D = sdb      WD Blue (SATA 6G)
-E = sda      BX100（未入 config）
+A = nvme1n1  WD SN750  (CPU 直連 PCIe 3.0 x4, 快)   B = nvme0n1  P3 Plus (PCH PCIe 2.0 x4, 已解鎖)
+C = sdc      MX500 (SATA 6G)                        D = sdb      WD Blue（8/14 已移出資料池）
+E = sda      BX100（開機碟，不入池）
 ```
 
-完整型號/容量/link 速度/平行仲裁測速見 [RESULTS.md](RESULTS.md)「硬碟對照」。
+完整型號/容量/link 速度/solo 測速見 [RESULTS.md](RESULTS.md)「硬碟對照」。
 
-> **2026-08-13 晚重啟後碟位又交換回 8/12 配置**：快碟現為 nvme0n1（WD SN750）、慢碟 nvme1n1（P3 Plus）；現況權重 **6:1:1:1**。（8/13 午曾為 A=nvme1n1）
+> **2026-08-14 下午定案**：P3 Plus 由 PCIe2.0 x1 換至 x4 插槽（solo 415→1522）；WD Blue 移出資料池；
+> 資料池 3 碟，現役權重 S2 **[37:27]**、S3 **[64:30:10]**（DMI-aware）、mirror **[37:27]**→C。
 
 ---
 
@@ -62,10 +63,10 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
-## 主測試：疊碟擴展（Scale-out）— **已完成**
+## 主測試：疊碟擴展（Scale-out）— **已完成（8/14 兩組實驗定案）**
 
-依目前拓撲由 1 碟往上疊，每步獨立 conf + dmsetup create。權重以**平行仲裁**
-（各碟同時打 raw、取實際並行吞吐，非 solo 測速）調校，現況為 **6:1:1:1**。
+由 1 碟往上疊，每步獨立 conf + dmsetup create。權重以 `auto_weight.sh` v2（窮舉搜尋瓶頸模型）調校。
+最終驗收拆兩組：**實驗 1**（P3 Plus @x1，8/14 早）三碟聚合證明；**實驗 2**（P3 Plus @x4，8/14 下午）解鎖聚焦。
 
 | ID | 碟數 | 碟組合 | 權重 | 驗證 | 狀態 |
 |----|------|--------|------|------|------|
@@ -147,7 +148,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
-## LVM 對比（現行拓撲，2026-08-12）— **已完成**
+## LVM 對比（8/12 拓撲）— **已完成**
 
 與 LVM fixed striped 公平對比，**雙方同用 fio libaio iodepth=32 direct=1 bs=1M size=8G end_fsync=1**（= 疊碟驗收標準），非舊拓撲 io_uring 灌水數字。
 
@@ -206,3 +207,5 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | 功能驗證 F1–F5 | **完成**（2026-08-12 最終 build 重驗，`/home/yu/f_suite.sh` **17/17 PASS**） | `docs/RESULTS.md` |
 | **P3 rebuild 專項** | **完成**（2026-08-12，`msg_probe.sh` **42/42 PASS**） | `docs/RESULTS.md` |
 | **P4 多卷併發** | **完成**（2026-08-13，三組對照全 PASS，driver 零併發開銷） | `docs/RESULTS.md` |
+| **8/14 全卷自動加權定案（S1–S3，B@x1）** | **完成**（2026-08-14 早冷態，S3=2896 = Σsolo 96.9%） | `docs/RESULTS.md` |
+| **8/14 插槽解鎖＋DMI 兩組實驗定案（B@x4）** | **完成**（2026-08-14 下午，a+b=3547 對 x1 +47%；DMI 上限定位 S3≈S2、C 只加容量） | `docs/RESULTS.md` |

@@ -11,23 +11,22 @@ INI 格式，儲存在 `/etc/tieredvol/<name>.conf`。
 version=1
 chunk_size=1048576
 segment_count=2
-disk_count=4
+disk_count=3
 disk0_name=/dev/disk/by-id/nvme-WDS500G3X0C-00SJG0_200705800588
-disk1_name=/dev/disk/by-id/ata-WDC_WDS250G2B0A_201965800292
+disk1_name=/dev/disk/by-id/nvme-CT1000P3PSSD8_242849E47E24
 disk2_name=/dev/disk/by-id/ata-CT500MX500SSD1_2129E5B858A9
-disk3_name=/dev/disk/by-id/nvme-CT1000P3PSSD8_242849E47E24
 seg0_begin=0
-seg0_end=1073741824
-seg0_count=4
-seg0_disks=0,1,2,3
-seg0_weight=6,3,2,1
-seg0_stripe=12582912
-seg1_begin=1073741824
-seg1_end=2147483648
+seg0_end=21474836480
+seg0_count=3
+seg0_disks=0,1,2
+seg0_weight=64,30,10
+seg0_stripe=109051904
+seg1_begin=21474836480
+seg1_end=42949672960
 seg1_count=2
 seg1_disks=0,1
-seg1_weight=3,1
-seg1_stripe=4194304
+seg1_weight=37,27
+seg1_stripe=67108864
 ```
 
 ## 參數說明
@@ -69,12 +68,15 @@ chunk_size 建議與 filesystem block size 或常用 I/O size 一致（1MB = 104
 
 從 benchmark 速度計算：`weight = speed / slowest_speed`。
 
-未指定時由 `scripts/auto_weight.sh`（python3 + fio 並行測速）產生後填入 config。
+未指定時由 `scripts/auto_weight.sh` v2（python3 + fio 並行測 solo，**窮舉搜尋**最大化瓶頸模型 `min(solo_i×W/w_i)`）產生後填入 config。
 
-> **權重推導方式**：以**平行仲裁**（所有碟同時打 raw，取實際並行吞吐）為準，
-> 不要用單碟 solo 測速（solo 會因 DMI 池 / PCIe 插槽互搶而失真）。
-> 本機現行拓撲：nvme0=WD SN750（PCIe3.0 x4，快）、nvme1=P3 Plus（受限 PCIe2.0 x1，慢）、
-> sdc=MX500、sdb=WD Blue；權重以 6:1:1:1 表示快碟承載主要寫入。
+> **權重推導方式**：以單碟 solo 測速（8G 平均，避免 SLC 短寫峰值）求速比為基準，
+> 再以瓶頸模型調整——總吞吐 = `min(solo_i × 總權重/weight_i)`，不是原生總和。
+> 本機現況拓撲（8/14 下午）：A=WD SN750（CPU 直連 PCIe3.0 x4，solo ~2070）、B=P3 Plus（PCH PCIe2.0 x4，solo ~1520）、
+> C=MX500（SATA，solo ~517）。現役權重：S2 [37:27]、S3 [64:30:10]（DMI-aware）。
+> **注意（B85/DMI）**：B、C 共用 PCH DMI 上行（實測 ~1300 MB/s），A+B+C 同寫時總吞吐受
+> 「A（CPU 直連）+ DMI」限制（~3360），三碟聚合無法超過 a+b——晶片組硬體限制，非 driver 問題；
+> 此情形下權重需 DMI-aware（S3 [64:30:10] 而非比例 [64:47:16]，後者僅 2561 MB/s）。詳見 `docs/RESULTS.md`「8/14 下午」節。
 > 換碟/換槽後請用 `scripts/auto_weight.sh` 重測並更新權重。
 
 ### segment 範圍
