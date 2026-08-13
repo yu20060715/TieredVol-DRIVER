@@ -55,9 +55,16 @@ test_map: tests/test_map.c tests/test_common.h
 test_exec: tests/test_exec.c src/exec_helper.h src/exec_helper.c
 	$(CC) $(CFLAGS) -o $@ tests/test_exec.c src/exec_helper.c
 
-test: test_common test_partition test_metadata test_map test_exec
+# Compile the REAL kernel driver source (driver/tieredvol_stripe.c) against
+# minimal mock kernel headers (tests/mock/linux/) and run it in userspace.
+# This validates that pure-math helpers and the parallel completion/timeout
+# handoff behave as expected without a kernel.
+test_stripe_kernel: tests/test_stripe_kernel.c tests/test_common.h tests/mock/linux/*.h driver/tieredvol.h driver/tieredvol_stripe.c
+	$(CC) $(CFLAGS) -O1 -Itests/mock -Idriver -Wno-unused-parameter -o $@ tests/test_stripe_kernel.c
+
+test: test_common test_partition test_metadata test_map test_exec test_stripe_kernel
 	@TP=0; TR=0; \
-	for t in test_common test_partition test_metadata test_map test_exec; do \
+	for t in test_common test_partition test_metadata test_map test_exec test_stripe_kernel; do \
 		echo "=== $$t ===" && ./$$t; \
 		P=$$?; \
 		if [ $$P -eq 0 ]; then TP=$$((TP+1)); fi; \
@@ -109,7 +116,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tiered_setup
 
 clean:
-	rm -f tiered_setup test_common test_partition test_metadata test_map test_exec
+	rm -f tiered_setup test_common test_partition test_metadata test_map test_exec test_stripe_kernel
 	rm -f src/*.o
 
 .PHONY: all install uninstall clean test test-full lint module module_install module_clean

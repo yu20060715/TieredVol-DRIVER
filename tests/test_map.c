@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <unistd.h>
 #include "test_common.h"
 
 /* ---- Mock kernel types ---- */
@@ -426,94 +427,166 @@ static void test_map_logical_offset_in_chunk(void) {
 }
 
 /* ================================================================== */
-/*  TEST: weight-borrowing (aligned redirect + per-chunk table)        */
+/*  TEST: weight-borrowing (128 KB block granularity + per-block table) */
 /* ================================================================== */
 
-#define BTEST_CHUNK 1048576U
+/* The kernel borrows at block granularity: block_size = chunk_size/8
+ * (128 KB for a 1 MB chunk). Bios are capped at 128 KB by the block
+ * layer, so WRITE bios are whole blocks; a range may still span several
+ * blocks. Sector math matches tv_borrow_* : dst_sector is in sectors and
+ * the intra-block byte offset is shifted by TV_SECTOR_SHIFT (9). */
+#define BTEST_BLOCK 131072U
+#define BTEST_NBLK  256    /* borrow entry table size (blocks) */
+#define BTEST_AREA  64     /* borrow slots per disk */
+#define BTEST_WATERMARK 262144U /* 256 KB, matches tv_s4_borrow.conf */
+#define BSHIFT 9
 
-struct tb_entry {
+static struct tb_entry {
 	bool valid;
 	int dst;
-	uint64_t sector;
-};
-
-static struct tb_entry tb_entries[64];
+	uint64_t sector;   /* borrow-area sector address */
+} tb_entries[BTEST_NBLK];
 static uint32_t tb_used[4];
+static uint32_t tb_inflight[4];
+static bool tb_degraded[4];
+static bool tb_enabled = true;
 static const uint64_t tb_base[4] = {
 	0x100000000ULL, 0x200000000ULL, 0x300000000ULL, 0x400000000ULL
 };
 
-/* Userspace model of tv_borrow_redirect: chunk-aligned, all-or-none. */
+static void tb_reset(void)
+{
+	memset(tb_entries, 0, sizeof(tb_entries));
+	memset(tb_used, 0, sizeof(tb_used));
+	memset(tb_inflight, 0, sizeof(tb_inflight));
+	memset(tb_degraded, 0, sizeof(tb_degraded));
+	tb_enabled = true;
+}
+
+static uint32_t tb_area(int d)
+{
+	(void)d;
+	return BTEST_AREA;
+}
+
+/* Userspace model of tv_borrow_pick_dst: exclude src + degraded + no room,
+ * pick the least in-flight disk. */
+static int tb_pick_dst(int src, uint32_t need)
+{
+	int best = -1;
+	uint32_t best_load = UINT32_MAX;
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		uint32_t avail;
+
+		if (i == src)
+			continue;
+		if (tb_degraded[i])
+			continue;
+		avail = tb_area(i);
+		if (avail < need)
+			continue;
+		if (tb_inflight[i] < best_load) {
+			best_load = tb_inflight[i];
+			best = i;
+		}
+	}
+	return best;
+}
+
+/* Userspace model of tv_borrow_redirect: 128 KB block granularity. */
 static bool tb_redirect(int src, uint64_t logical, uint64_t length,
 			int *dst, uint64_t *sec)
 {
-	uint64_t c = logical / BTEST_CHUNK;
-	uint32_t n = (uint32_t)(length / BTEST_CHUNK);
+	uint64_t off = logical;
+	uint64_t block = off / BTEST_BLOCK;
+	uint32_t n_blocks = (uint32_t)(((off + length - 1) / BTEST_BLOCK) -
+				       block + 1);
 	uint32_t need = 0;
-	int d;
+	int d = -1;
 	uint32_t i;
 
-	if (length == 0 || length % BTEST_CHUNK != 0)
+	if (length == 0)
 		return false;
-	if (logical % BTEST_CHUNK != 0)
-		return false;
-	if (c + n > 64)
+	if (block + n_blocks > BTEST_NBLK)
 		return false;
 
-	for (i = 0; i < n; i++)
-		if (!tb_entries[c + i].valid)
+	for (i = 0; i < n_blocks; i++)
+		if (!tb_entries[block + i].valid)
 			need++;
 
 	if (need == 0) {
-		*dst = tb_entries[c].dst;
-		*sec = tb_entries[c].sector;
+		/* Already redirected: reuse recorded destination(s). */
+		d = tb_entries[block].dst;
+		for (i = 1; i < n_blocks; i++)
+			if (tb_entries[block + i].dst != d)
+				return false;
+		*dst = d;
+		*sec = tb_entries[block].sector +
+		       ((logical % BTEST_BLOCK) >> BSHIFT);
 		return true;
 	}
 
-	d = (src == 0) ? 1 : 0;
-	if (tb_used[d] + need > 16)
-		return false; /* borrow area full → keep original disk */
+	/* New borrows: only while enabled, source backlogged, whole blocks. */
+	if (!tb_enabled)
+		return false;
+	if (tb_inflight[src] < BTEST_WATERMARK)
+		return false;
+	if (logical % BTEST_BLOCK != 0 || length % BTEST_BLOCK != 0)
+		return false;
 
-	for (i = 0; i < n; i++) {
-		if (tb_entries[c + i].valid)
+	d = tb_pick_dst(src, need);
+	if (d < 0)
+		return false;
+	if (tb_used[d] + need > BTEST_AREA)
+		return false;
+
+	for (i = 0; i < n_blocks; i++) {
+		if (tb_entries[block + i].valid)
 			continue;
-		tb_entries[c + i].valid = true;
-		tb_entries[c + i].dst = d;
-		tb_entries[c + i].sector =
-			tb_base[d] + ((uint64_t)tb_used[d] * 2);
+		tb_entries[block + i].valid = true;
+		tb_entries[block + i].dst = d;
+		tb_entries[block + i].sector =
+			tb_base[d] + ((uint64_t)tb_used[d] * (BTEST_BLOCK >> BSHIFT));
 		tb_used[d]++;
 	}
 	*dst = d;
-	*sec = tb_base[d] + ((uint64_t)(tb_used[d] - need) * 2);
+	*sec = tb_base[d] +
+	       ((uint64_t)(tb_used[d] - need) * (BTEST_BLOCK >> BSHIFT));
 	return true;
 }
 
+/* Userspace model of tv_borrow_lookup: resolves recorded mapping only,
+ * independent of the runtime enable flag (borrow_off keeps borrowed
+ * blocks readable/writable at their borrow-area copy). */
 static bool tb_lookup(uint64_t logical, int *dst, uint64_t *sec)
 {
-	uint64_t c = logical / BTEST_CHUNK;
+	uint64_t block = logical / BTEST_BLOCK;
 
-	if (c >= 64 || !tb_entries[c].valid)
+	if (block >= BTEST_NBLK || !tb_entries[block].valid)
 		return false;
-	*dst = tb_entries[c].dst;
-	*sec = tb_entries[c].sector;
+	*dst = tb_entries[block].dst;
+	*sec = tb_entries[block].sector +
+	       ((logical % BTEST_BLOCK) >> BSHIFT);
 	return true;
 }
 
 static void test_borrow_alignment(void) {
-	printf("\n[TEST] borrow: chunk-alignment gates redirect\n");
+	printf("\n[TEST] borrow: block-alignment gates redirect\n");
 	int dst;
 	uint64_t sec;
 
-	/* Unaligned offset: no borrow, keep original placement */
-	memset(tb_entries, 0, sizeof(tb_entries));
-	memset(tb_used, 0, sizeof(tb_used));
-	check(!tb_redirect(3, BTEST_CHUNK / 2, BTEST_CHUNK, &dst, &sec),
-	      "mid-chunk offset → no borrow");
-	check(!tb_redirect(3, 0, BTEST_CHUNK + BTEST_CHUNK / 2, &dst, &sec),
-	      "non-chunk-multiple length → no borrow");
-	check(tb_redirect(3, BTEST_CHUNK * 2, BTEST_CHUNK, &dst, &sec),
-	      "aligned 1-chunk write → borrow OK");
-	check(dst != 3, "borrowed chunk moved off the slow disk");
+	tb_reset();
+	check(!tb_redirect(3, BTEST_BLOCK / 2, BTEST_BLOCK, &dst, &sec),
+	      "mid-block offset → no borrow");
+	check(!tb_redirect(3, 0, BTEST_BLOCK + BTEST_BLOCK / 2, &dst, &sec),
+	      "non-block-multiple length → no borrow");
+	tb_inflight[3] = 4 * BTEST_WATERMARK;
+	check(tb_redirect(3, BTEST_BLOCK * 2, BTEST_BLOCK, &dst, &sec),
+	      "aligned 1-block write → borrow OK");
+	check(dst != 3, "borrowed block moved off the slow disk");
+	check(sec == tb_base[dst], "borrowed block starts at slot 0 of dst area");
 }
 
 static void test_borrow_lookup_reuse(void) {
@@ -521,55 +594,286 @@ static void test_borrow_lookup_reuse(void) {
 	int dst;
 	uint64_t sec, sec2;
 
-	memset(tb_entries, 0, sizeof(tb_entries));
-	memset(tb_used, 0, sizeof(tb_used));
-	check(tb_redirect(3, 0, BTEST_CHUNK, &dst, &sec),
-	      "first write borrows chunk 0");
-	check(dst != 3, "chunk 0 on borrowed disk");
-	check(tb_lookup(0, &dst, &sec2), "lookup finds chunk 0");
+	tb_reset();
+	tb_inflight[3] = 4 * BTEST_WATERMARK;
+	check(tb_redirect(3, 0, BTEST_BLOCK, &dst, &sec),
+	      "first write borrows block 0");
+	check(dst != 3, "block 0 on borrowed disk");
+	check(tb_lookup(0, &dst, &sec2), "lookup finds block 0");
 	check(dst != 3 && sec2 == sec, "lookup returns recorded destination");
 
-	/* Re-write of the same chunk must reuse the slot, not grow used[] */
 	{
 		uint32_t used_before = tb_used[dst];
 
-		check(tb_redirect(3, 0, BTEST_CHUNK, &dst, &sec),
-		      "re-write of borrowed chunk resolves");
+		check(tb_redirect(3, 0, BTEST_BLOCK, &dst, &sec),
+		      "re-write of borrowed block resolves");
 		check(tb_used[dst] == used_before,
 		      "re-write does not allocate a new slot");
 	}
 }
 
 static void test_borrow_alloc_none(void) {
-	printf("\n[TEST] borrow: all-or-none across a multi-chunk range\n");
+	printf("\n[TEST] borrow: all-or-none when the borrow area is full\n");
 	int dst;
 	uint64_t sec;
 
-	memset(tb_entries, 0, sizeof(tb_entries));
-	memset(tb_used, 0, sizeof(tb_used));
-
-	/* Fill the borrow area for disk 0 fully (16 slots). */
+	tb_reset();
+	tb_inflight[1] = 4 * BTEST_WATERMARK;
 	{
 		int i;
 
-		for (i = 0; i < 16; i++)
-			check(tb_redirect(1, (uint64_t)i * BTEST_CHUNK,
-					  BTEST_CHUNK, &dst, &sec),
+		for (i = 0; i < BTEST_AREA; i++)
+			check(tb_redirect(1, (uint64_t)i * BTEST_BLOCK,
+					  BTEST_BLOCK, &dst, &sec),
 			      "prefill slot");
 	}
-	/* src=1 (borrows into 0) is now full: a 2-chunk request must fail
-	 * atomically and leave the table untouched. */
 	{
-		uint64_t c = 100;
+		uint64_t c = 200;
 		uint32_t before = tb_used[0];
 
-		check(!tb_redirect(1, c * BTEST_CHUNK, 2 * BTEST_CHUNK,
+		check(!tb_redirect(1, c * BTEST_BLOCK, 2 * BTEST_BLOCK,
 				   &dst, &sec),
 		      "no space → all-or-none reject");
 		check(tb_used[0] == before, "no partial allocation on reject");
-		check(!tb_lookup(c * BTEST_CHUNK, &dst, &sec),
-		      "rejected chunks not recorded");
+		check(!tb_lookup(c * BTEST_BLOCK, &dst, &sec),
+		      "rejected blocks not recorded");
 	}
+}
+
+static void test_borrow_watermark(void) {
+	printf("\n[TEST] borrow: watermark gates new borrows\n");
+	int dst;
+	uint64_t sec;
+
+	tb_reset();
+	/* Source below watermark: keep original placement. */
+	tb_inflight[2] = BTEST_WATERMARK / 2;
+	check(!tb_redirect(2, 0, BTEST_BLOCK, &dst, &sec),
+	      "below watermark → no borrow");
+	check(!tb_lookup(0, &dst, &sec), "unborrowed block not recorded");
+	/* At/above watermark: borrow. */
+	tb_inflight[2] = BTEST_WATERMARK;
+	check(tb_redirect(2, 0, BTEST_BLOCK, &dst, &sec),
+	      "at watermark → borrow OK");
+	check(dst != 2, "borrowed off the source disk");
+}
+
+static void test_borrow_pick_dst(void) {
+	printf("\n[TEST] borrow: dst = least in-flight, excluding src/degraded\n");
+	int dst;
+	uint64_t sec;
+
+	/* src excluded even when it is the least loaded */
+	tb_reset();
+	tb_inflight[0] = 0; tb_inflight[1] = 500000;
+	tb_inflight[2] = 500000; tb_inflight[3] = 500000;
+	tb_inflight[3] = 4 * BTEST_WATERMARK; /* src=3 backlogged */
+	check(tb_redirect(3, 0, BTEST_BLOCK, &dst, &sec),
+	      "borrow allowed with src backlogged");
+	check(dst == 0, "least-loaded non-src disk chosen");
+
+	/* degraded disk never chosen */
+	tb_reset();
+	tb_inflight[3] = 4 * BTEST_WATERMARK;
+	tb_degraded[0] = true; tb_degraded[1] = true; tb_degraded[2] = true;
+	check(!tb_redirect(3, 0, BTEST_BLOCK, &dst, &sec),
+	      "all candidates degraded → no borrow");
+
+	/* area exhausted on every candidate → no borrow */
+	tb_reset();
+	tb_inflight[3] = 4 * BTEST_WATERMARK;
+	tb_used[0] = BTEST_AREA; tb_used[1] = BTEST_AREA; tb_used[2] = BTEST_AREA;
+	check(!tb_redirect(3, 0, BTEST_BLOCK, &dst, &sec),
+	      "no room on any candidate → no borrow");
+}
+
+static void test_borrow_cross_blocks(void) {
+	printf("\n[TEST] borrow: multi-block range, mixed valid/invalid blocks\n");
+	int dst;
+	uint64_t sec;
+
+	tb_reset();
+	tb_inflight[3] = 4 * BTEST_WATERMARK;
+	/* Borrow block 10 and 12, leave 11 unborrowed. */
+	check(tb_redirect(3, 10 * BTEST_BLOCK, BTEST_BLOCK, &dst, &sec),
+	      "borrow block 10");
+	check(tb_redirect(3, 12 * BTEST_BLOCK, BTEST_BLOCK, &dst, &sec),
+	      "borrow block 12");
+	{
+		uint32_t used_before = tb_used[dst];
+
+		/* Range covering 10..12 (3 blocks): only 11 is new. */
+		check(tb_redirect(3, 10 * BTEST_BLOCK, 3 * BTEST_BLOCK,
+				  &dst, &sec),
+		      "partial range borrows only the missing block");
+		check(tb_used[dst] == used_before + 1,
+		      "exactly one new slot allocated");
+		check(tb_lookup(11 * BTEST_BLOCK, &dst, &sec) && dst != 3,
+		      "newly borrowed middle block recorded");
+	}
+}
+
+static void test_borrow_need_zero_redirect(void) {
+	printf("\n[TEST] borrow: fully-borrowed range redirects regardless of watermark\n");
+	int dst;
+	uint64_t sec;
+
+	tb_reset();
+	tb_inflight[3] = 4 * BTEST_WATERMARK;
+	check(tb_redirect(3, 0, BTEST_BLOCK, &dst, &sec),
+	      "borrow block 0");
+	/* Drop source backlog below watermark: reuse still redirects. */
+	tb_inflight[3] = 0;
+	check(tb_redirect(3, 0, BTEST_BLOCK, &dst, &sec),
+	      "already-borrowed block still redirected");
+	check(sec == tb_entries[0].sector,
+	      "reuse returns recorded sector");
+}
+
+static void test_borrow_offset_in_block(void) {
+	printf("\n[TEST] borrow: intra-block offset resolves via block-size remainder\n");
+	int dst;
+	uint64_t sec, base_sec;
+
+	tb_reset();
+	tb_inflight[3] = 4 * BTEST_WATERMARK;
+	check(tb_redirect(3, BTEST_BLOCK, BTEST_BLOCK, &dst, &sec),
+	      "borrow block 1");
+	base_sec = tb_entries[1].sector;
+	/* A read 512 bytes into the block: sector = base + 1. */
+	check(tb_lookup(BTEST_BLOCK + 512, &dst, &sec),
+	      "lookup at +512 inside borrowed block");
+	check(sec == base_sec + 1, "sector advances by 1 for 512-byte offset");
+	/* A read 4 KB into the block: sector = base + 8. */
+	check(tb_lookup(BTEST_BLOCK + 4096, &dst, &sec),
+	      "lookup at +4K inside borrowed block");
+	check(sec == base_sec + 8, "sector advances by 8 for 4K offset");
+}
+
+static void test_borrow_off_keeps_consistency(void) {
+	printf("\n[TEST] borrow: off stops new borrows, keeps old ones resolving\n");
+	int dst;
+	uint64_t sec, sec2;
+
+	tb_reset();
+	tb_inflight[2] = 4 * BTEST_WATERMARK;
+	check(tb_redirect(2, 0, BTEST_BLOCK, &dst, &sec),
+	      "borrow while enabled");
+	check(tb_lookup(0, &dst, &sec2) && sec2 == sec,
+	      "read resolves to borrow area");
+
+	/* Turn borrowing off. */
+	tb_enabled = false;
+	check(!tb_redirect(2, BTEST_BLOCK, BTEST_BLOCK, &dst, &sec),
+	      "new borrow rejected while off");
+	check(tb_lookup(0, &dst, &sec2) && sec2 == sec,
+	      "already-borrowed block still resolves after off");
+	/* Re-write of the borrowed block must still go to the borrow area
+	 * (need == 0 path is not gated by the enable flag). */
+	check(tb_redirect(2, 0, BTEST_BLOCK, &dst, &sec),
+	      "re-write of borrowed block still resolves while off");
+	check(sec == tb_entries[0].sector, "reuse keeps recorded sector");
+}
+
+static void test_borrow_format_v2(void) {
+	printf("\n[TEST] borrow: .borrow v2 file format (save/load layout)\n");
+	static const uint32_t TVBR = 0x54564252U; /* "TVBR" */
+	uint32_t version = 2;
+	const char *path = "/tmp/.tv_borrow_v2_test.bin";
+	FILE *f;
+	uint64_t i;
+
+	/* Kernel layout: header = magic(u32) + version(u32) + n(u64) = 16 B;
+	 * entry = {u8 valid, u8 dst_disk, u64 dst_sector} = 16 B (packed). */
+	struct file_entry {
+		uint8_t valid;
+		uint8_t dst_disk;
+		uint8_t _pad[6];
+		uint64_t dst_sector;
+	};
+	struct file_entry snapshot[8];
+	struct file_entry roundtrip[8];
+
+	check(sizeof(struct file_entry) == 16,
+	      "borrow entry is 16 bytes (v2 format)");
+	check(sizeof(struct file_entry) * 8 + 16 ==
+	      8 * 16 + 4 + 4 + 8,
+	      "file size = header(16 B) + n_blocks*16 B");
+
+	/* Populate a snapshot like tv_borrow_save does. */
+	for (i = 0; i < 8; i++) {
+		snapshot[i].valid = 1;
+		snapshot[i].dst_disk = (uint8_t)(i % 3);
+		snapshot[i].dst_sector = 0x100000000ULL + i * 256;
+	}
+
+	/* tv_borrow_save: magic + version + n + entries. */
+	f = fopen(path, "w");
+	check(f != NULL, "open test file for save");
+	fwrite(&TVBR, sizeof(TVBR), 1, f);
+	fwrite(&version, sizeof(version), 1, f);
+	{
+		uint64_t n = 8;
+		fwrite(&n, sizeof(n), 1, f);
+	}
+	fwrite(snapshot, sizeof(struct file_entry), 8, f);
+	fclose(f);
+
+	/* tv_borrow_load: validate magic, version, n, then read entries. */
+	{
+		uint32_t m = 0, v = 0;
+		uint64_t n = 0;
+		f = fopen(path, "r");
+		check(f != NULL, "open test file for load");
+		check(fread(&m, sizeof(m), 1, f) == 1 && m == TVBR,
+		      "magic field matches TVBR");
+		check(fread(&v, sizeof(v), 1, f) == 1 && v == 2,
+		      "version field matches v2");
+		check(fread(&n, sizeof(n), 1, f) == 1 && n == 8,
+		      "count field matches 8");
+		check(fread(roundtrip, sizeof(struct file_entry), 8, f) == 8,
+		      "entries read fully");
+		fclose(f);
+	}
+	for (i = 0; i < 8; i++) {
+		check(roundtrip[i].valid == 1, "entry valid flag preserved");
+		check(roundtrip[i].dst_disk == (uint8_t)(i % 3),
+		      "entry dst_disk preserved");
+		check(roundtrip[i].dst_sector == 0x100000000ULL + i * 256,
+		      "entry dst_sector preserved");
+	}
+
+	/* Corrupt magic: load must reject (fresh volume). */
+	{
+		uint32_t bad_magic = 0xDEADBEEFU;
+		uint32_t m = 0;
+		f = fopen(path, "w");
+		fwrite(&bad_magic, sizeof(bad_magic), 1, f);
+		fclose(f);
+		f = fopen(path, "r");
+		check(fread(&m, sizeof(m), 1, f) == 1, "read corrupt magic");
+		fclose(f);
+		check(m != TVBR, "corrupt magic rejected");
+	}
+
+	/* Old v1 file: version field = 1 must be rejected by a v2 loader. */
+	{
+		uint32_t v1 = 1;
+		uint32_t rv = 0;
+		f = fopen(path, "w");
+		fwrite(&TVBR, sizeof(TVBR), 1, f);
+		fwrite(&v1, sizeof(v1), 1, f);
+		fclose(f);
+		f = fopen(path, "r");
+		check(fread(&rv, sizeof(rv), 1, f) == 1 && rv == TVBR,
+		      "v1 file has correct magic");
+		check(fread(&rv, sizeof(rv), 1, f) == 1 && rv == 1,
+		      "v1 file has version 1");
+		fclose(f);
+		check(rv != 2, "v1 file rejected by v2 loader");
+	}
+
+	unlink(path);
 }
 
 /* ================================================================== */
@@ -752,6 +1056,13 @@ int main(void) {
 	test_borrow_alignment();
 	test_borrow_lookup_reuse();
 	test_borrow_alloc_none();
+	test_borrow_watermark();
+	test_borrow_pick_dst();
+	test_borrow_cross_blocks();
+	test_borrow_need_zero_redirect();
+	test_borrow_offset_in_block();
+	test_borrow_off_keeps_consistency();
+	test_borrow_format_v2();
 
 	/* tv_map_logical_random */
 	test_random_basic();
