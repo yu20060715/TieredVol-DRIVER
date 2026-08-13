@@ -19,14 +19,14 @@ seg0_begin=0
 seg0_end=21474836480
 seg0_count=3
 seg0_disks=0,1,2
-seg0_weight=64,30,10
-seg0_stripe=109051904
+seg0_weight=81,16,20
+seg0_stripe=122683392
 seg1_begin=21474836480
 seg1_end=42949672960
 seg1_count=2
 seg1_disks=0,1
-seg1_weight=37,27
-seg1_stripe=67108864
+seg1_weight=83,17
+seg1_stripe=104857600
 ```
 
 ## 參數說明
@@ -72,11 +72,11 @@ chunk_size 建議與 filesystem block size 或常用 I/O size 一致（1MB = 104
 
 > **權重推導方式**：以單碟 solo 測速（8G 平均，避免 SLC 短寫峰值）求速比為基準，
 > 再以瓶頸模型調整——總吞吐 = `min(solo_i × 總權重/weight_i)`，不是原生總和。
-> 本機現況拓撲（8/14 下午）：A=WD SN750（CPU 直連 PCIe3.0 x4，solo ~2070）、B=P3 Plus（PCH PCIe2.0 x4，solo ~1520）、
-> C=MX500（SATA，solo ~517）。現役權重：S2 [37:27]、S3 [64:30:10]（DMI-aware）。
-> **注意（B85/DMI）**：B、C 共用 PCH DMI 上行（實測 ~1300 MB/s），A+B+C 同寫時總吞吐受
-> 「A（CPU 直連）+ DMI」限制（~3360），三碟聚合無法超過 a+b——晶片組硬體限制，非 driver 問題；
-> 此情形下權重需 DMI-aware（S3 [64:30:10] 而非比例 [64:47:16]，後者僅 2561 MB/s）。詳見 `docs/RESULTS.md`「8/14 下午」節。
+> 本機現況拓撲（8/14 晚）：A=WD SN750（CPU 直連 PCIe3.0 x4，solo ~2070）、B=P3 Plus（PCH PCIe2.0 **x1**，solo ~411）、
+> C=MX500（SATA，solo ~517）、D=WD Blue（SATA，solo ~229，8/14 晚回池）。現役權重：S2 [83:17]、S3 [81:16:20]、
+> S4 [82:16:20:9]、mirror [83:17]（由 `auto_weight.sh` v2 窮舉產生，瓶頸模型 2154/3006/3231 MB/s）。
+> **注意（B85/DMI）**：B、C 共用 PCH DMI 上行（實測 ~1300 MB/s）。B@x1 下 B solo 僅 ~411，B+C≈928 < 1300，
+> 故比例權重即最佳、不需 DMI-aware（8/14 下午 B@x4 時 B+C≈2038 才需 [64:30:10]，為歷史值，見 `docs/RESULTS.md`「8/14 下午」節）。
 > 換碟/換槽後請用 `scripts/auto_weight.sh` 重測並更新權重。
 
 ### segment 範圍

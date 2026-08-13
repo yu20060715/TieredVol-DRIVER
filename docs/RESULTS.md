@@ -2,7 +2,7 @@
 
 > 實測日期：2026-08-12（疊碟/Mirror/LVM）· 2026-08-13（多卷併發 P3/P4）· 2026-08-14（全卷自動加權定案 + 插槽解鎖/DMI 兩組實驗定案）· Kernel 6.14.0-27-generic · dm-target v5.0
 > 完整測試程序與驗收判據見 [TEST_PLAN.md](TEST_PLAN.md)。
-> **現況拓撲（2026-08-14 晚）**：資料池 4 碟 = A（SN750，CPU 直連 PCIe3.0 x4）+ B（P3 Plus，PCH PCIe2.0 **x1**，8/14 晚自 x4 移回）+ C（MX500，SATA）+ **D（WD Blue，SATA，8/14 晚回池）**。現役 config 權重仍為 8/14 下午 B@x4 版（[37:27]/[64:30:10]），**待依 B@x1 + D 回池重新加權**；見 [CONFIG.md](CONFIG.md)。
+> **現況拓撲（2026-08-14 晚）**：資料池 4 碟 = A（SN750，CPU 直連 PCIe3.0 x4）+ B（P3 Plus，PCH PCIe2.0 **x1**，8/14 晚自 x4 移回）+ C（MX500，SATA）+ **D（WD Blue，SATA，8/14 晚回池）**。現役 config 權重（8/14 晚重加權）：S2 [83:17]、S3 [81:16:20]、S4 [82:16:20:9]、mirror [83:17]；見 [CONFIG.md](CONFIG.md)。
 > **碟位/插槽變更紀錄**：8/12–8/13 多次 nvme 代號交換（config 以 by-id 綁碟身分、不受影響）；**8/14 下午 P3 Plus 由 PCIe2.0 x1 換至 PCIe2.0 x4 插槽（solo 415→1522，+3.7x）**、移出 WD Blue；**8/14 晚為重測 8/12 疊碟表而移回 x1、WD Blue 回池**。舊 config 備份於 `/home/yu/backup-20260814-old/`。
 > 各歷史章節標註當日拓撲；疊碟曲線以「8/14 排水態重測」（見下）為準，「8/14 兩組實驗」（B@x4）為歷史紀錄。
 
@@ -36,19 +36,18 @@ E    = sda          BX100 CT250BX100SSD1     233G   SATA 6G       -           �
 
 ```
 solo 基線：B@x4（8/14 下午）A=2064-2080  B=1517-1522  C=516-518
-          B@x1（8/14 晚）  B≈389-415  D=220-267（D 回池）(MB/s)
+          B@x1（8/14 晚）  A=2014-2086  B=411-415  C=516-519  D=216-229 (MB/s)
 ```
 
 現役 config 權重（`/etc/tieredvol/`，`dmsetup create` 已建卷、CRC 全過、boot 自動重建 OK）：
 - `tv_s1.conf` **1**（A solo）
-- `tv_s2.conf` **37:27**（A+B，stripe 67108864）
-- `tv_s3.conf` **64:30:10**（A+B+C，DMI-aware，stripe 109051904）
-- `tv_mir.conf` **37:27** + mirror=2（A+B→C）
+- `tv_s2.conf` **83:17**（A+B，stripe 104857600）
+- `tv_s3.conf` **81:16:20**（A+B+C，stripe 122683392）
+- `tv_mir.conf` **83:17** + mirror=2（A+B→C）
+- `tv_s4.conf` **82:16:20:9**（A+B+C+D，stripe 133169152，D 回池後回歸）
 
-> **註**：以上權重為 8/14 下午 B@x4 版；現 B@x1 + D 回池，待以 `auto_weight` 重新加權（含 tv_s4 是否回歸）。
-
-權重由 `scripts/auto_weight.sh` v2（窮舉搜尋，最大化瓶頸模型 `min(solo_i×W/w_i)`）產生；
-S3 因 B+C 共用 DMI 上行採 DMI-aware 權重（見 8/14 下午節）。
+權重由 `scripts/auto_weight.sh` v2（窮舉搜尋，最大化瓶頸模型 `min(solo_i×W/w_i)`）產生（B@x1 + D 回池，8/14 晚重加權）。
+B@x1 下 B+C≈928 < DMI 1300，故比例權重即最佳、不需 DMI-aware（8/14 下午 B@x4 的 [64:30:10] 為歷史值，見「8/14 兩組實驗」節）。
 
 ---
 
@@ -486,5 +485,5 @@ solo（8G）**A=2056.5、B=413.1、C=518.0、D=220.3**（Σsolo=3208）。**v1 �
 17. **B85 DMI 上限 = 三碟聚合的硬體天花板（8/14 下午）**：B+C 共用 DMI 上行 ~1300 MB/s。比例權重 S3 [64,47,16] 僅 2561；DMI-aware [64,30,10] 達 3370（+32%），但 S3_max = A+DMI ≈ 3364 < S2_max = A+B ≈ 3590 → **a+b+c 寫入恆 ≤ a+b，C 只加容量**（硬體限制、非 driver 缺陷；全速三碟需無 DMI 牆平台如 B650M AM5）。
 18. **8/14 兩組實驗定案**：實驗 1（B@x1）三碟聚合 2078<2410<2896（Σsolo 96.9%）＋實驗 2（B@x4）a+b=3547（+47%）——權重-速比匹配與插槽解鎖的完整證明。量測協定（寫前空檔 60s 等 SLC 回充）確保跨日可比。
 
-現役 conf（8/14 下午 B@x4 版，**待重新加權**）：`/etc/tieredvol/tv_s1.conf` [1]、`tv_s2.conf` [37:27]、`tv_s3.conf` [64:30:10]、`tv_mir.conf` [37:27]+mirror=C（對應 repo `configs/`；`tv_s4.conf` 已移除，待 D 回池後決定是否回歸）。
+現役 conf（8/14 晚重加權，B@x1 + D 回池）：`/etc/tieredvol/tv_s1.conf` [1]、`tv_s2.conf` [83:17]、`tv_s3.conf` [81:16:20]、`tv_mir.conf` [83:17]+mirror=C、`tv_s4.conf` [82:16:20:9]（D 回池後回歸）（對應 repo `configs/`）。
 （歷史碟位：8/13 午 disk0=nvme1n1、8/13 晚回到 disk0=nvme0n1；8/14 下午 A=SN750=nvme1n1（CPU 直連）、B=P3 Plus=nvme0n1（PCH x4）；**8/14 晚重開機後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x1）**。config 一律用 by-id，與 nvme 編號無關。）
