@@ -1,17 +1,19 @@
 #!/bin/bash
 # auto_weight.sh — 建卷自動加權：測各碟 solo 寫 → 權重 ∝ 碟速 → 更新 config seg0_weight/seg0_stripe
-# 用法：scripts/auto_weight.sh <config> [--solo-size=N] [--dry-run]
+# 用法：scripts/auto_weight.sh <config> [--solo-size=N] [--max-sum=N] [--dry-run]
 # 權重基準 = 8G 連續寫平均（與疊碟實驗同條件，避免 SLC 瞬間冷態峰值）。
-# 權重 = max(1, round(solo/min_solo))；stripe = chunk × 總權重。
-# 前置：sudo、碟空閒（raw 寫會覆蓋碟前段資料）。
+# 權重 = 窮舉式最佳化搜尋（最慢碟權重 2..40 × 每碟 floor/ceil±1），最大化瓶頸模型 min(solo_i×W/w_i)；
+# stripe = chunk × 總權重。前置：sudo、碟空閒（raw 寫會覆蓋碟前段資料）。
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CFG=${1:?usage: auto_weight.sh <config> [--solo-size=N] [--dry-run]}
 SIZE=8G
 DRY=""
+MAXSUM=128
 for a in "${@:2}"; do
   case "$a" in
     --solo-size=*) SIZE=${a#--solo-size=} ;;
+    --max-sum=*) MAXSUM=${a#--max-sum=} ;;
     --dry-run) DRY=1 ;;
   esac
 done
@@ -58,11 +60,12 @@ done
 if [ "$DRY" = "1" ]; then
   echo "[dry-run] 僅顯示，不寫入 config"
 fi
-python3 - "$CFG" "$CHUNK" "$DRY" "${SOLO[@]}" <<'EOF'
+python3 - "$CFG" "$CHUNK" "$DRY" "$MAXSUM" "${SOLO[@]}" <<'EOF'
 import sys
 cfg, chunk = sys.argv[1], int(sys.argv[2])
 dry = sys.argv[3] == '1'
-solo = [float(x) for x in sys.argv[4:]]
+maxsum = int(sys.argv[4])
+solo = [float(x) for x in sys.argv[5:]]
 
 _POLY = 0x82F63B78
 _TABLE = []
@@ -78,12 +81,27 @@ def crc32c(data: bytes, crc: int = 0) -> int:
     return crc & 0xFFFFFFFF
 
 m = min(solo)
-w = [max(1, round(s / m)) for s in solo]
+import math, itertools
+ratio = [s / m for s in solo]
+best = None
+for wm in range(2, 41):  # 最慢碟權重 2..40（基數放大、降低捨入誤差）
+    cand = []
+    for r in ratio:
+        x = r * wm
+        cand.append(range(max(2, int(math.floor(x)) - 1), int(math.ceil(x)) + 2))
+    for w in itertools.product(*cand):
+        tot = sum(w)
+        if tot > maxsum:
+            continue
+        mod = min(s * tot / ww for s, ww in zip(solo, w))
+        if best is None or mod > best[0] or (
+                mod == best[0] and tot < sum(best[1])):
+            best = (mod, list(w))
+model, w = best
 tot = sum(w)
 stripe = chunk * tot
-model = min(s * tot / ww for s, ww in zip(solo, w))
 print(f"權重 = {w}（總和 {tot}） stripe = {stripe}")
-print(f"瓶頸模型預期吞吐 = {model:.0f} MB/s")
+print(f"瓶頸模型預期吞吐 = {model:.0f} MB/s（原生總和 {sum(solo):.0f}）")
 if dry:
     sys.exit(0)
 bak = cfg + '.bak'
