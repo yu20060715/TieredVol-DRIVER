@@ -12,10 +12,10 @@ version=1
 chunk_size=1048576
 segment_count=2
 disk_count=4
-disk0_name=/dev/nvme0n1
-disk1_name=/dev/sdb
-disk2_name=/dev/sdc
-disk3_name=/dev/sdd
+disk0_name=/dev/disk/by-id/nvme-WDS500G3X0C-00SJG0_200705800588
+disk1_name=/dev/disk/by-id/ata-WDC_WDS250G2B0A_201965800292
+disk2_name=/dev/disk/by-id/ata-CT500MX500SSD1_2129E5B858A9
+disk3_name=/dev/disk/by-id/nvme-CT1000P3PSSD8_242849E47E24
 seg0_begin=0
 seg0_end=1073741824
 seg0_count=4
@@ -40,7 +40,7 @@ seg1_stripe=4194304
 | `chunk_size` | int | 是 | chunk 大小（bytes），建議 1048576（1MB） |
 | `segment_count` | int | 是 | segment 數量（上限 16） |
 | `disk_count` | int | 是 | disk 數量（上限 16） |
-| `disk{X}_name` | string | 是 | 第 X 顆 disk 的裝置路徑 |
+| `disk{X}_name` | string | 是 | 第 X 顆 disk 的裝置路徑。**建議用 `/dev/disk/by-id/...` 穩定路徑**（serial/WWN 綁定碟身分）；`/dev/sdX`、`/dev/nvmeXnY` 代號在重啟/碟位變動時會變（本機 8/13 已兩度交換），可能把卷建到錯的碟上。路徑長度 < 64 字元。用 `scripts/conf_to_byid.py` 可批次轉換既有 config 並重算 `crc32`。 |
 
 ### Per-Segment
 

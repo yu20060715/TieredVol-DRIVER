@@ -28,3 +28,4 @@ local-*.state
 Thumbs.db
 core
 *.core
+__pycache__

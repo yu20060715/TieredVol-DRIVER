@@ -72,8 +72,8 @@ dmsetup remove $DEV
 dmesg | grep -qi "borrow table saved" && pass ".borrow 存檔訊息" || fail ".borrow 存檔訊息缺"
 [ -f "$CFG.borrow" ] && pass ".borrow 已存 ($(stat -c%s $CFG.borrow) B)" || fail ".borrow 未存"
 if [ -f "$CFG.borrow" ]; then
-	BORROW_ENTRIES=$(( $(stat -c%s "$CFG.borrow") / 16 ))
-	[ "$BORROW_ENTRIES" -gt 0 ] && pass ".borrow 含 entries (full-table $BORROW_ENTRIES entries)" \
+	BORROW_ENTRIES=$(( ( $(stat -c%s "$CFG.borrow") - 16 ) / 16 ))
+	[ "$BORROW_ENTRIES" -gt 0 ] && pass ".borrow 含 entries (full-table $BORROW_ENTRIES entries + 16B header)" \
 		|| fail ".borrow entries 檢查失敗"
 else
 	fail ".borrow entries 檢查失敗（檔不存在）"

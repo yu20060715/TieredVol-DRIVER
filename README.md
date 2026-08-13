@@ -73,15 +73,15 @@ make module
 sudo modprobe tieredvol
 
 # Create a weighted volume from a config file (格式見 docs/CONFIG.md)
-# /etc/tieredvol/fastpool.conf 範例:
+# /etc/tieredvol/fastpool.conf 範例（diskN_name 用 stable by-id 路徑，見 docs/CONFIG.md）:
 #   [weighted_striping]
 #   version=1
 #   chunk_size=1048576
 #   segment_count=1
 #   disk_count=3
-#   disk0_name=/dev/nvme0n1
-#   disk1_name=/dev/sdb
-#   disk2_name=/dev/sdc
+#   disk0_name=/dev/disk/by-id/nvme-WDS500G3X0C-00SJG0_200705800588
+#   disk1_name=/dev/disk/by-id/ata-WDC_WDS250G2B0A_201965800292
+#   disk2_name=/dev/disk/by-id/ata-CT500MX500SSD1_2129E5B858A9
 #   seg0_begin=0
 #   seg0_end=21474836480
 #   seg0_count=3
@@ -97,6 +97,31 @@ sudo fio --name=bench --filename=/dev/mapper/fastpool --rw=write --bs=1M \
 # Remove
 sudo dmsetup remove fastpool
 ```
+
+---
+
+## Boot Persistence（開機持久）
+
+重啟後自動載入 `tieredvol.ko` 並重建卷（免手動）：
+
+```bash
+sudo scripts/install_boot.sh        # 安裝 + enable；--uninstall 可移除
+```
+
+交付內容：
+
+1. `/etc/modules-load.d/tieredvol.conf` — 開機載入 module
+2. `/etc/systemd/system/tieredvol.service` — oneshot：開機 `create`（`After=systemd-modules-load.service blockdev.target` + by-id 碟就緒重試）、關機 `remove`
+3. `/usr/local/sbin/tieredvol-boot` — helper，遍歷 `/etc/tieredvol/*.conf` 建卷
+4. `/etc/tieredvol/*.conf` — 從 repo `configs/` 安裝的 active config（`tv_s1/s2/s3/s4` + `tv_mir`，**現今拓撲：WD=disk0**）
+
+限制：
+
+- **碟位綁定靠 by-id**（serial）— 重啟/實體換槽不變；`/dev/sdX`/`nvmeXnY` 代號會變，故 config 一律用 `/dev/disk/by-id/...`
+- **斷電不保證 `.borrow` 借出表**：只在正常 `dmsetup remove`/關機 ExecStop 時寫回 `<config>.borrow`；直接斷電時已借出資料仍在、但映射表未存
+- 測試卷，未掛載於 root
+
+測試（無需重啟）：`sudo systemctl restart tieredvol.service && ls /dev/mapper/tv_*`
 
 ---
 
@@ -193,6 +218,8 @@ TieredVol-DRIVER/
 ├── Makefile
 ├── common/
 │   └── tieredvol_meta_format.h     # Shared constants (kernel + tests)
+├── configs/                        # Active configs（現今拓撲，by-id 碟名）
+│   └── tv_s1.conf / tv_s2.conf / tv_s3.conf / tv_s4.conf / tv_mir.conf
 ├── driver/                         # Kernel dm-target module
 │   ├── tieredvol.h                 # Central header: all structs + exports
 │   ├── tieredvol_core.c            # DM lifecycle: ctr/dtr/map/status/init/exit
@@ -229,6 +256,8 @@ TieredVol-DRIVER/
 │   └── PARTITION_SPLITTING.md     # Weighted striping algorithm（歷史 prototype）
 └── scripts/
     ├── auto_weight.sh             # fio 測速 + 產生 seg weight（docs/CONFIG.md）
+    ├── conf_to_byid.py            # 批次把 diskN_name 轉 stable by-id（含 crc32 重算）
+    ├── install_boot.sh            # 開機持久安裝（modules-load.d + systemd unit）
     ├── msg_probe.sh               # dm message 全 handler 回歸探測
     ├── borrow_verify.sh           # borrow 借出/持久化/重載驗證
     └── install_deps.sh            # Install dependencies + build
@@ -303,8 +332,8 @@ version=1
 chunk_size=1048576
 segment_count=1
 disk_count=2
-disk0_name=/dev/nvme0n1
-disk1_name=/dev/sdb
+disk0_name=/dev/disk/by-id/nvme-WDS500G3X0C-00SJG0_200705800588
+disk1_name=/dev/disk/by-id/ata-WDC_WDS250G2B0A_201965800292
 seg0_begin=0
 seg0_end=931520000000
 seg0_count=2
