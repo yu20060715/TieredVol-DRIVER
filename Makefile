@@ -80,8 +80,8 @@ test-full: test
 		echo "  SKIP  no /dev/mapper/tv_* device found (create one with: sudo tiered_setup --create ...)"; \
 	else \
 		echo "=== test-full: fio on $$TV_DEVS ==="; \
-		fio --name=write --filename=$$TV_DEVS --rw=write --bs=2m --direct=1 --ioengine=io_uring --iodepth=256 --size=128M --numjobs=1 --runtime=10 --time_based --group_reporting 2>&1 | tail -3; \
-		fio --name=read --filename=$$TV_DEVS --rw=read --bs=2m --direct=1 --ioengine=io_uring --iodepth=256 --size=128M --numjobs=1 --runtime=10 --time_based --group_reporting 2>&1 | tail -3; \
+		fio --name=write --filename=$$TV_DEVS --rw=write --bs=2m --direct=1 --ioengine=libaio --iodepth=256 --size=128M --numjobs=1 --runtime=10 --time_based --group_reporting 2>&1 | tail -3; \
+		fio --name=read --filename=$$TV_DEVS --rw=read --bs=2m --direct=1 --ioengine=libaio --iodepth=256 --size=128M --numjobs=1 --runtime=10 --time_based --group_reporting 2>&1 | tail -3; \
 	fi
 
 lint:

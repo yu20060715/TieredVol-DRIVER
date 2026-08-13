@@ -4,6 +4,22 @@
 > 速度為參考指標，非驗收條件。
 > 實測結果已紀錄於 [RESULTS.md](RESULTS.md)（2026-08-11，現況拓撲）。
 
+## 測試層架構（`make test` 6 suites）
+
+```
+tests/test_common.c        # 輸入驗證
+tests/test_partition.c     # 權重/segment 計算
+tests/test_metadata.c      # userspace INI 往返
+tests/test_map.c           # 映射 + weight-borrowing 128KB 語意 + .borrow v2 格式（301 項）
+tests/test_exec.c          # exec helper
+tests/test_stripe_kernel.c # 直接 #include driver/tieredvol_stripe.c 於 userspace
+                           #   （mock kernel headers，見 docs/KERNEL_TESTS.md）
+```
+
+> kernel 源碼以 mock 頭編譯進 userspace 的可行性/成本/限制見
+> [KERNEL_TESTS.md](KERNEL_TESTS.md)；實機回歸腳本 `scripts/msg_probe.sh`（40 項）、
+> `scripts/borrow_verify.sh`（11 項）。
+
 ---
 
 ## 硬碟代號（目前拓撲，2026-08-13 晚重啟後）

@@ -221,7 +221,9 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ### P3：Mirror/Rebuild 專項（`scripts/msg_probe.sh`，8/12 17:03）
 
-**42/42 PASS**：sysfs 7 項、policy/wear 9 項、stats/config 6 項、mirror/badmap 9 項、rebuild start/stop/EBUSY、`rebuild_badmap`、完整 rebuild 完成回 idle。
+**42/42 PASS（8/12 歷史版）**：sysfs 7 項、policy/wear 9 項、stats/config 6 項、mirror/badmap 9 項、rebuild start/stop/EBUSY、`rebuild_badmap`、完整 rebuild 完成回 idle。
+
+> 8/13 移除 adaptive/wear 後，`msg_probe.sh` 已重寫為現行 handler 對應版（40/40 PASS，見 8/13 實機回歸章節）。
 
 **Bug3：rebuild_badmap 整機凍結修復**（`driver/tieredvol_badmap.c`，working tree 修復）
 - 根因：`tv_badmap_rebuild` 只 `alloc_page()`（單 4K 頁）卻 `bio_add_page(bio, pg, chunk_bytes=1M, 0)` + 手動 `bi_iter.bi_size=1M`。kernel 6.x `bio_add_page` 對 multi-page bvec 不截斷（回傳傳入長度）→ 檢查失效 → 送出「bi_size 2M / 實體 1 頁」bio → `__blk_rq_map_sg` WARN → sg 越界 NULL deref → 系統凍結。
@@ -288,13 +290,13 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 |---|---|---|---|---|---|---|
 | A | 6:1:1:1 | D（223×9） | 2007 | 1966 | -2.0% ✓ | **6:1:1:1 精確** |
 | B | 10:2:2:1（=碟速比） | A（2069×15/10=3104；當下 1782×15/10=2673） | 3104（冷態）/2673（當下） | 2673 | **+36% vs A** | **10:2:2:1 精確** |
-| C | 6:1:1:1 + `set_policy adaptive` | — | — | 1096 | **-44% vs A** | B 吃 29%、C/D 各 <1%（**嚴重失衡**） |
+| C | 6:1:1:1 + `set_policy adaptive` *(歷史)* | — | — | 1096 | **-44% vs A** | B 吃 29%、C/D 各 <1%（**嚴重失衡**） |
 
 > **權重-速比失配 = S4 吞吐上限的根因（實驗證明）**：
 > - 權重 6:1:1:1 與碟速比 6.3:1.2:1.6:0.65 失配，sdb（solo 223，權重卻與 B/C 同為 1）成瓶頸 → S4 被卡 2007。
 > - 調成速比 10:2:2:1 後**提升 36%**（2673），分布仍精確 10:2:2:1——權重調節有效。
 > - B 未達冷態模型 3104：瓶頸為 A（吃 10/15 資料），連續寫入（實驗 A 已寫 5.7G）後 A SLC 消耗 → 當下 solo 1782，`1782×15/10=2673` 精確命中「瓶頸碟當下值」。
-> - **ADAPTIVE 選碟現狀不可用**：吞吐 -44%、C/D 幾乎餓死（合計 <2%）。若要走自適應路線需大幅加強 `tv_map_logical_adaptive`；否則以「權重平衡 STATIC」為準。
+> - *(歷史結論)* **ADAPTIVE 選碟現狀不可用**：吞吐 -44%、C/D 幾乎餓死（合計 <2%）。此實驗促成 8/13 移除 adaptive、改以權重平衡 STATIC + weight-borrowing 為準。
 
 ### 8/13 auto-weight 原型驗收（`scripts/auto_weight.sh`）
 
@@ -339,7 +341,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 9. **rebuild_badmap 凍結修復（Bug3）**：compound page + 移除手動 `bi_size`，`1 recovered, 0 failed` no-hang。
 10. **多卷併發**：driver 本身零開銷（不共用碟併發≈孤立，±2%）；共享碟併發代價 40–69% 純為快碟物理爭用（併發和 ≈ 快碟 solo 2064，三組吻合），非 driver 問題。
 11. **加權吞吐由瓶頸碟決定（非原生總和）**：總吞吐 = `min(solo_i × 總權重/weight_i)`。S4 三次量測對模型 ±4%（8/12 +2.6%、8/13 +3.4%/+0.2%）；sdb 衰退（346→216）使 S4 瓶頸由 A 轉移 D，精確解釋 S4 從 3091 降至 1949。
-12. **權重-速比失配 = 加權吞吐上限的根因（8/13 晚實驗證實）**：6:1:1:1（瓶頸 D）1966 → 10:2:2:1（碟速比，瓶頸 A）2673，**提升 36%**、分布仍精確；`set_policy adaptive` 現狀 -44% 且 C/D 失衡，自適應選碟需加強或改採權重平衡。
+12. **權重-速比失配 = 加權吞吐上限的根因（8/13 晚實驗證實）**：6:1:1:1（瓶頸 D）1966 → 10:2:2:1（碟速比，瓶頸 A）2673，**提升 36%**、分布仍精確；`set_policy adaptive` 現狀 -44% 且 C/D 失衡。*(adaptive 已於 8/13 移除，此為歷史實驗；offload 改由 weight-borrowing 承擔)*
 13. **auto-weight 工具有效（`scripts/auto_weight.sh`）**：自動測速設權重 10:2:2:1 後 S4 達 **2954**（對模型 -4.5%、分布精確），較 6:1:1:1 **+50%**；權重基準用 8G 平均 solo（非瞬間峰值）避免 SLC 陷阱；附 config 清理（crc32/badmap/policy）。
 14. **weight-borrowing 正確性成立（8/13 驗收）**：128 KB block 粒度下借出統計與持久化正確，64 M–4 G 寫入/讀回 verify 全過、reload 後映射恢復（4 G verify err=0）；修復兩根因（save spinlock 死鎖、混合單位位移）。6:1:1:1 下寫 2346（vs static 2275）、讀 3165，瓶頸轉移後增益受限於快碟 solo，快碟有富餘的拓撲收益更大。
 

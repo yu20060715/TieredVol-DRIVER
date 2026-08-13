@@ -53,7 +53,7 @@ seg1_stripe=4194304
 | `seg{X}_weight` | csv | 是 | weight 列表（逗號分隔，與 disks 對應） |
 | `seg{X}_stripe` | int | 是 | stripe 大小（bytes） |
 | `seg{X}_mirror` | int | 否 | mirror disk index（不指定則無 mirror） |
-| `seg{X}_policy` | string | 否 | dispatch policy（static / adaptive / random） |
+| `seg{X}_policy` | string | 否 | dispatch policy（static / random） |
 
 ## 參數計算
 
@@ -102,6 +102,21 @@ sudo tiered_setup --create --name pool --disks nvme0n1:100,sdb:50
 - 不指定 `:GB` 時使用整碟（扣 1GB）
 - dm-linear 從 sector 0 開始 carve，剩餘空間不能再次使用
 
+## Borrow 運行期設定（`[runtime]` 節，可選）
+
+weight-borrowing 透過 `.conf` 的 `[runtime]` 節或 `dmsetup message` 覆寫：
+
+```ini
+[runtime]
+borrow_enable=1          # 1/0：啟用/停用（預設 0）
+borrow_watermark_kb=256  # 觸發借出的 src in-flight 門檻（KB）
+borrow_area_mb=2048,0,0,0 # 每碟借用區大小（MB，按 disk index 順序）
+```
+
+- borrow block = `chunk_size / 8`（NVMe `max_sectors_per_request=256` 下為 128KB）
+- 借用區位在每碟 static 條紋區之後，需在 carve 容量內保留
+- 覆寫以 `dmsetup message` 為準，remove 時連同 `.borrow` 表一起持久化
+
 ## DM Message 命令
 
 | 命令 | 參數 | 說明 |
@@ -114,24 +129,26 @@ sudo tiered_setup --create --name pool --disks nvme0n1:100,sdb:50
 | `show_degraded` | - | 顯示 degraded 狀態 |
 | `show_rebuild` | - | 顯示 rebuild 進度 |
 | `show_badmap` | - | 顯示 per-disk badmap chunk 統計 |
-| `show_wear` | - | 顯示磨損 / wear stats |
 | `show_errors` | - | 顯示錯誤計數 |
-| `show_adaptive` | - | 顯示 adaptive policy 狀態 |
 | `show_bench` | - | 顯示內建 benchmark 結果 |
 | `show_log` | - | 顯示 log buffer |
-| `set_policy` | static/adaptive/random | 切換全域 dispatch policy |
-| `set_seg_policy` | static/adaptive/random | 切換單一 segment policy |
+| `borrow_on` / `borrow_off` | - | 啟用 / 停用 weight-borrowing（停用後已借 block 仍解析） |
+| `show_borrow` | - | 顯示 borrow 狀態（enabled、借用區、n_borrowed） |
+| `set_policy` | static/random | 切換全域 dispatch policy |
+| `set_seg_policy` | static/random | 切換單一 segment policy |
 | `set_mirror` | disk_index | 設定 mirror disk（不可為參與碟） |
 | `start_rebuild` / `stop_rebuild` | - | 手動觸發 / 停止 rebuild |
 | `set_badmap` | disk:chunk | 將 chunk 標記為 bad |
 | `set_loglevel` | int | 設定 log 等級 |
 | `reset_stats` / `reset_io_stats` | - | 重置 I/O stats |
 | `reset_errors` | - | 重置錯誤計數 |
-| `reset_wear` | - | 重置 wear 統計 |
+
+> `show_wear` / `reset_wear` / `show_adaptive` 已移除（adaptive/wear 系統刪除）。
 
 ```bash
 sudo dmsetup message <name> 0 show_stats
-sudo dmsetup message <name> 0 set_policy adaptive
+sudo dmsetup message <name> 0 show_borrow
+sudo dmsetup message <name> 0 borrow_on
 ```
 
 ## 注意

@@ -28,9 +28,8 @@ Application
 - Logical ↔ Physical offset mapping (zero-copy)
 - Zero overhead from syscall/copy/CQE
 - Mirror/RAID1 redundancy (bio_alloc_clone + fire-and-forget)
-- Adaptive striping with EMA-based load balancing
-- Staleness detection with grace period (timer-based monitoring)
-- Wear leveling (write-count-aware weight adjustment)
+- Weight-borrowing: 慢碟塞車時，其 chunk 暫時寫入快碟的 over-provisioned 借用區，
+  並以持久化 per-block 表記錄（讀寫皆可正確解析、重載後仍一致）
 - Per-disk I/O statistics (in-flight tracking, completion counters)
 - Integrity (CRC32C), atomic (O_DIRECT), crypto (AES-256-XTS) passthrough
 - Error detection with per-disk error_count and degraded mode
@@ -193,14 +192,14 @@ TieredVol-DRIVER/
 │   ├── tieredvol.h                 # Central header: all structs + exports
 │   ├── tieredvol_core.c            # DM lifecycle: ctr/dtr/map/status/init/exit
 │   ├── tieredvol_stripe.c          # Stripe-split helpers (B path)
-│   ├── tieredvol_map.c             # Logical→Physical: static/adaptive/random
+│   ├── tieredvol_map.c             # Logical→Physical: static/random + borrow
 │   ├── tieredvol_mirror.c          # Mirror I/O + pending tracking + end_io
-│   ├── tieredvol_log.c             # Log ring buffer + EMA decay timer
+│   ├── tieredvol_log.c             # Log ring buffer
 │   ├── tieredvol_meta.c            # Metadata read/write (config file)
 │   ├── tieredvol_sysfs.c           # sysfs interface
 │   ├── tieredvol_message.c         # DM message dispatch
 │   ├── tieredvol_msg_stats.c       # Stats message handlers
-│   ├── tieredvol_msg_policy.c      # Policy/adaptive handlers
+│   ├── tieredvol_msg_policy.c      # Policy/borrow handlers
 │   ├── tieredvol_msg_mirror.c      # Mirror/rebuild handlers
 │   ├── tieredvol_msg_config.c      # Config/log handlers
 │   └── Kbuild
@@ -243,10 +242,11 @@ TieredVol-DRIVER/
 |------|---------------|
 | `tieredvol_core.c` | DM lifecycle, I/O entry (`tieredvol_map`), module init/exit |
 | `tieredvol_stripe.c` | Stripe-split helpers: boundaries, ranges, parallel submit |
-| `tieredvol_map.c` | Logical→Physical mapping (static/adaptive/random dispatch) |
-| `tieredvol_mirror.c` | Mirror I/O, pending tracking (per-CPU), timestamp ring, mirror/destroy ctx, parallel end_io |
+| `tieredvol_map.c` | Logical→Physical mapping (static/random) |
+| `tieredvol_borrow.c` | Weight-borrowing: per-block redirect table, lookup, persistence |
+| `tieredvol_mirror.c` | Mirror I/O, pending tracking (per-CPU), mirror/destroy ctx, parallel end_io |
 | `tieredvol_wc.c` | Write-coalescing buffer + flush, init/destroy ctx (Phase 1 C) |
-| `tieredvol_log.c` | Log ring buffer, EMA decay timer (load/latency/IOPS tracking) |
+| `tieredvol_log.c` | Log ring buffer |
 | `tieredvol_meta.c` | Config file parse/save, CRC32 validation |
 | `tieredvol_message.c` | DM message commands (show/set/modify at runtime) |
 | `tieredvol_sysfs.c` | sysfs attributes |
@@ -255,14 +255,12 @@ TieredVol-DRIVER/
 
 ```
 User → write()/read() → VFS → bio → tieredvol_map()
-  → tv_map_logical_adaptive()     # Multi-factor scoring: load + latency + wear
-  → tv_ts_submit()                # Record submit timestamp
+  → static stripe mapping (weight-based)        # deterministic placement
+  → [borrow?] → tv_borrow_redirect()            # slow-disk chunk → borrow area
    → [mirror?] → bio_alloc_clone() → submit_bio(clone)
    → submit_bio(bio)               # Submit to physical disk directly
   ...
-  → tieredvol_end_io()            # Completion: latency delta, in_flight--
-    → tv_ts_complete()            # Calculate latency
-    → [mirror retry?] → schedule_delayed_work()
+  → tieredvol_end_io()            # Completion: in_flight--, retry if needed
 ```
 
 ---
@@ -272,8 +270,9 @@ User → write()/read() → VFS → bio → tieredvol_map()
 The `tieredvol` dm target processes bios in-kernel:
 
 1. **bio arrives** at the dm target (from VFS `write()`/`read()`)
-2. **Map**: `tv_map_logical_adaptive()` translates logical byte offset → (disk, physical_offset)
-3. **Scoring**: multi-factor score = EMA load + EMA latency + wear penalty (lower = better)
+2. **Map**: deterministic weight-based stripe placement → (disk, physical_offset)
+3. **Borrow**: if the source disk is backlogged, `tv_borrow_redirect()` moves
+   whole 128 KB blocks to the least-loaded disk's borrow area and records them
 4. **Mirror**: if enabled, `bio_alloc_clone()` + fire-and-forget to redundant disk
 5. **Redirect**: `bio_set_dev()` + sector update → DM core submits to underlying device
 
@@ -281,12 +280,13 @@ Key features:
 - `DM_TARGET_NOWAIT`: Non-blocking bio dispatch
 - `flush_bypasses_map`: Flush FUA bios bypass the map function
 - `dm_set_target_max_io_len()`: Bio splitting at chunk boundaries
-- **Adaptive EMA dispatch**: load + latency + wear scoring per bio
+- **Weight-borrowing**: slow-disk chunks redirected to the least-loaded
+  disk's over-provisioned borrow area when the source is backlogged; every
+  redirect is recorded in a persistent per-block table (`<config>.borrow`)
+  so reads and later writes resolve the same destination
 - **Per-CPU pending arrays**: lockless write path for mirror tracking
-- **Per-disk timestamp ring**: latency tracking for adaptive scoring
 - **Mempool**: zero OOM for mirror/retry contexts
 - Mirror/RAID1: per-segment `mirror_enabled` + `mirror_disk` config
-- Staleness detection: adaptive timer (100ms busy / 1s idle), grace period
 - CRC32 config validation (two-pass parse)
 - Error detection with per-disk error_count and degraded mode
 
@@ -313,14 +313,23 @@ seg0_disks=0,1
 seg0_weight=2,1
 seg0_stripe=3145728
 seg0_mirror=1          # optional: mirror to disk index 1
-seg0_policy=adaptive   # optional: static (default), adaptive, random
+seg0_policy=static     # optional: static (default), random
+```
+
+```ini
+[runtime]                          # optional overrides (persisted on message)
+borrow_enable=1                    # weight-borrowing on/off
+borrow_watermark_kb=256            # 觸發借出的 src in-flight 門檻
+borrow_area_mb=2048,0,0,0          # 每碟借用區大小（MB）
 ```
 
 ---
 
 ## Limitations
 
-- **Static weights only by default** — Adaptive striping available via `set_policy` message.
+- **Static weights are the placement authority** — `random` policy exists for
+  layout stress only; weight-borrowing offloads *within* the static layout.
+  The former dynamic (adaptive) policy was removed (address determinism broken).
 - **No parity-based redundancy** — Mirror/RAID1 supported, but no RAID5/6.
 - **No crash consistency** — No journaling or metadata recovery.
 - **System disk cannot be used** — dm returns EBUSY on mounted root partition.

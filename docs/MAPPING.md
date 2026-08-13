@@ -64,24 +64,25 @@ physical_offset = stripe_no × weight[disk_idx] × chunk_size
 
 sector = `physical_offset >> 9`。
 
-## 三種 Policy
+## 兩種 Policy + Weight-borrowing
 
 | Policy | 說明 | 演算法 |
 |--------|------|--------|
 | **static**（預設） | 依 config weight 固定分配 | 上述四步驟 |
-| **adaptive** | 即時依負載/延遲/磨損動態分配 | EMA load + latency + wear 評分 |
 | **random** | 隨機分配（測試用） | get_random_u32() % disk_count |
 
-### Adaptive 評分
+> **ADAPTIVE 已移除**（2026-08-13）：動態選碟會破壞位址確定性且實測失衡
+> （見 docs/RESULTS.md 結論 #13）。改以 **weight-borrowing** 在 static 佈局上
+> 做暫時 offload。
 
-每顆 disk 維護三個指標：
-- **EMA load**：`in_flight_bytes` 的指數移動平均
-- **EMA latency**：最近 I/O 完成時間的 EMA
-- **Wear**：累積寫入量 × wear_bias
+### Weight-borrowing（static 之上）
 
-評分 = load + latency + wear，選分數最低的 disk。
-
-Hung-disk 偵測（STALE）：僅當某 disk 有 in-flight I/O 卻連續 `stale_ms` 零完成（卡死）時標記 STALE，adaptive 路由會避開該 disk；排空或恢復完成立即 RECOVERED。閒置 disk 永不標 STALE。
+慢碟（src）in-flight ≥ `borrow_watermark_kb` 且寫入整 128KB block 對齊時，
+該 block 重導至**最少負載**碟（排除 src / degraded / 借用區無空間）的
+over-provisioned 借用區。per-block 表記錄 `(dst_disk, dst_sector)`，讀取與
+重寫經 lookup 解析同一目的地；`borrow_off` 只停新借、已借 block 仍正確解析。
+表在 remove 時存 `<config>.borrow`、重建時載入，跨 reload 一致（詳見
+ARCHITECTURE.md「Borrow 觸發與選碟」）。
 
 ## Static Mapping 範例
 

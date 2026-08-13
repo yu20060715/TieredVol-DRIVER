@@ -35,3 +35,17 @@
 - [x] **Runtime benchmark display (read-only)**
       `show_bench`（`tieredvol_msg_stats.c`）。使用者讀取後自行決定是否改 .conf 重載，
       無自動調權重。
+
+- [x] **Weight-borrowing（慢碟 offload）**
+      `tieredvol_borrow.c`：慢碟 in-flight ≥ watermark 時整 128KB block 重導至
+      最少負載碟的 over-provisioned 借用區，per-block 表持久化（`<config>.borrow`）。
+      `borrow_off` 只停新借、已借 block 仍解析。詳見 ARCHITECTURE.md。
+
+- [x] **Kernel 源碼 userspace 測試層**
+      `tests/mock/linux/` mock 頭 + `tests/test_stripe_kernel.c` 直接編譯
+      `driver/tieredvol_stripe.c`（27 項）。可行性/成本見 docs/KERNEL_TESTS.md。
+
+## Removed
+
+- ~~**Adaptive EMA striping / staleness / wear leveling**~~：動態選碟破壞位址確定性
+  且實測失衡（RESULTS.md #12）。8/13 移除，改以權重平衡 STATIC + weight-borrowing。

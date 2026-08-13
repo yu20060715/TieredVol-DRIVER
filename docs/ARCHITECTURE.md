@@ -80,12 +80,13 @@ tieredvol_end_io()       ← DM 收到 bio 完成
 | 模組 | 職責 |
 |------|------|
 | `tieredvol_core.c` | DM lifecycle（ctr/dtr/map/status/init/exit），I/O 進入點 |
-| `tieredvol_map.c` | Logical→Physical 映射（static / adaptive / random） |
+| `tieredvol_map.c` | Logical→Physical 映射（static / random） |
 | `tieredvol_stripe.c` | Stripe 邊界計算、範圍拆分、parallel submit |
+| `tieredvol_borrow.c` | weight-borrowing：redirect / lookup / 持久化 |
 | `tieredvol_mirror.c` | Mirror I/O、pending read/write 追蹤、retry、rebuild |
 | `tieredvol_wc.c` | Write coalescing 緩衝與 flush |
 | `tieredvol_meta.c` | Config file 讀寫、CRC32 驗證 |
-| `tieredvol_log.c` | Log ring buffer、EMA decay timer |
+| `tieredvol_log.c` | Log ring buffer |
 | `tieredvol_message.c` | DM message dispatch（show/set 指令） |
 | `tieredvol_sysfs.c` | sysfs 屬性介面 |
 

@@ -69,20 +69,28 @@ DM 會再對剩餘部分重進 map()。**跨碟拆分基本由 DM 做，driver �
 - `completed` 只允許 0→1 一次；`pending` 遞減到 0 的那一方負責 endio + del_timer + kref_put。
 - sub-bio 的 `bi_end_io` 必須是 `tv_parallel_end_io`，不能掛其他 end_io。
 
-## 4. 三種 policy
+## 4. 兩種 policy + weight-borrowing
 
 | policy | 說明 |
 |--------|------|
 | `static` (0) | 第 1 節的確定性地圖。**生產/基準測試用它**（tv3x/tv4x 都是）。 |
-| `adaptive` (1) | EMA 負載/IOPS/延遲三因子計分（decay timer 忙 100ms / 閒 1s）。**熱資料動態搬快碟的 tiering 思想。** 但會破壞位址確定性。 |
 | `random` (2) | 純測試用，隨機選碟。 |
 
-**內在張力：** adaptive/random 的選碟不遵循 static 的權重邊界，
-而平行拆分的 `tv_stripe_calc_boundaries` 是以靜態佈局為前提的。
-policy 若混用，權重計數會與佈局不一致。
+> **`adaptive` (1) 已移除**（2026-08-13，commit a48bba5 前之 dead code 清理時刪除）：
+> EMA 三因子計分會破壞位址確定性且實測失衡（RESULTS.md 結論 #12）。
+> 慢碟 offload 改由 **weight-borrowing** 承擔。
 
-**不變式：** per-segment `policy=-1` 表示繼承 ctx 全域 policy；改動 policy 的 dmsetup message
-都會 `tv_metadata_save_kernel()` 寫回 config。
+**不變式：** 平行拆分的 `tv_stripe_calc_boundaries` 以靜態佈局為前提，
+`random` 與 static 混用會讓權重計數與佈局不一致（僅測試用）。
+
+### Weight-borrowing（`driver/tieredvol_borrow.c`）
+- 慢碟 in-flight ≥ watermark 且整 block 對齊 → 重導至最少負載碟（排除
+  src/degraded/無空間）的 over-provisioned 借用區，per-block 表記錄。
+- **一致性不變式**：`borrow_off` 只停新借；lookup 與 need==0 的重寫
+  永遠解析至借用區（不檢查 enabled），故已借 block 的讀寫不受開關影響。
+- 借用區配置是 all-or-none（整 block），避免部分配置造成表不一致。
+- 表在 remove 時存 `<config>.borrow`、重載時載入，跨 reload 位址一致。
+- 選碟計數沿用 `tv_io_stats.in_flight_bytes`（無 EMA/decay timer）。
 
 ## 5. WC / Mirror / Badmap / Config 模式
 
@@ -121,7 +129,7 @@ policy 若混用，權重計數會與佈局不一致。
 | WC 讀序（read 必先 flush） | 讀到舊資料 |
 | mirror 寫 fire-and-forget + pending ring 的生命週期 | mirror 資料不一致 / ring 溢出 |
 | config 雙端 parser + CRC | 載入失敗、靜默損壞 |
-| adaptive 混用平行拆分 | 權重計數與佈局不一致 |
+| borrow 表一致性（off 仍解析、all-or-none 配置、.borrow 存/載） | 資料讀寫錯碟 / 跨 reload 位址漂移 |
 
 ## 修改規則
 
