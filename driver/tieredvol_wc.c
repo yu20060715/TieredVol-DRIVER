@@ -97,8 +97,7 @@ void tv_wc_flush(struct tieredvol_ctx *ctx)
 			tv_stripe_calc_boundaries(seg, ctx->meta.chunk_size,
 						  logical, b_sz, &sc);
 
-			if (sc.fi >= 0 && sc.li >= 0 &&
-			    sc.li - sc.fi + 1 > 1) {
+			if (sc.fi >= 0 && sc.li - sc.fi + 1 > 1) {
 				u64 d_start[TV_MAX_DISKS];
 				u64 d_sz[TV_MAX_DISKS];
 				int d_id[TV_MAX_DISKS];
@@ -132,7 +131,6 @@ void tv_wc_flush(struct tieredvol_ctx *ctx)
 		submit_bio(bio);
 	}
 }
-EXPORT_SYMBOL_GPL(tv_wc_flush);
 
 /* ---- Try to buffer a write bio into the WC ---- */
 
@@ -211,4 +209,3 @@ int tv_wc_try_buffer(struct tieredvol_ctx *ctx, struct bio *bio,
 	spin_unlock_irqrestore(&ctx->wc.lock, flags);
 	return -EAGAIN;
 }
-EXPORT_SYMBOL_GPL(tv_wc_try_buffer);

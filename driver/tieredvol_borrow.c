@@ -24,6 +24,7 @@
 #include "tieredvol.h"
 
 #define TV_BORROW_MAGIC 0x54564252U /* "TVBR" */
+#define TV_BORROW_VERSION 2U
 
 int tv_borrow_init(struct tieredvol_ctx *ctx)
 {
@@ -59,10 +60,8 @@ int tv_borrow_init(struct tieredvol_ctx *ctx)
 		return 0;
 
 	/* Mirror and borrow both overlay placement; keep them exclusive. */
-	for (i = 0; i < ctx->meta.segment_count; i++) {
-		if (ctx->meta.segments[i].mirror_enabled)
-			return 0;
-	}
+	if (ctx->meta.segments[0].mirror_enabled)
+		return 0;
 
 	/* Borrow granularity: the block layer caps bios at 128 KB on this
 	 * box (max_sectors = 256), so require chunk-aligned requests would
@@ -133,7 +132,7 @@ bool tv_borrow_lookup(struct tieredvol_ctx *ctx, u64 logical,
 	struct tv_borrow_entry *e;
 	unsigned long flags;
 
-	if (!ctx->borrow.enabled || !ctx->borrow.entries)
+	if (!ctx->borrow.entries)
 		return false;
 	if (logical < ctx->meta.segments[0].logical_begin)
 		return false;
@@ -208,7 +207,7 @@ bool tv_borrow_redirect(struct tieredvol_ctx *ctx, int src_disk,
 	unsigned long flags;
 	u64 c;
 
-	if (!ctx->borrow.enabled || !ctx->borrow.entries)
+	if (!ctx->borrow.entries)
 		return false;
 	if (length == 0)
 		return false;
@@ -244,8 +243,11 @@ bool tv_borrow_redirect(struct tieredvol_ctx *ctx, int src_disk,
 		return true;
 	}
 
-	/* New borrows only when the source is backlogged and the range
-	 * covers whole blocks (no holes in the borrow-area copy). */
+	/* New borrows only when borrow is enabled, the source is backlogged
+	 * and the range covers whole blocks (no holes in the borrow-area
+	 * copy). */
+	if (!ctx->borrow.enabled)
+		return false;
 	if ((u32)atomic_read(&ctx->io.in_flight_bytes[src_disk]) <
 	    ctx->borrow.watermark_bytes) {
 		spin_unlock_irqrestore(&ctx->borrow.lock, flags);
@@ -273,7 +275,6 @@ bool tv_borrow_redirect(struct tieredvol_ctx *ctx, int src_disk,
 		e->dst_disk = dst;
 		e->dst_sector = ctx->borrow.area_base_sector[dst] +
 				 ((u64)slot * block_sectors);
-		e->block = c;
 		slot++;
 	}
 	ctx->borrow.used_blocks[dst] = slot;
@@ -303,7 +304,7 @@ int tv_borrow_save(struct tieredvol_ctx *ctx)
 	size_t entry_bytes;
 	void *snapshot;
 	u32 magic = TV_BORROW_MAGIC;
-	u32 version = 1;
+	u32 version = TV_BORROW_VERSION;
 	u64 n;
 	ssize_t w;
 	int ret = 0;
@@ -377,7 +378,7 @@ int tv_borrow_load(struct tieredvol_ctx *ctx, const char *path_in,
 	    magic != TV_BORROW_MAGIC)
 		goto bad;
 	if (kernel_read(f, &version, sizeof(version), &pos) != sizeof(version) ||
-	    version != 1)
+	    version != TV_BORROW_VERSION)
 		goto bad;
 	if (kernel_read(f, &n, sizeof(n), &pos) != sizeof(n) ||
 	    n != ctx->borrow.n_blocks)
@@ -419,6 +420,7 @@ int tv_borrow_load(struct tieredvol_ctx *ctx, const char *path_in,
 	return 0;
 bad:
 	filp_close(f, NULL);
-	pr_warn("tieredvol: borrow table invalid, ignoring\n");
+	pr_warn("tieredvol: borrow table %s invalid (magic/version/format), "
+		"ignoring (fresh volume)\n", path);
 	return 0;
 }

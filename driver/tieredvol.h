@@ -84,7 +84,6 @@ struct tv_io_stats {
 struct tv_borrow_entry {
 	u8  valid;
 	u8  dst_disk;
-	u64 block;      /* 全域 borrow-block index = (logical - seg->begin)/block_size */
 	u64 dst_sector; /* borrow 區內 sector 位址 */
 };
 
@@ -105,7 +104,6 @@ struct tv_borrow_state {
 struct tv_mirror_stats {
 	atomic64_t mirror_write_bytes;
 	atomic64_t mirror_write_ops;
-	atomic64_t mirror_read_ops;
 	atomic64_t mirror_errors;
 };
 
@@ -203,13 +201,11 @@ void tv_log(u8 level, u8 disk_idx, u8 event_type, const char *fmt, ...);
 struct tv_log_entry {
 	u64  timestamp_ns;
 	u8   level;
-	u8   disk_idx;
 	u8   event_type;
 	char msg[48];
 };
 
 enum tv_log_level {
-	TV_LOG_OFF  = 0,
 	TV_LOG_ERR  = 1,
 	TV_LOG_WARN = 2,
 	TV_LOG_INFO = 3,
@@ -240,7 +236,6 @@ struct tv_pending_read_entry {
 
 struct tv_pending_read_cpu {
 	struct tv_pending_read_entry entries[TV_PENDING_RING_SIZE];
-	unsigned int head;
 	unsigned int count;
 };
 
@@ -261,7 +256,6 @@ struct tv_pending_write_entry {
 
 struct tv_pending_write_cpu {
 	struct tv_pending_write_entry entries[TV_PENDING_RING_SIZE];
-	unsigned int head;
 	unsigned int count;
 };
 
@@ -307,7 +301,6 @@ int tv_rebuild_thread(void *data);
 /* ---- Stripe-split helpers (shared by B path + C path) ---- */
 struct tv_stripe_ctx {
 	int fi, li;
-	int n_seg;
 	u64 disk_end[TV_MAX_DISKS];
 	u64 s_sz;
 	u64 s_off;

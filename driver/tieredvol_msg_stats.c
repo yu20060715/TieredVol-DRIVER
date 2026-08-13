@@ -89,41 +89,6 @@ static int msg_show_inflight(struct dm_target *ti, unsigned int argc,
 	return 0;
 }
 
-static int msg_show_io_stats(struct dm_target *ti, unsigned int argc,
-			     char **argv, char *result, unsigned int maxlen)
-{
-	struct tieredvol_ctx *ctx = ti->private;
-	int i, off = 0;
-
-	for (i = 0; i < ctx->ndisks && off < (int)maxlen - 2; i++) {
-		off += snprintf(result + off, maxlen - off,
-				"%s%s:rd=%llu/%llu wr=%llu/%llu",
-				i > 0 ? " " : "",
-				ctx->meta.disk_names[i],
-				atomic64_read(&ctx->io.total_read_ops[i]),
-				atomic64_read(&ctx->io.total_read_bytes[i]),
-				atomic64_read(&ctx->io.total_write_ops[i]),
-				atomic64_read(&ctx->io.total_write_bytes[i]));
-	}
-	return 0;
-}
-
-static int msg_reset_io_stats(struct dm_target *ti, unsigned int argc,
-			      char **argv, char *result, unsigned int maxlen)
-{
-	struct tieredvol_ctx *ctx = ti->private;
-	int i;
-
-	for (i = 0; i < ctx->ndisks; i++) {
-		atomic64_set(&ctx->io.total_read_bytes[i], 0);
-		atomic64_set(&ctx->io.total_write_bytes[i], 0);
-		atomic64_set(&ctx->io.total_read_ops[i], 0);
-		atomic64_set(&ctx->io.total_write_ops[i], 0);
-	}
-	pr_info("tieredvol: IO stats reset\n");
-	return 0;
-}
-
 static int msg_show_bench(struct dm_target *ti, unsigned int argc,
 			  char **argv, char *result, unsigned int maxlen)
 {
@@ -156,11 +121,11 @@ static int msg_show_bench(struct dm_target *ti, unsigned int argc,
 /* clang-format off */
 const struct tv_msg_handler tv_msg_stats[] = {
 	{ "reset_stats",      1, 1, msg_reset_stats },
+	{ "reset_io_stats",   1, 1, msg_reset_stats },
 	{ "show_stats",       1, 1, msg_show_stats },
+	{ "show_io_stats",    1, 1, msg_show_stats },
 	{ "status",           1, 1, msg_status },
 	{ "show_inflight",    1, 1, msg_show_inflight },
-	{ "show_io_stats",    1, 1, msg_show_io_stats },
-	{ "reset_io_stats",   1, 1, msg_reset_io_stats },
 	{ "show_bench",       1, 1, msg_show_bench },
 };
 /* clang-format on */

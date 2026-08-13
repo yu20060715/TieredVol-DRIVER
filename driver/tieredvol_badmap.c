@@ -48,7 +48,6 @@ bool tv_badmap_test(struct tieredvol_ctx *ctx, int disk, u64 chunk_no)
 		return false;
 	return test_bit(chunk_no, ctx->badmaps[disk].bitmap);
 }
-EXPORT_SYMBOL_GPL(tv_badmap_test);
 
 void tv_badmap_set(struct tieredvol_ctx *ctx, int disk, u64 chunk_no)
 {
@@ -60,7 +59,6 @@ void tv_badmap_set(struct tieredvol_ctx *ctx, int disk, u64 chunk_no)
 		return;
 	set_bit(chunk_no, ctx->badmaps[disk].bitmap);
 }
-EXPORT_SYMBOL_GPL(tv_badmap_set);
 
 void tv_badmap_clear(struct tieredvol_ctx *ctx, int disk, u64 chunk_no)
 {
@@ -72,7 +70,6 @@ void tv_badmap_clear(struct tieredvol_ctx *ctx, int disk, u64 chunk_no)
 		return;
 	clear_bit(chunk_no, ctx->badmaps[disk].bitmap);
 }
-EXPORT_SYMBOL_GPL(tv_badmap_clear);
 
 static void tv_badmap_rebuild_endio(struct bio *bio)
 {
@@ -145,4 +142,3 @@ void tv_badmap_rebuild(struct tieredvol_ctx *ctx)
 	pr_info("tieredvol: badmap rebuild done: %d recovered, %d failed\n",
 		recovered, failed);
 }
-EXPORT_SYMBOL_GPL(tv_badmap_rebuild);

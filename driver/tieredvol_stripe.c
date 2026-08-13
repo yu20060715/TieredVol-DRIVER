@@ -47,7 +47,6 @@ void tv_parallel_end_io(struct bio *bio)
 		kref_put(&block->kref, tv_parallel_block_release);
 	}
 }
-EXPORT_SYMBOL_GPL(tv_parallel_end_io);
 
 void tv_parallel_timeout(struct timer_list *t)
 {
@@ -86,7 +85,6 @@ void tv_parallel_timeout(struct timer_list *t)
 out:
 	kref_put(&block->kref, tv_parallel_block_release);
 }
-EXPORT_SYMBOL_GPL(tv_parallel_timeout);
 
 /* ---- Stripe-split helpers ---- */
 
@@ -97,13 +95,13 @@ void tv_stripe_calc_boundaries(struct tieredvol_segment *seg,
 {
 	u64 cumul = 0;
 	int i;
+	int n_seg = (int)seg->disk_count;
 
 	sc->s_sz = seg->stripe_size;
 	sc->s_off = (logical - seg->logical_begin) % sc->s_sz;
 	sc->b_end = sc->s_off + b_sz;
-	sc->n_seg = (int)seg->disk_count;
 
-	for (i = 0; i < sc->n_seg; i++) {
+	for (i = 0; i < n_seg; i++) {
 		cumul += (u64)seg->weight[i] * chunk_size;
 		sc->disk_end[i] = cumul;
 	}
@@ -113,7 +111,7 @@ void tv_stripe_calc_boundaries(struct tieredvol_segment *seg,
 
 	if (sc->b_end <= sc->s_sz) {
 		u64 prev = 0;
-		for (i = 0; i < sc->n_seg; i++) {
+		for (i = 0; i < n_seg; i++) {
 			if (sc->s_off < sc->disk_end[i] && sc->b_end > prev) {
 				if (sc->fi < 0) sc->fi = i;
 				sc->li = i;
@@ -121,7 +119,7 @@ void tv_stripe_calc_boundaries(struct tieredvol_segment *seg,
 			prev = sc->disk_end[i];
 		}
 	} else {
-		for (i = 0; i < sc->n_seg; i++) {
+		for (i = 0; i < n_seg; i++) {
 			if (sc->s_off < sc->disk_end[i]) {
 				if (sc->fi < 0) sc->fi = i;
 				sc->li = i;
@@ -130,7 +128,6 @@ void tv_stripe_calc_boundaries(struct tieredvol_segment *seg,
 		}
 	}
 }
-EXPORT_SYMBOL_GPL(tv_stripe_calc_boundaries);
 
 int tv_stripe_compute_ranges(struct tv_stripe_ctx *sc,
 			     struct tieredvol_segment *seg,
@@ -155,7 +152,6 @@ int tv_stripe_compute_ranges(struct tv_stripe_ctx *sc,
 	}
 	return n_sub;
 }
-EXPORT_SYMBOL_GPL(tv_stripe_compute_ranges);
 
 int tv_parallel_submit(struct tieredvol_ctx *ctx, struct bio *bio,
 		       int n_sub, u64 *d_start, u64 *d_sz, int *d_id)
@@ -212,4 +208,3 @@ int tv_parallel_submit(struct tieredvol_ctx *ctx, struct bio *bio,
 	}
 	return 0;
 }
-EXPORT_SYMBOL_GPL(tv_parallel_submit);

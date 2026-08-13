@@ -135,7 +135,6 @@ void tv_sysfs_init(void)
 		tv_kobj = NULL;
 	}
 }
-EXPORT_SYMBOL_GPL(tv_sysfs_init);
 
 void tv_sysfs_exit(void)
 {
@@ -145,4 +144,3 @@ void tv_sysfs_exit(void)
 		tv_kobj = NULL;
 	}
 }
-EXPORT_SYMBOL_GPL(tv_sysfs_exit);

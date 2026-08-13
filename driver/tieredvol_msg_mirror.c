@@ -4,7 +4,6 @@
  */
 #include <linux/module.h>
 #include <linux/string.h>
-#include <linux/slab.h>
 #include <linux/kthread.h>
 #include <linux/device-mapper.h>
 #include "tieredvol.h"

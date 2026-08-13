@@ -16,10 +16,7 @@
 #include <linux/mempool.h>
 #include "tieredvol.h"
 
-#define DM_MSG_PREFIX "tieredvol"
-
 struct tieredvol_ctx __rcu *tv_active_ctx;
-EXPORT_SYMBOL_GPL(tv_active_ctx);
 
 static void trigger_event(struct work_struct *work)
 {
@@ -170,8 +167,7 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 			tv_stripe_calc_boundaries(seg, ctx->meta.chunk_size,
 						  logical, b_sz, &sc);
 
-			if (sc.fi >= 0 && sc.li >= 0 &&
-			    sc.li - sc.fi + 1 > 1) {
+			if (sc.fi >= 0 && sc.li - sc.fi + 1 > 1) {
 				u64 d_start[TV_MAX_DISKS];
 				u64 d_sz[TV_MAX_DISKS];
 				int d_id[TV_MAX_DISKS];
@@ -274,6 +270,7 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	struct tieredvol_ctx *ctx;
 	int ret, i;
 	bool mirror_init_done = false;
+	bool borrow_init_done = false;
 
 	if (argc != 1) {
 		ti->error = "tieredvol: expected 1 argument (config path)";
@@ -350,7 +347,6 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ctx->policy = ctx->meta.runtime_policy;
 	atomic64_set(&ctx->mirror.mirror_write_bytes, 0);
 	atomic64_set(&ctx->mirror.mirror_write_ops, 0);
-	atomic64_set(&ctx->mirror.mirror_read_ops, 0);
 	atomic64_set(&ctx->mirror.mirror_errors, 0);
 	ctx->deg.error_threshold = 10;
 	ctx->rebuild.thread = NULL;
@@ -479,6 +475,7 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		ti->error = "tieredvol: borrow init failed";
 		goto free_error_count;
 	}
+	borrow_init_done = true;
 
 	/* Compute min_chunk_sectors and stripe_sectors */
 	{
@@ -549,6 +546,8 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	return 0;
 
 free_error_count:
+	if (borrow_init_done)
+		tv_borrow_destroy(ctx);
 	if (mirror_init_done)
 		tv_mirror_destroy_ctx(ctx);
 	tv_badmap_destroy(ctx);

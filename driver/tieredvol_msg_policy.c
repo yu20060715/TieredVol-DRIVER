@@ -60,7 +60,13 @@ static int msg_borrow_on(struct dm_target *ti, unsigned int argc,
 	struct tieredvol_ctx *ctx = ti->private;
 
 	ctx->meta.runtime_borrow_enable = 1;
-	pr_info("tieredvol: borrow enable requested (applied on reload)\n");
+	if (ctx->borrow.entries) {
+		ctx->borrow.enabled = true;
+		pr_info("tieredvol: borrow enabled\n");
+	} else {
+		pr_info("tieredvol: borrow enable requested "
+			"(applied on reload)\n");
+	}
 	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "borrow_enable=1");
 	tv_metadata_save_kernel(ctx);
 	return 0;
@@ -73,7 +79,8 @@ static int msg_borrow_off(struct dm_target *ti, unsigned int argc,
 
 	ctx->meta.runtime_borrow_enable = 0;
 	ctx->borrow.enabled = false;
-	pr_info("tieredvol: borrow disabled\n");
+	pr_info("tieredvol: borrow disabled (existing borrowed blocks still "
+		"resolve to their borrow-area copy)\n");
 	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "borrow_enable=0");
 	tv_metadata_save_kernel(ctx);
 	return 0;

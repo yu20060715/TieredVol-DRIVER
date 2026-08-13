@@ -227,8 +227,6 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 
 			/* Find end of consecutive run */
 			u64 end = find_next_zero_bit(bm->bitmap, bm->n_chunks, start);
-			if (end > bm->n_chunks)
-				end = bm->n_chunks;
 
 			if (range_count > 0)
 				off += scnprintf(buf + off, 65536 - off, ",");
