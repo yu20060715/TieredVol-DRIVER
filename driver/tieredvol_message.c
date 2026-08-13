@@ -4,7 +4,7 @@
  *
  * Handlers are split by domain into:
  *   tieredvol_msg_stats.c   — Stats / IO counters
- *   tieredvol_msg_policy.c  — Adaptive policy / wear
+ *   tieredvol_msg_policy.c  — Policy / weight-borrowing
  *   tieredvol_msg_mirror.c  — Mirror / rebuild / degradation
  *   tieredvol_msg_config.c  — Log / config
  *

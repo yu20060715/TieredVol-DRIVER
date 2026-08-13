@@ -24,7 +24,7 @@
  */
 #define TV_PENDING_RING_SIZE 512
 
-struct tieredvol_segment {
+	struct tieredvol_segment {
 	u64 logical_begin;
 	u64 logical_end;
 	u32 disk_count;
@@ -33,7 +33,7 @@ struct tieredvol_segment {
 	u64 stripe_size;
 	bool mirror_enabled;
 	u32 mirror_disk;
-	int policy; /* -1 = inherit from ctx, 0 = static, 1 = adaptive, 2 = random */
+	int policy; /* -1 = inherit from ctx, 0 = static, 2 = random */
 };
 
 struct tieredvol_metadata {
@@ -45,9 +45,9 @@ struct tieredvol_metadata {
 	struct tieredvol_segment segments[TV_MAX_SEGS];
 	/* Runtime defaults persisted in [runtime] section */
 	int runtime_policy;
-	u32 runtime_stale_ms;
-	u32 runtime_ema_shift;
-	u32 runtime_wear_bias;
+	int runtime_borrow_enable; /* -1 = unset, 0 = off, 1 = on */
+	u32 runtime_borrow_watermark_kb;
+	u32 runtime_borrow_area_mb[TV_MAX_DISKS];
 	char badmap_ranges[TV_MAX_DISKS][256];
 };
 
@@ -60,7 +60,6 @@ struct tieredvol_map {
 
 enum tv_policy {
 	TV_POLICY_STATIC = 0,
-	TV_POLICY_ADAPTIVE = 1,
 	TV_POLICY_RANDOM = 2,
 };
 
@@ -72,25 +71,35 @@ struct tv_io_stats {
 	atomic64_t total_read_bytes[TV_MAX_DISKS];
 	atomic64_t total_write_ops[TV_MAX_DISKS];
 	atomic64_t total_read_ops[TV_MAX_DISKS];
-	/* Adaptive v2: latency + IOPS tracking */
-	atomic64_t total_latency_ns[TV_MAX_DISKS];
-	atomic64_t total_completions[TV_MAX_DISKS];
-	atomic64_t interval_completions[TV_MAX_DISKS];
 };
 
-struct tv_adaptive_state {
-	u32 ema_weight_shift;
-	u64 ema_load[TV_MAX_DISKS];
-	u64 stale_after_ns;
-	bool stale[TV_MAX_DISKS];
-	u64 stale_marked_ns[TV_MAX_DISKS];
-	u64 stuck_start_ns[TV_MAX_DISKS];
-	struct timer_list decay_timer;
-	u32 wear_bias;
-	enum tv_policy policy;
-	/* Adaptive v2: multi-factor scoring */
-	u64 ema_latency_ns[TV_MAX_DISKS];
-	u64 ema_iops[TV_MAX_DISKS];
+/* ---- Weight-borrowing state ----
+ * Deterministic static striping stays authoritative for placement; a slow
+ * disk's (borrower) chunk is temporarily redirected to the least-loaded
+ * disk's over-provisioned borrow area. Every redirected chunk is recorded
+ * in a persistent per-block table so reads and later writes resolve the
+ * same destination (unlike the removed dynamic policy, which had no
+ * record and silently misplaced data).
+ */
+struct tv_borrow_entry {
+	u8  valid;
+	u8  dst_disk;
+	u64 block;      /* 全域 borrow-block index = (logical - seg->begin)/block_size */
+	u64 dst_sector; /* borrow 區內 sector 位址 */
+};
+
+struct tv_borrow_state {
+	bool enabled;
+	u32 block_size;                 /* borrow 粒度（byte）= chunk_size/8 */
+	u32 watermark_bytes;            /* 觸發借出：src in_flight > 此值 */
+	u32 area_blocks[TV_MAX_DISKS];  /* 每碟借用區 block 數 */
+	u32 used_blocks[TV_MAX_DISKS];  /* 每碟已用借用 slot */
+	u64 area_base_sector[TV_MAX_DISKS]; /* 借用區起點 sector */
+	struct tv_borrow_entry *entries;    /* n_blocks 陣列（index = borrow block） */
+	u64 n_blocks;
+	u64 n_borrowed;
+	atomic64_t borrow_write_bytes[TV_MAX_DISKS];
+	spinlock_t lock;
 };
 
 struct tv_mirror_stats {
@@ -140,7 +149,8 @@ struct tieredvol_ctx {
 	struct tv_io_stats io;
 	struct tv_degradation deg;
 	struct tieredvol_badmap badmaps[TV_MAX_DISKS];
-	struct tv_adaptive_state adaptive;
+	struct tv_borrow_state borrow;
+	int policy;
 	struct tv_mirror_stats mirror;
 	struct tv_rebuild_state rebuild;
 	struct {
@@ -164,18 +174,21 @@ struct tieredvol_ctx {
 struct tieredvol_map tv_map_logical(u64 logical,
 				    struct tieredvol_metadata *meta,
 				    u32 chunk_size);
-struct tieredvol_map tv_map_logical_adaptive(u64 logical,
-					    struct tieredvol_metadata *meta,
-					    u64 *ema_load, bool *stale,
-					    bool *degraded,
-					    int ndisks,
-					    atomic64_t *total_write_bytes,
-					    u32 wear_bias,
-					    u32 chunk_size,
-					    u64 *ema_latency_ns);
 struct tieredvol_map tv_map_logical_random(u64 logical,
 					  struct tieredvol_metadata *meta,
 					  u32 chunk_size);
+
+/* ---- tieredvol_borrow.c exports ---- */
+int  tv_borrow_init(struct tieredvol_ctx *ctx);
+void tv_borrow_destroy(struct tieredvol_ctx *ctx);
+bool tv_borrow_lookup(struct tieredvol_ctx *ctx, u64 logical,
+		      int *disk, u64 *sector);
+bool tv_borrow_redirect(struct tieredvol_ctx *ctx, int src_disk,
+			u64 logical, u64 length,
+			int *disk, u64 *sector);
+int tv_borrow_save(struct tieredvol_ctx *ctx);
+int tv_borrow_load(struct tieredvol_ctx *ctx, const char *path,
+		   u64 n_blocks);
 
 /* ---- tieredvol_meta.c exports ---- */
 int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
@@ -272,15 +285,12 @@ int tv_pending_find_and_remove(struct tieredvol_ctx *ctx,
 			       struct block_device *bdev, sector_t sector,
 			       unsigned int size,
 			       sector_t *mirror_sector_out);
-void tv_ts_submit(int disk_idx, sector_t sector, unsigned int size);
-u64 tv_ts_complete(int disk_idx, sector_t sector, unsigned int size);
 void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 		       struct tieredvol_map cur, u64 logical);
 void tv_mirror_end_io(struct bio *bio);
 void tv_read_retry_work(struct work_struct *work);
 int tieredvol_end_io(struct dm_target *ti, struct bio *bio,
 		     blk_status_t *error);
-void tv_decay_timer_fn(struct timer_list *timer);
 
 struct tv_retry_ctx {
 	struct delayed_work dwork;

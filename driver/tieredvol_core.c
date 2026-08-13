@@ -33,6 +33,7 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 	struct tieredvol_ctx *ctx = ti->private;
 	u64 logical;
 	struct tieredvol_map cur;
+	bool borrowed = false;
 
 	logical = (u64)bio->bi_iter.bi_sector << TV_SECTOR_SHIFT;
 
@@ -59,20 +60,9 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 		int pol = seg_idx >= 0 ?
 			ctx->meta.segments[seg_idx].policy : -1;
 		if (pol < 0)
-			pol = ctx->adaptive.policy;
+			pol = ctx->policy;
 
 		switch (pol) {
-		case TV_POLICY_ADAPTIVE:
-			cur = tv_map_logical_adaptive(logical, &ctx->meta,
-						      ctx->adaptive.ema_load,
-						      ctx->adaptive.stale,
-						      ctx->deg.degraded,
-						      ctx->ndisks,
-						      ctx->io.total_write_bytes,
-						      ctx->adaptive.wear_bias,
-						      ctx->meta.chunk_size,
-						      ctx->adaptive.ema_latency_ns);
-			break;
 		case TV_POLICY_RANDOM:
 			cur = tv_map_logical_random(logical, &ctx->meta,
 						    ctx->meta.chunk_size);
@@ -92,6 +82,17 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 		       "map fail sec=%llu", bio->bi_iter.bi_sector);
 		bio_io_error(bio);
 		return DM_MAPIO_SUBMITTED;
+	}
+
+	/* Borrowed chunks resolve to their recorded destination on read. */
+	if (bio_data_dir(bio) == READ) {
+		u64 bs;
+
+		if (tv_borrow_lookup(ctx, logical,
+				     &cur.disk, &bs)) {
+			cur.offset = bs << TV_SECTOR_SHIFT;
+			cur.length = bio->bi_iter.bi_size;
+		}
 	}
 
 	/* ---- Phase D: Bad block bitmap check ---- */
@@ -143,10 +144,10 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 			return DM_MAPIO_SUBMITTED;
 		}
 	}
-
-	/* ---- Phase 1 C: Write coalescing ---- */
-	{
+	/* ---- Phase 1 C: Write coalescing (disabled while borrowing) ---- */
+	if (!ctx->borrow.enabled) {
 		int wc_ret = tv_wc_try_buffer(ctx, bio, logical, cur);
+
 		if (wc_ret == DM_MAPIO_SUBMITTED)
 			return DM_MAPIO_SUBMITTED;
 	}
@@ -180,6 +181,23 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 					d_start, d_sz, d_id);
 
 				if (n_sub > 1) {
+					/* Weight-borrowing: per-fragment */
+					u64 frag_logical = logical;
+					int ci;
+
+					for (ci = 0; ci < n_sub; ci++) {
+						u64 bs;
+
+						if (tv_borrow_redirect(
+							    ctx, d_id[ci],
+							    frag_logical,
+							    d_sz[ci],
+							    &d_id[ci], &bs))
+							d_start[ci] =
+								bs << TV_SECTOR_SHIFT;
+						frag_logical += d_sz[ci];
+					}
+
 					tv_mirror_handle(ctx, bio, cur,
 							 logical);
 					if (tv_parallel_submit(ctx, bio,
@@ -193,8 +211,21 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 	}
 	/* ---- End B ---- */
 
+	/* Weight-borrowing: single-disk WRITE (B path did not apply) */
+	if (bio_data_dir(bio) == WRITE && cur.seg_idx >= 0) {
+		u64 bs;
+
+		if (tv_borrow_redirect(ctx, cur.disk, logical,
+				       bio->bi_iter.bi_size,
+				       &cur.disk, &bs)) {
+			cur.offset = bs << TV_SECTOR_SHIFT;
+			borrowed = true;
+		}
+	}
+
 	/* Split bio at stripe chunk boundary if it crosses to next disk */
-	if (cur.seg_idx >= 0 &&
+	if (!borrowed &&
+	    cur.seg_idx >= 0 &&
 	    cur.seg_idx < (int)ctx->meta.segment_count) {
 		struct tieredvol_segment *seg =
 			&ctx->meta.segments[cur.seg_idx];
@@ -225,8 +256,6 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 	bio_set_dev(bio, ctx->devs[cur.disk]->bdev);
 	bio->bi_iter.bi_sector = cur.offset >> TV_SECTOR_SHIFT;
 	atomic_add(bio->bi_iter.bi_size, &ctx->io.in_flight_bytes[cur.disk]);
-	tv_ts_submit(cur.disk, cur.offset >> TV_SECTOR_SHIFT,
-		     bio->bi_iter.bi_size);
 	if (bio_data_dir(bio) == WRITE) {
 		atomic64_add(bio->bi_iter.bi_size, &ctx->io.total_write_bytes[cur.disk]);
 		atomic64_inc(&ctx->io.total_write_ops[cur.disk]);
@@ -318,15 +347,7 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	INIT_WORK(&ctx->trigger_event, trigger_event);
 
-	ctx->adaptive.policy = ctx->meta.runtime_policy;
-	ctx->adaptive.ema_weight_shift = ctx->meta.runtime_ema_shift ?
-						 ctx->meta.runtime_ema_shift :
-						 3;
-	ctx->adaptive.stale_after_ns = ctx->meta.runtime_stale_ms ?
-					      (u64)ctx->meta.runtime_stale_ms *
-						      1000000ULL :
-					      5000000000ULL;
-	ctx->adaptive.wear_bias = ctx->meta.runtime_wear_bias;
+	ctx->policy = ctx->meta.runtime_policy;
 	atomic64_set(&ctx->mirror.mirror_write_bytes, 0);
 	atomic64_set(&ctx->mirror.mirror_write_ops, 0);
 	atomic64_set(&ctx->mirror.mirror_read_ops, 0);
@@ -343,9 +364,6 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	for (i = 0; i < ctx->ndisks; i++)
 		ctx->bench[i].start_time = ktime_get();
-
-	timer_setup(&ctx->adaptive.decay_timer, tv_decay_timer_fn, 0);
-	mod_timer(&ctx->adaptive.decay_timer, jiffies + HZ);
 
 	for (i = 0; i < ctx->ndisks; i++)
 		pr_info("tieredvol: disk[%d] %s -> %pg (%llu sectors)\n",
@@ -456,6 +474,12 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	mirror_init_done = true;
 	}
 
+	ret = tv_borrow_init(ctx);
+	if (ret) {
+		ti->error = "tieredvol: borrow init failed";
+		goto free_error_count;
+	}
+
 	/* Compute min_chunk_sectors and stripe_sectors */
 	{
 		sector_t global_min_chunk = (sector_t)-1;
@@ -525,7 +549,6 @@ static int tieredvol_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	return 0;
 
 free_error_count:
-	timer_delete_sync(&ctx->adaptive.decay_timer);
 	if (mirror_init_done)
 		tv_mirror_destroy_ctx(ctx);
 	tv_badmap_destroy(ctx);
@@ -546,7 +569,7 @@ static void tieredvol_dtr(struct dm_target *ti)
 	struct tieredvol_ctx *ctx = ti->private;
 	int i;
 
-	timer_delete_sync(&ctx->adaptive.decay_timer);
+	tv_borrow_destroy(ctx);
 	flush_work(&ctx->trigger_event);
 
 	tv_wc_destroy_ctx(ctx);
@@ -622,8 +645,10 @@ static void tieredvol_status(struct dm_target *ti, status_type_t type,
 		int i, off = 0;
 
 		off += snprintf(result + off, maxlen - off,
-				"policy=%d mirror=%llu/%llu err=%llu",
-				ctx->adaptive.policy,
+				"policy=%d borrow=%d/%llu mirror=%llu/%llu err=%llu",
+				ctx->policy,
+				ctx->borrow.enabled,
+				(unsigned long long)ctx->borrow.n_borrowed,
 				atomic64_read(&ctx->mirror.mirror_write_ops),
 				atomic64_read(&ctx->mirror.mirror_write_bytes),
 				atomic64_read(&ctx->mirror.mirror_errors));
@@ -639,12 +664,13 @@ static void tieredvol_status(struct dm_target *ti, status_type_t type,
 				status = 'A';
 
 			off += snprintf(result + off, maxlen - off,
-					" %c%s:rd=%llu/%llu wr=%llu/%llu",
+					" %c%s:rd=%llu/%llu wr=%llu/%llu bw=%llu",
 					status, ctx->meta.disk_names[i],
 					atomic64_read(&ctx->io.total_read_ops[i]),
 					atomic64_read(&ctx->io.total_read_bytes[i]),
 					atomic64_read(&ctx->io.total_write_ops[i]),
-					atomic64_read(&ctx->io.total_write_bytes[i]));
+					atomic64_read(&ctx->io.total_write_bytes[i]),
+					atomic64_read(&ctx->borrow.borrow_write_bytes[i]));
 		}
 		if (atomic_read(&ctx->rebuild.running))
 			off += snprintf(result + off, maxlen - off,

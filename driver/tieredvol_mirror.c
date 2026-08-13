@@ -214,38 +214,6 @@ out:
 	return pending;
 }
 
-/* ---- Timestamp ring for latency tracking (lockless, O(1) hash) ---- */
-
-static u64 tv_ts_timestamps[TV_MAX_DISKS][256];
-
-void tv_ts_submit(int disk_idx, sector_t sector, unsigned int size)
-{
-	u32 idx;
-
-	if (disk_idx < 0 || disk_idx >= TV_MAX_DISKS)
-		return;
-
-	idx = (sector ^ (sector >> 16)) & 0xFF;
-	WRITE_ONCE(tv_ts_timestamps[disk_idx][idx], ktime_get_ns());
-}
-EXPORT_SYMBOL_GPL(tv_ts_submit);
-
-u64 tv_ts_complete(int disk_idx, sector_t sector, unsigned int size)
-{
-	u64 submit_ns;
-	u32 idx;
-
-	if (disk_idx < 0 || disk_idx >= TV_MAX_DISKS)
-		return 0;
-
-	idx = (sector ^ (sector >> 16)) & 0xFF;
-	submit_ns = READ_ONCE(tv_ts_timestamps[disk_idx][idx]);
-	if (submit_ns == 0)
-		return 0;
-	return ktime_get_ns() - submit_ns;
-}
-EXPORT_SYMBOL_GPL(tv_ts_complete);
-
 /* ---- Mirror I/O completion ---- */
 
 void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
@@ -499,21 +467,8 @@ int tieredvol_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 
 	/* Fix 2: Decrement in_flight_bytes on every completion */
 	if (disk_id >= 0) {
-		u64 latency_ns;
-
 		atomic_sub(bio->bi_iter.bi_size,
 			   &ctx->io.in_flight_bytes[disk_id]);
-		/* Adaptive v2: track completions per interval */
-		atomic64_inc(&ctx->io.interval_completions[disk_id]);
-		/* Latency tracking: record completion delta */
-		latency_ns = tv_ts_complete(disk_id,
-					    bio->bi_iter.bi_sector,
-					    bio->bi_iter.bi_size);
-		if (latency_ns > 0) {
-			atomic64_add(latency_ns,
-				     &ctx->io.total_latency_ns[disk_id]);
-			atomic64_inc(&ctx->io.total_completions[disk_id]);
-		}
 	}
 
 	/* Error path */

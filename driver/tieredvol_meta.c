@@ -244,13 +244,17 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 
 	off += scnprintf(buf + off, 65536 - off, "[runtime]\n");
 	off += scnprintf(buf + off, 65536 - off, "policy=%d\n",
-			  ctx->adaptive.policy);
-	off += scnprintf(buf + off, 65536 - off, "stale_ms=%llu\n",
-			  ctx->adaptive.stale_after_ns / 1000000ULL);
-	off += scnprintf(buf + off, 65536 - off, "ema_shift=%u\n",
-			  ctx->adaptive.ema_weight_shift);
-	off += scnprintf(buf + off, 65536 - off, "wear_bias=%u\n",
-			  ctx->adaptive.wear_bias);
+			  ctx->policy);
+	off += scnprintf(buf + off, 65536 - off, "borrow_enable=%d\n",
+			  ctx->meta.runtime_borrow_enable);
+	off += scnprintf(buf + off, 65536 - off, "borrow_watermark_kb=%u\n",
+			  ctx->meta.runtime_borrow_watermark_kb);
+	off += scnprintf(buf + off, 65536 - off, "borrow_area_mb=");
+	for (u32 i = 0; i < ctx->meta.disk_count; i++)
+		off += scnprintf(buf + off, 65536 - off,
+				 "%s%u", i ? "," : "",
+				 ctx->meta.runtime_borrow_area_mb[i]);
+	off += scnprintf(buf + off, 65536 - off, "\n");
 
 	crc = crc32c(0, buf, off);
 	off += scnprintf(buf + off, 65536 - off, "crc32=%u\n", crc);
@@ -302,6 +306,12 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 		ctx->config_path);
 	kfree(buf);
 	ret = 0;
+	{
+		int bs = tv_borrow_save(ctx);
+
+		if (bs && !ret)
+			ret = bs;
+	}
 
 out_unlock:
 	mutex_unlock(&tv_save_mutex);
@@ -541,12 +551,21 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 
 			if (kstrtol(v, 10, &v2) == 0)
 				meta->runtime_policy = (int)v2;
-		} else if (strcmp(k, "stale_ms") == 0) {
-			parse_u32(v, &meta->runtime_stale_ms);
-		} else if (strcmp(k, "ema_shift") == 0) {
-			parse_u32(v, &meta->runtime_ema_shift);
-		} else if (strcmp(k, "wear_bias") == 0) {
-			parse_u32(v, &meta->runtime_wear_bias);
+		} else if (strcmp(k, "borrow_enable") == 0) {
+			long v3;
+
+			if (kstrtol(v, 10, &v3) == 0)
+				meta->runtime_borrow_enable = (int)v3;
+		} else if (strcmp(k, "borrow_watermark_kb") == 0) {
+			parse_u32(v, &meta->runtime_borrow_watermark_kb);
+		} else if (strcmp(k, "borrow_area_mb") == 0) {
+			int n;
+			u32 tmp[TV_MAX_DISKS];
+
+			if (parse_csv_u32(v, tmp, TV_MAX_DISKS, &n) == 0) {
+				for (int bi = 0; bi < n && bi < TV_MAX_DISKS; bi++)
+					meta->runtime_borrow_area_mb[bi] = tmp[bi];
+			}
 		}
 	}
 

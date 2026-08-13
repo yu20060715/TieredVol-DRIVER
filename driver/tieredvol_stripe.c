@@ -20,17 +20,8 @@ void tv_parallel_end_io(struct bio *bio)
 	struct tv_parallel_sub *ps = bio->bi_private;
 	struct tv_parallel_block *block = ps->block;
 	struct tieredvol_ctx *ctx = block->ctx;
-	u64 lat;
 
 	atomic_sub(ps->size, &ctx->io.in_flight_bytes[ps->disk_id]);
-	atomic64_inc(&ctx->io.interval_completions[ps->disk_id]);
-
-	lat = tv_ts_complete(ps->disk_id, bio->bi_iter.bi_sector,
-			     bio->bi_iter.bi_size);
-	if (lat > 0) {
-		atomic64_add(lat, &ctx->io.total_latency_ns[ps->disk_id]);
-		atomic64_inc(&ctx->io.total_completions[ps->disk_id]);
-	}
 
 	if (bio->bi_status != BLK_STS_OK)
 		atomic_set(&block->err_status, (int)bio->bi_status);
@@ -130,14 +121,12 @@ void tv_stripe_calc_boundaries(struct tieredvol_segment *seg,
 			prev = sc->disk_end[i];
 		}
 	} else {
-		u64 prev = 0;
 		for (i = 0; i < sc->n_seg; i++) {
 			if (sc->s_off < sc->disk_end[i]) {
 				if (sc->fi < 0) sc->fi = i;
 				sc->li = i;
 				break;
 			}
-			prev = sc->disk_end[i];
 		}
 	}
 }
@@ -217,7 +206,6 @@ int tv_parallel_submit(struct tieredvol_ctx *ctx, struct bio *bio,
 		clones[ci]->bi_private = &block->subs[ci];
 		clones[ci]->bi_end_io = tv_parallel_end_io;
 		atomic_add(d_sz[ci], &ctx->io.in_flight_bytes[d]);
-		tv_ts_submit(d, clones[ci]->bi_iter.bi_sector, d_sz[ci]);
 		atomic64_add(d_sz[ci], &ctx->io.total_write_bytes[d]);
 		atomic64_inc(&ctx->io.total_write_ops[d]);
 		submit_bio(clones[ci]);

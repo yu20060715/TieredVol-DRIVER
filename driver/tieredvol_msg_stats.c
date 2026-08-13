@@ -19,9 +19,6 @@ static int msg_reset_stats(struct dm_target *ti, unsigned int argc,
 		atomic64_set(&ctx->io.total_write_bytes[i], 0);
 		atomic64_set(&ctx->io.total_read_ops[i], 0);
 		atomic64_set(&ctx->io.total_write_ops[i], 0);
-		atomic64_set(&ctx->io.total_latency_ns[i], 0);
-		atomic64_set(&ctx->io.total_completions[i], 0);
-		atomic64_set(&ctx->io.interval_completions[i], 0);
 	}
 	snprintf(result, maxlen, "stats reset");
 	return 0;
@@ -122,9 +119,6 @@ static int msg_reset_io_stats(struct dm_target *ti, unsigned int argc,
 		atomic64_set(&ctx->io.total_write_bytes[i], 0);
 		atomic64_set(&ctx->io.total_read_ops[i], 0);
 		atomic64_set(&ctx->io.total_write_ops[i], 0);
-		atomic64_set(&ctx->io.total_latency_ns[i], 0);
-		atomic64_set(&ctx->io.total_completions[i], 0);
-		atomic64_set(&ctx->io.interval_completions[i], 0);
 	}
 	pr_info("tieredvol: IO stats reset\n");
 	return 0;

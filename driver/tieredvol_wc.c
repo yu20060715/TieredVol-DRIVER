@@ -126,8 +126,6 @@ void tv_wc_flush(struct tieredvol_ctx *ctx)
 		bio->bi_iter.bi_sector = cur.offset >> TV_SECTOR_SHIFT;
 		atomic_add(bio->bi_iter.bi_size,
 			   &ctx->io.in_flight_bytes[cur.disk]);
-		tv_ts_submit(cur.disk, cur.offset >> TV_SECTOR_SHIFT,
-			     bio->bi_iter.bi_size);
 		atomic64_add(bio->bi_iter.bi_size,
 			     &ctx->io.total_write_bytes[cur.disk]);
 		atomic64_inc(&ctx->io.total_write_ops[cur.disk]);

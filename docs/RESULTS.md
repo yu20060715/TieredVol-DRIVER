@@ -308,6 +308,22 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 - **分布**：tv_s2 併發寫 8G 後計數器 `A=7363100672 B=1226833920` = **6:1 精確**（0 誤差），config 8/13 更新後權重語義正確。
 - `make test`：**267/267 assertions、5/5 suites**（49+25+14+170+9）；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /dev/nvme1n1 /dev/nvme0n1 /dev/sdc /dev/sdb`（4 碟展開清單，順序與 config disk0–3 一致）== create 參數 `0 41943040 tieredvol /home/yu/tv_s4.conf`。
 
+### 8/13 weight-borrowing 原型實機驗證（`tv_s4_borrow.conf`，權重 6:1:1:1）
+
+設計：`[runtime] borrow_enable=1 borrow_watermark_kb=256 borrow_area_mb=2048,0,0,0`。慢碟份額（水位以上）的寫入借到快碟 A 尾端保留區（2 GB），借出 block 記錄在持久化 overlay（`<config>.borrow`，magic TVBR），重載後映射恢復。與 mirror 互斥、borrow on 時停用 WC。
+
+- **實機關鍵發現**：本機 NVMe 全部 `max_sectors_per_request=256`（128 KB）→ WRITE bio 恆為 128 KB，舊的 1 MB chunk 對齊條件永不觸發（`n_borrowed=0`）。借出粒度改為 **128 KB block（= chunk_size/8）**，依 block index 查表/借出。
+- **修復 1（save 死鎖）**：`tv_borrow_save` 曾在 spinlock 內 `filp_open`/`kernel_write`（sleep-while-atomic）→ `dmsetup remove` 卡死整機。改為鎖內 snapshot + 鎖外寫檔，每次 save 正常、無卡死。
+- **修復 2（混合單位）**：lookup/redirect 曾把 byte 單位的 `logical % block_size` 直接加進 sector 單位的 `dst_sector` 再 `>>9` → 借出寫/讀錯位、verify 全 fail。修正後（offset 先 `>>9`、sector 項不移位）verify 全過。
+- **驗收（同卷 6:1:1:1）**：
+  - 寫入 verify=crc32c：64 M / 256 M / 1 G / 4 G **全部 err=0**（借出 26/643/2523/10041 blocks）。
+  - 讀 verify_only：256 M/1 G/4 G **全部 err=0**。
+  - 吞吐：4 G 寫 **2346 MB/s**、讀 **3165 MB/s**；1 G 讀 3130；256 M 寫 2237。
+  - 持久化：remove 觸發 save（10041 blocks, 3932176 B）→ rmmod/insmod → 重建卷載入 10041 blocks → 4 G verify 讀 **err=0**，映射正確恢復。
+  - 全程 dmesg 無 hung / irq-disabled / panic / oops。
+- **static 對比（`tv_s4_static.conf`，borrow_enable=0，同拓撲）**：4 G 寫 2275、讀 3529 MB/s。此配置下 borrow 寫 +3%、讀 -10%（讀時查表開銷 + 讀集中單碟）；瓶頸由 D 轉 A，增益受快碟 A solo 上限限制——borrow 在「快碟有富餘」的拓撲收益更大。
+- **ADAPTIVE 已移除**（`tieredvol_map.c`/`tieredvol_log.c` 自適應選碟與 decay 統計全刪），現役 `policy=0` static + borrow。
+
 ---
 
 ## 結論
@@ -325,6 +341,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 11. **加權吞吐由瓶頸碟決定（非原生總和）**：總吞吐 = `min(solo_i × 總權重/weight_i)`。S4 三次量測對模型 ±4%（8/12 +2.6%、8/13 +3.4%/+0.2%）；sdb 衰退（346→216）使 S4 瓶頸由 A 轉移 D，精確解釋 S4 從 3091 降至 1949。
 12. **權重-速比失配 = 加權吞吐上限的根因（8/13 晚實驗證實）**：6:1:1:1（瓶頸 D）1966 → 10:2:2:1（碟速比，瓶頸 A）2673，**提升 36%**、分布仍精確；`set_policy adaptive` 現狀 -44% 且 C/D 失衡，自適應選碟需加強或改採權重平衡。
 13. **auto-weight 工具有效（`scripts/auto_weight.sh`）**：自動測速設權重 10:2:2:1 後 S4 達 **2954**（對模型 -4.5%、分布精確），較 6:1:1:1 **+50%**；權重基準用 8G 平均 solo（非瞬間峰值）避免 SLC 陷阱；附 config 清理（crc32/badmap/policy）。
+14. **weight-borrowing 正確性成立（8/13 驗收）**：128 KB block 粒度下借出統計與持久化正確，64 M–4 G 寫入/讀回 verify 全過、reload 後映射恢復（4 G verify err=0）；修復兩根因（save spinlock 死鎖、混合單位位移）。6:1:1:1 下寫 2346（vs static 2275）、讀 3165，瓶頸轉移後增益受限於快碟 solo，快碟有富餘的拓撲收益更大。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`、`tv_mir.conf`
 （8/13 拓撲：disk0=nvme1n1, disk1=nvme0n1, disk2=sdc, disk3=sdb；8/12 舊拓撲為 disk0=nvme0n1, disk1=nvme1n1）。

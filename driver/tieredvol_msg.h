@@ -25,7 +25,7 @@ struct tv_msg_handler {
 extern const struct tv_msg_handler tv_msg_stats[];
 extern const int tv_msg_stats_count;
 
-/* Policy / adaptive / wear handlers (tieredvol_msg_policy.c) */
+/* Policy / borrow handlers (tieredvol_msg_policy.c) */
 extern const struct tv_msg_handler tv_msg_policy[];
 extern const int tv_msg_policy_count;
 

@@ -2,8 +2,8 @@
  * test_map.c — Unit tests for kernel mapping logic (tieredvol_map.c)
  *
  * Re-implements kernel mapping functions as pure C for userspace testing.
- * Tests tv_find_segment, tv_map_logical, tv_map_logical_adaptive,
- * and tv_map_logical_random with 168 assertions.
+ * Tests tv_find_segment, tv_map_logical, weight-borrowing redirects,
+ * and tv_map_logical_random.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -126,105 +126,6 @@ static struct tieredvol_map tv_map_logical(u64 logical,
 			     chunk_size +
 			     (offset_in - boundary[disk_idx]);
 		map.length = (u64)seg->weight[disk_idx] * chunk_size;
-
-		return map;
-	}
-}
-
-static struct tieredvol_map tv_map_logical_adaptive(u64 logical,
-						    struct tieredvol_metadata *meta,
-						    u64 *ema_load, bool *stale,
-						    bool *degraded,
-						    int ndisks,
-						    atomic64_t *total_write_bytes,
-						    u32 wear_bias,
-						    u32 chunk_size,
-						    u64 *ema_latency_ns)
-{
-	struct tieredvol_map err = { .disk = -1, .offset = 0, .length = 0 };
-	int seg_idx;
-	const struct tieredvol_segment *seg;
-	u64 stripe_no, offset_in;
-	int best_disk = -1;
-	u64 best_score = (u64)-1;
-	u64 total_writes = 0;
-	int i;
-
-	if (!meta || meta->segment_count == 0)
-		return err;
-
-	seg_idx = tv_find_segment(logical, meta);
-	if (seg_idx < 0)
-		return err;
-
-	seg = &meta->segments[seg_idx];
-
-	if (seg->disk_count == 0 || seg->disk_count > TV_MAX_DISKS)
-		return err;
-
-	stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
-	offset_in = (logical - seg->logical_begin) % seg->stripe_size;
-
-	if (wear_bias > 0 && total_write_bytes) {
-		for (i = 0; i < ndisks; i++)
-			total_writes += atomic64_read(&total_write_bytes[i]);
-	}
-
-	for (i = 0; i < (int)seg->disk_count; i++) {
-		u32 d = seg->disk_index[i];
-		u64 score;
-
-		if (d >= (u32)ndisks)
-			continue;
-		if (stale[d])
-			continue;
-		if (degraded && degraded[d])
-			continue;
-
-		score = ema_load[d];
-		if (ema_latency_ns)
-			score += ema_latency_ns[d] / 1000000;
-		if (wear_bias > 0 && total_writes > 0 && total_write_bytes)
-			score += wear_bias * atomic64_read(&total_write_bytes[d]) / total_writes;
-
-		if (score < best_score) {
-			best_score = score;
-			best_disk = i;
-		}
-	}
-
-	if (best_disk < 0) {
-		for (i = 0; i < (int)seg->disk_count; i++) {
-			u32 d = seg->disk_index[i];
-			if (d >= (u32)ndisks) continue;
-			if (stale && stale[d]) continue;
-			if (degraded && degraded[d]) continue;
-			best_disk = i;
-			break;
-		}
-	}
-	if (best_disk < 0) {
-		for (i = 0; i < (int)seg->disk_count; i++) {
-			u32 d = seg->disk_index[i];
-			if (d < (u32)ndisks) {
-				best_disk = i;
-				break;
-			}
-		}
-	}
-
-	if (best_disk < 0)
-		return err;
-
-	{
-		struct tieredvol_map map;
-		u64 disk_chunk = (u64)seg->weight[best_disk] * chunk_size;
-
-		map.disk = (int)seg->disk_index[best_disk];
-		map.seg_idx = seg_idx;
-		map.offset = stripe_no * disk_chunk +
-			     (offset_in % disk_chunk);
-		map.length = disk_chunk;
 
 		return map;
 	}
@@ -525,147 +426,150 @@ static void test_map_logical_offset_in_chunk(void) {
 }
 
 /* ================================================================== */
-/*  TEST: tv_map_logical_adaptive                                      */
+/*  TEST: weight-borrowing (aligned redirect + per-chunk table)        */
 /* ================================================================== */
 
-static void test_adaptive_basic(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: basic\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 2, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].stripe_size = 2 * 1048576;
+#define BTEST_CHUNK 1048576U
 
-	u64 ema_load[2] = { 10, 50 };
-	bool stale[2] = { false, false };
-	bool degraded[2] = { false, false };
-	u64 latency[2] = { 1000000, 5000000 };
+struct tb_entry {
+	bool valid;
+	int dst;
+	uint64_t sector;
+};
 
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, &meta, ema_load, stale, degraded, 2, NULL, 0, 1048576, latency);
-	check(m.disk == 0, "adaptive picks lower-score disk (disk 0)");
-	check(m.seg_idx == 0, "seg_idx = 0");
+static struct tb_entry tb_entries[64];
+static uint32_t tb_used[4];
+static const uint64_t tb_base[4] = {
+	0x100000000ULL, 0x200000000ULL, 0x300000000ULL, 0x400000000ULL
+};
+
+/* Userspace model of tv_borrow_redirect: chunk-aligned, all-or-none. */
+static bool tb_redirect(int src, uint64_t logical, uint64_t length,
+			int *dst, uint64_t *sec)
+{
+	uint64_t c = logical / BTEST_CHUNK;
+	uint32_t n = (uint32_t)(length / BTEST_CHUNK);
+	uint32_t need = 0;
+	int d;
+	uint32_t i;
+
+	if (length == 0 || length % BTEST_CHUNK != 0)
+		return false;
+	if (logical % BTEST_CHUNK != 0)
+		return false;
+	if (c + n > 64)
+		return false;
+
+	for (i = 0; i < n; i++)
+		if (!tb_entries[c + i].valid)
+			need++;
+
+	if (need == 0) {
+		*dst = tb_entries[c].dst;
+		*sec = tb_entries[c].sector;
+		return true;
+	}
+
+	d = (src == 0) ? 1 : 0;
+	if (tb_used[d] + need > 16)
+		return false; /* borrow area full → keep original disk */
+
+	for (i = 0; i < n; i++) {
+		if (tb_entries[c + i].valid)
+			continue;
+		tb_entries[c + i].valid = true;
+		tb_entries[c + i].dst = d;
+		tb_entries[c + i].sector =
+			tb_base[d] + ((uint64_t)tb_used[d] * 2);
+		tb_used[d]++;
+	}
+	*dst = d;
+	*sec = tb_base[d] + ((uint64_t)(tb_used[d] - need) * 2);
+	return true;
 }
 
-static void test_adaptive_stale_skip(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: skip stale\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 2, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].stripe_size = 2 * 1048576;
+static bool tb_lookup(uint64_t logical, int *dst, uint64_t *sec)
+{
+	uint64_t c = logical / BTEST_CHUNK;
 
-	u64 ema_load[2] = { 0, 0 };
-	bool stale[2] = { true, false };
-	bool degraded[2] = { false, false };
-
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, &meta, ema_load, stale, degraded, 2, NULL, 0, 1048576, NULL);
-	check(m.disk == 1, "stale disk 0 skipped → disk 1");
+	if (c >= 64 || !tb_entries[c].valid)
+		return false;
+	*dst = tb_entries[c].dst;
+	*sec = tb_entries[c].sector;
+	return true;
 }
 
-static void test_adaptive_degraded_skip(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: skip degraded\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 2, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].stripe_size = 2 * 1048576;
+static void test_borrow_alignment(void) {
+	printf("\n[TEST] borrow: chunk-alignment gates redirect\n");
+	int dst;
+	uint64_t sec;
 
-	u64 ema_load[2] = { 0, 0 };
-	bool stale[2] = { false, false };
-	bool degraded[2] = { false, true };
-
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, &meta, ema_load, stale, degraded, 2, NULL, 0, 1048576, NULL);
-	check(m.disk == 0, "degraded disk 1 skipped → disk 0");
+	/* Unaligned offset: no borrow, keep original placement */
+	memset(tb_entries, 0, sizeof(tb_entries));
+	memset(tb_used, 0, sizeof(tb_used));
+	check(!tb_redirect(3, BTEST_CHUNK / 2, BTEST_CHUNK, &dst, &sec),
+	      "mid-chunk offset → no borrow");
+	check(!tb_redirect(3, 0, BTEST_CHUNK + BTEST_CHUNK / 2, &dst, &sec),
+	      "non-chunk-multiple length → no borrow");
+	check(tb_redirect(3, BTEST_CHUNK * 2, BTEST_CHUNK, &dst, &sec),
+	      "aligned 1-chunk write → borrow OK");
+	check(dst != 3, "borrowed chunk moved off the slow disk");
 }
 
-static void test_adaptive_all_stale_fallback(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: all stale → accept any\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 2, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].stripe_size = 2 * 1048576;
+static void test_borrow_lookup_reuse(void) {
+	printf("\n[TEST] borrow: lookup resolves same dst, re-write reuses slot\n");
+	int dst;
+	uint64_t sec, sec2;
 
-	u64 ema_load[2] = { 0, 0 };
-	bool stale[2] = { true, true };
-	bool degraded[2] = { false, false };
+	memset(tb_entries, 0, sizeof(tb_entries));
+	memset(tb_used, 0, sizeof(tb_used));
+	check(tb_redirect(3, 0, BTEST_CHUNK, &dst, &sec),
+	      "first write borrows chunk 0");
+	check(dst != 3, "chunk 0 on borrowed disk");
+	check(tb_lookup(0, &dst, &sec2), "lookup finds chunk 0");
+	check(dst != 3 && sec2 == sec, "lookup returns recorded destination");
 
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, &meta, ema_load, stale, degraded, 2, NULL, 0, 1048576, NULL);
-	check(m.disk >= 0, "all stale → still returns a disk");
+	/* Re-write of the same chunk must reuse the slot, not grow used[] */
+	{
+		uint32_t used_before = tb_used[dst];
+
+		check(tb_redirect(3, 0, BTEST_CHUNK, &dst, &sec),
+		      "re-write of borrowed chunk resolves");
+		check(tb_used[dst] == used_before,
+		      "re-write does not allocate a new slot");
+	}
 }
 
-static void test_adaptive_wear_penalty(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: wear penalty\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 2, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].stripe_size = 2 * 1048576;
+static void test_borrow_alloc_none(void) {
+	printf("\n[TEST] borrow: all-or-none across a multi-chunk range\n");
+	int dst;
+	uint64_t sec;
 
-	u64 ema_load[2] = { 0, 0 };
-	bool stale[2] = { false, false };
-	bool degraded[2] = { false, false };
-	atomic64_t writes[2];
-	atomic64_set(&writes[0], 1000);
-	atomic64_set(&writes[1], 0);
+	memset(tb_entries, 0, sizeof(tb_entries));
+	memset(tb_used, 0, sizeof(tb_used));
 
-	/* disk0 has high wear, disk1 has none → prefer disk1 */
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, &meta, ema_load, stale, degraded, 2, writes, 10, 1048576, NULL);
-	check(m.disk == 1, "wear penalty → prefers disk 1 (low wear)");
-}
+	/* Fill the borrow area for disk 0 fully (16 slots). */
+	{
+		int i;
 
-static void test_adaptive_null(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: NULL/empty\n");
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, NULL, NULL, NULL, NULL, 0, NULL, 0, 1048576, NULL);
-	check(m.disk == -1, "NULL meta → disk -1");
+		for (i = 0; i < 16; i++)
+			check(tb_redirect(1, (uint64_t)i * BTEST_CHUNK,
+					  BTEST_CHUNK, &dst, &sec),
+			      "prefill slot");
+	}
+	/* src=1 (borrows into 0) is now full: a 2-chunk request must fail
+	 * atomically and leave the table untouched. */
+	{
+		uint64_t c = 100;
+		uint32_t before = tb_used[0];
 
-	struct tieredvol_metadata meta;
-	memset(&meta, 0, sizeof(meta));
-	m = tv_map_logical_adaptive(
-		0, &meta, NULL, NULL, NULL, 0, NULL, 0, 1048576, NULL);
-	check(m.disk == -1, "0 segments → disk -1");
-}
-
-static void test_adaptive_three_disks(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: 3 disks\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 3, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].weight[2] = 1;
-	meta.segments[0].stripe_size = 3 * 1048576;
-
-	u64 ema_load[3] = { 100, 10, 50 };
-	bool stale[3] = { false, false, false };
-	bool degraded[3] = { false, false, false };
-
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, &meta, ema_load, stale, degraded, 3, NULL, 0, 1048576, NULL);
-	check(m.disk == 1, "3 disks: lowest load (disk 1) wins");
-}
-
-static void test_adaptive_latency_influence(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: latency influence\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 2, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].stripe_size = 2 * 1048576;
-
-	u64 ema_load[2] = { 0, 0 };
-	bool stale[2] = { false, false };
-	bool degraded[2] = { false, false };
-	u64 latency[2] = { 1000000, 10000000 };  /* disk0: 1ms, disk1: 10ms */
-
-	struct tieredvol_map m = tv_map_logical_adaptive(
-		0, &meta, ema_load, stale, degraded, 2, NULL, 0, 1048576, latency);
-	check(m.disk == 0, "lower latency → disk 0 wins");
+		check(!tb_redirect(1, c * BTEST_CHUNK, 2 * BTEST_CHUNK,
+				   &dst, &sec),
+		      "no space → all-or-none reject");
+		check(tb_used[0] == before, "no partial allocation on reject");
+		check(!tb_lookup(c * BTEST_CHUNK, &dst, &sec),
+		      "rejected chunks not recorded");
+	}
 }
 
 /* ================================================================== */
@@ -802,23 +706,6 @@ static void test_edge_stripe_multiple(void) {
 /*  MAIN                                                               */
 /* ================================================================== */
 
-static void test_adaptive_all_degraded(void) {
-	printf("\n[TEST] tv_map_logical_adaptive: all degraded -> fallback\n");
-	struct tieredvol_metadata meta;
-	make_meta_1seg(&meta, 2, 1048576);
-	meta.segments[0].weight[0] = 1;
-	meta.segments[0].weight[1] = 1;
-	meta.segments[0].stripe_size = 2 * 1048576;
-
-	u64 ema_load[2] = { 0, 0 };
-	bool stale[2] = { false, false };
-	bool degraded[2] = { true, true };
-
-	struct tieredvol_map m = tv_map_logical_adaptive(
-			0, &meta, ema_load, stale, degraded, 2, NULL, 0, 1048576, NULL);
-	check(m.disk >= 0, "all degraded -> still returns a disk (fallback)");
-}
-
 static void test_random_coverage(void) {
 	printf("\n[TEST] tv_map_logical_random: coverage\n");
 	struct tieredvol_metadata meta;
@@ -861,15 +748,10 @@ int main(void) {
 	test_map_logical_weight_16();
 	test_map_logical_offset_in_chunk();
 
-	/* tv_map_logical_adaptive */
-	test_adaptive_basic();
-	test_adaptive_stale_skip();
-	test_adaptive_degraded_skip();
-	test_adaptive_all_stale_fallback();
-	test_adaptive_wear_penalty();
-	test_adaptive_null();
-	test_adaptive_three_disks();
-	test_adaptive_latency_influence();
+	/* weight-borrowing */
+	test_borrow_alignment();
+	test_borrow_lookup_reuse();
+	test_borrow_alloc_none();
 
 	/* tv_map_logical_random */
 	test_random_basic();
@@ -884,7 +766,6 @@ int main(void) {
 	test_edge_stripe_multiple();
 
 	/* Additional edge cases */
-	test_adaptive_all_degraded();
 	test_random_coverage();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);

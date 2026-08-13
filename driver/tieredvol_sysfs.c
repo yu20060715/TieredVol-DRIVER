@@ -26,130 +26,10 @@ static ssize_t policy_show(struct kobject *kobj, struct kobj_attribute *attr,
 		return -ENODEV;
 	}
 	ret = sysfs_emit(buf, "%s\n",
-			  ctx->adaptive.policy == TV_POLICY_ADAPTIVE ?
-				  "adaptive" :
-			  ctx->adaptive.policy == TV_POLICY_RANDOM ?
-				  "random" :
-				  "static");
+			  ctx->policy == TV_POLICY_RANDOM ?
+				  "random" : "static");
 	rcu_read_unlock();
 	return ret;
-}
-
-static ssize_t stale_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
-			      char *buf)
-{
-	struct tieredvol_ctx *ctx;
-	ssize_t ret;
-
-	rcu_read_lock();
-	ctx = rcu_dereference(tv_active_ctx);
-	if (!ctx) {
-		rcu_read_unlock();
-		return -ENODEV;
-	}
-	ret = sysfs_emit(buf, "%llu\n",
-			  ctx->adaptive.stale_after_ns / 1000000ULL);
-	rcu_read_unlock();
-	return ret;
-}
-
-static ssize_t stale_ms_store(struct kobject *kobj, struct kobj_attribute *attr,
-			       const char *buf, size_t count)
-{
-	struct tieredvol_ctx *ctx;
-	u32 ms;
-
-	rcu_read_lock();
-	ctx = rcu_dereference(tv_active_ctx);
-	if (!ctx) {
-		rcu_read_unlock();
-		return -ENODEV;
-	}
-	if (kstrtou32(buf, 10, &ms)) {
-		rcu_read_unlock();
-		return -EINVAL;
-	}
-	ctx->adaptive.stale_after_ns = (u64)ms * 1000000ULL;
-	rcu_read_unlock();
-	return count;
-}
-
-static ssize_t wear_bias_show(struct kobject *kobj, struct kobj_attribute *attr,
-			       char *buf)
-{
-	struct tieredvol_ctx *ctx;
-	ssize_t ret;
-
-	rcu_read_lock();
-	ctx = rcu_dereference(tv_active_ctx);
-	if (!ctx) {
-		rcu_read_unlock();
-		return -ENODEV;
-	}
-	ret = sysfs_emit(buf, "%u\n", ctx->adaptive.wear_bias);
-	rcu_read_unlock();
-	return ret;
-}
-
-static ssize_t wear_bias_store(struct kobject *kobj,
-			       struct kobj_attribute *attr, const char *buf,
-			       size_t count)
-{
-	struct tieredvol_ctx *ctx;
-	u32 bias;
-
-	rcu_read_lock();
-	ctx = rcu_dereference(tv_active_ctx);
-	if (!ctx) {
-		rcu_read_unlock();
-		return -ENODEV;
-	}
-	if (kstrtou32(buf, 10, &bias) || bias > 1024) {
-		rcu_read_unlock();
-		return -EINVAL;
-	}
-	ctx->adaptive.wear_bias = bias;
-	rcu_read_unlock();
-	return count;
-}
-
-static ssize_t ema_shift_show(struct kobject *kobj, struct kobj_attribute *attr,
-			       char *buf)
-{
-	struct tieredvol_ctx *ctx;
-	ssize_t ret;
-
-	rcu_read_lock();
-	ctx = rcu_dereference(tv_active_ctx);
-	if (!ctx) {
-		rcu_read_unlock();
-		return -ENODEV;
-	}
-	ret = sysfs_emit(buf, "%u\n", ctx->adaptive.ema_weight_shift);
-	rcu_read_unlock();
-	return ret;
-}
-
-static ssize_t ema_shift_store(struct kobject *kobj,
-			       struct kobj_attribute *attr, const char *buf,
-			       size_t count)
-{
-	struct tieredvol_ctx *ctx;
-	u32 shift;
-
-	rcu_read_lock();
-	ctx = rcu_dereference(tv_active_ctx);
-	if (!ctx) {
-		rcu_read_unlock();
-		return -ENODEV;
-	}
-	if (kstrtou32(buf, 10, &shift) || shift > 10) {
-		rcu_read_unlock();
-		return -EINVAL;
-	}
-	ctx->adaptive.ema_weight_shift = shift;
-	rcu_read_unlock();
-	return count;
 }
 
 static ssize_t loglevel_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -200,8 +80,10 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 
 	off += sysfs_emit_at(buf, off,
-			     "policy=%d mirror=%llu/%llu err=%llu\n",
-			     ctx->adaptive.policy,
+			     "policy=%d borrow=%d/%llu mirror=%llu/%llu err=%llu\n",
+			     ctx->policy,
+			     ctx->borrow.enabled,
+			     (unsigned long long)ctx->borrow.n_borrowed,
 			     atomic64_read(&ctx->mirror.mirror_write_ops),
 			     atomic64_read(&ctx->mirror.mirror_write_bytes),
 			     atomic64_read(&ctx->mirror.mirror_errors));
@@ -209,7 +91,7 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 	for (i = 0; i < ctx->ndisks; i++) {
 		off += sysfs_emit_at(
 			buf, off,
-			"%s: err=%d %s rd=%llu/%llu wr=%llu/%llu stale=%d ema=%llu\n",
+			"%s: err=%d %s rd=%llu/%llu wr=%llu/%llu bw=%llu\n",
 			ctx->meta.disk_names[i],
 			atomic_read(&ctx->deg.error_count[i]),
 			ctx->deg.degraded[i] ? "DEGRADED" : "active",
@@ -217,26 +99,19 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 			atomic64_read(&ctx->io.total_read_bytes[i]),
 			atomic64_read(&ctx->io.total_write_ops[i]),
 			atomic64_read(&ctx->io.total_write_bytes[i]),
-			ctx->adaptive.stale[i],
-			ctx->adaptive.ema_load[i]);
+			atomic64_read(&ctx->borrow.borrow_write_bytes[i]));
 	}
 	rcu_read_unlock();
 	return off;
 }
 
 static struct kobj_attribute policy_attr = __ATTR_RO(policy);
-static struct kobj_attribute stale_ms_attr = __ATTR_RW(stale_ms);
-static struct kobj_attribute wear_bias_attr = __ATTR_RW(wear_bias);
-static struct kobj_attribute ema_shift_attr = __ATTR_RW(ema_shift);
 static struct kobj_attribute loglevel_attr = __ATTR_RW(loglevel);
 static struct kobj_attribute disk_count_attr = __ATTR_RO(disk_count);
 static struct kobj_attribute status_attr = __ATTR_RO(status);
 
 static struct attribute *tv_attrs[] = {
 	&policy_attr.attr,
-	&stale_ms_attr.attr,
-	&wear_bias_attr.attr,
-	&ema_shift_attr.attr,
 	&loglevel_attr.attr,
 	&disk_count_attr.attr,
 	&status_attr.attr,
