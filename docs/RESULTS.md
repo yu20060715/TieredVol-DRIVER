@@ -201,9 +201,9 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ---
 
-## 2026-08-13 碟位再交換 · 多卷併發（P3/P4）
+## 2026-08-13 碟位再交換 · 多卷併發（P3/P4）*(8/13 午配置：disk0=nvme1n1=WD；8/13 晚重啟後已回到 disk0=nvme0n1=WD，見下節「8/13 晚實機回歸」)*
 
-### 拓撲更新與環境
+### 拓撲更新與環境（8/13 午）
 
 - **8/13 重啟後快/慢碟再交換**：`nvme1n1`=WD SN750（快，權重 6）、`nvme0n1`=P3 Plus（慢，權重 1）。config 已更新（disk0=nvme1n1），權重鎖定 **6:1:1:1** 不變。
 - 實驗環境確認：全程同一 module build（8/12 17:01）、碟位經 smartctl 驗證無變動、分布計數器 `6:1` 精確（`A=7363100672 B=1226833920`）。
@@ -308,7 +308,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 - 附註：config 檔經 driver 建卷後會寫回 `crc32=`/`badmap_*`/`[runtime] policy`；改檔後須同步清理（本工具已內建），否則 CRC mismatch 建卷 EIO。
 
 - **分布**：tv_s2 併發寫 8G 後計數器 `A=7363100672 B=1226833920` = **6:1 精確**（0 誤差），config 8/13 更新後權重語義正確。
-- `make test`：**267/267 assertions、5/5 suites**（49+25+14+170+9）；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /dev/nvme1n1 /dev/nvme0n1 /dev/sdc /dev/sdb`（4 碟展開清單，順序與 config disk0–3 一致）== create 參數 `0 41943040 tieredvol /home/yu/tv_s4.conf`。
+- `make test`：**267/267 assertions、5/5 suites**（49+25+14+170+9）；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /dev/nvme1n1 /dev/nvme0n1 /dev/sdc /dev/sdb`（4 碟展開清單，順序與 config disk0–3 一致）== create 參數 `0 41943040 tieredvol /home/yu/tv_s4.conf`。*(8/13 上午快照；當日稍後加入 128KB borrow 語意 + `.borrow` v2 格式 + kernel 源碼測試層後為 **301/301、6/6 suites**，見 TEST_PLAN「測試層架構」)*
 
 ### 8/13 weight-borrowing 原型實機驗證（`tv_s4_borrow.conf`，權重 6:1:1:1）
 
@@ -325,6 +325,19 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
   - 全程 dmesg 無 hung / irq-disabled / panic / oops。
 - **static 對比（`tv_s4_static.conf`，borrow_enable=0，同拓撲）**：4 G 寫 2275、讀 3529 MB/s。此配置下 borrow 寫 +3%、讀 -10%（讀時查表開銷 + 讀集中單碟）；瓶頸由 D 轉 A，增益受快碟 A solo 上限限制——borrow 在「快碟有富餘」的拓撲收益更大。
 - **ADAPTIVE 已移除**（`tieredvol_map.c`/`tieredvol_log.c` 自適應選碟與 decay 統計全刪），現役 `policy=0` static + borrow。
+
+### 8/13 晚實機回歸（碟位回到 nvme0n1=WD 快，權重 6:1:1:1）
+
+**`scripts/msg_probe.sh` 40/40 PASS（19:23，`/home/yu/msg_probe_0813_1923.log`）**：移除 adaptive/wear 後重寫之現行 handler 版——sysfs 4 項（policy/status/disk_count/loglevel）、policy/borrow 7 項（set_policy/set_seg_policy/show_stats/status/show_borrow/borrow_off/borrow_on）、stats/config 8 項、mirror/degraded/badmap 10 項、rebuild 7 項（start/show/EBUSY 拒絕/stop/idle/rebuild_badmap/32M 完整完成）、remove/rmmod 2 項。29 個現行 message handler 全覆蓋。
+
+**`scripts/borrow_verify.sh` 15/15 PASS（19:50，`/home/yu/borrow_verify_0813_1950.log`）**：`CFG=/home/yu/tv_s4_borrow.conf SIZE=256MB`。
+- 寫+讀 verify err=0；`dmsetup status` 顯示 **`borrow=1/644`**（借出 644 blocks = 644×128KB，run-to-run 因水位時序略有差異）。
+- `borrow_off` 後讀 verify 仍 err=0（已借 block 繼續解析至借用區）；`borrow_on` 生效。
+- remove 存 `.borrow` = **2621456 B**（=16B header + 163840 entries×16B，20GiB 卷 full table）；重建載入 → reload verify err=0。
+- 腳本強制 assert：`n_borrowed>0`（防 64M 假陽性）、`.borrow` full-table entries>0、write/borrow 期間與 reload 後 `dmesg bad=0`。
+- `dmesg bad=0`（無 warning/oops/hung/borrow fail）。
+
+> 註：borrow_verify.sh 第一次 64M run（19:23）因順序寫不足以超過 watermark 觸發借出而 FAIL（6/7，`n_borrowed=0`、無 .borrow）——此為**測試設計修正**（預設 SIZE 改 256MB + 強制 `n_borrowed>0` assert）而非 driver bug。
 
 ---
 
@@ -346,4 +359,4 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 14. **weight-borrowing 正確性成立（8/13 驗收）**：128 KB block 粒度下借出統計與持久化正確，64 M–4 G 寫入/讀回 verify 全過、reload 後映射恢復（4 G verify err=0）；修復兩根因（save spinlock 死鎖、混合單位位移）。6:1:1:1 下寫 2346（vs static 2275）、讀 3165，瓶頸轉移後增益受限於快碟 solo，快碟有富餘的拓撲收益更大。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`、`tv_mir.conf`
-（8/13 拓撲：disk0=nvme1n1, disk1=nvme0n1, disk2=sdc, disk3=sdb；8/12 舊拓撲為 disk0=nvme0n1, disk1=nvme1n1）。
+（8/13 午：disk0=nvme1n1, disk1=nvme0n1, disk2=sdc, disk3=sdb；8/13 晚重啟後回到 8/12 配置 **disk0=nvme0n1, disk1=nvme1n1**（現況）；8/12 舊拓撲亦為 disk0=nvme0n1, disk1=nvme1n1）。

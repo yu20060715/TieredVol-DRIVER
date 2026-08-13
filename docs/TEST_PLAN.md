@@ -18,7 +18,7 @@ tests/test_stripe_kernel.c # 直接 #include driver/tieredvol_stripe.c 於 users
 
 > kernel 源碼以 mock 頭編譯進 userspace 的可行性/成本/限制見
 > [KERNEL_TESTS.md](KERNEL_TESTS.md)；實機回歸腳本 `scripts/msg_probe.sh`（40 項）、
-> `scripts/borrow_verify.sh`（11 項）。
+> `scripts/borrow_verify.sh`（15 項，含 `n_borrowed>0` 與 dmesg 潔淨 assert）。
 
 ---
 

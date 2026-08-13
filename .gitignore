@@ -19,6 +19,10 @@ driver/modules.order
 driver/.module-common.o
 driver/..module-common.o.cmd
 
+# fio verify state files
+local-*.state
+*.verify.state
+
 # Editor / IDE
 .vscode/
 *.swp

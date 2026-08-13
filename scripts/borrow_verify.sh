@@ -39,6 +39,13 @@ fio --name=w --filename=/dev/mapper/$DEV --rw=write --bs=1M --size=$SIZE \
 [ $? -eq 0 ] && pass "write rc=0" || fail "write 失敗"
 STAT=$(dmsetup status $DEV)
 echo "  status: $STAT"
+N_BORROWED=$(echo "$STAT" | grep -oP 'borrow=[01]/\K[0-9]+' | head -1)
+N_BORROWED=${N_BORROWED:-0}
+if [ -n "$N_BORROWED" ] && [ "$N_BORROWED" -gt 0 ]; then
+	pass "borrow 已觸發 (n_borrowed=$N_BORROWED)"
+else
+	fail "borrow 未觸發 (status=$STAT)"
+fi
 
 echo "== 3. read verify（借出資料正確） =="
 fio --name=r --filename=/dev/mapper/$DEV --rw=read --bs=1M --size=$SIZE \
@@ -53,6 +60,8 @@ fio --name=ro --filename=/dev/mapper/$DEV --rw=read --bs=1M --size=$SIZE \
     --direct=1 --ioengine=libaio --iodepth=32 --verify=crc32c --verify_only \
     --output-format=json --output=/tmp/bv_readoff.json >/dev/null 2>&1
 [ $? -eq 0 ] && pass "read after borrow_off rc=0" || fail "read after borrow_off 失敗"
+BAD=$(dmesg | grep -ciE "warning|oops|bug|hung_task|pw_remove MISS|pending-full|borrow.*fail")
+[ "$BAD" -eq 0 ] && pass "write/borrow 期間 dmesg 潔淨" || fail "write/borrow 期間 dmesg 有 bad (bad=$BAD)"
 dmesg -c >/dev/null 2>&1
 dmsetup message $DEV 0 borrow_on >/dev/null
 dmesg | grep -qi "borrow enabled" && pass "borrow_on 生效" || fail "borrow_on 未生效"
@@ -62,6 +71,13 @@ dmesg -c >/dev/null 2>&1
 dmsetup remove $DEV
 dmesg | grep -qi "borrow table saved" && pass ".borrow 存檔訊息" || fail ".borrow 存檔訊息缺"
 [ -f "$CFG.borrow" ] && pass ".borrow 已存 ($(stat -c%s $CFG.borrow) B)" || fail ".borrow 未存"
+if [ -f "$CFG.borrow" ]; then
+	BORROW_ENTRIES=$(( $(stat -c%s "$CFG.borrow") / 16 ))
+	[ "$BORROW_ENTRIES" -gt 0 ] && pass ".borrow 含 entries (full-table $BORROW_ENTRIES entries)" \
+		|| fail ".borrow entries 檢查失敗"
+else
+	fail ".borrow entries 檢查失敗（檔不存在）"
+fi
 
 echo "== 6. 重建 → load → verify_only =="
 echo "0 $S tieredvol $CFG" | dmsetup create $DEV
@@ -73,7 +89,8 @@ fio --name=rl --filename=/dev/mapper/$DEV --rw=read --bs=1M --size=$SIZE \
 
 dmesg | grep -qi "borrow table loaded" && pass "borrow table loaded 訊息" || \
 	( [ "$SIZE" -lt 1048576 ] && pass "小卷可能無 borrow（略）" || fail "borrow table loaded 訊息缺")
-echo "  dmesg bad=$(dmesg_bad)"
+BAD=$(dmesg_bad)
+[ "$BAD" -eq 0 ] && pass "dmesg 潔淨 (bad=0)" || fail "dmesg 有 bad 記號 (bad=$BAD)"
 
 dmsetup remove $DEV 2>/dev/null; true
 rmmod tieredvol 2>/dev/null; true
