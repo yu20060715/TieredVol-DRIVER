@@ -296,6 +296,15 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 > - B 未達冷態模型 3104：瓶頸為 A（吃 10/15 資料），連續寫入（實驗 A 已寫 5.7G）後 A SLC 消耗 → 當下 solo 1782，`1782×15/10=2673` 精確命中「瓶頸碟當下值」。
 > - **ADAPTIVE 選碟現狀不可用**：吞吐 -44%、C/D 幾乎餓死（合計 <2%）。若要走自適應路線需大幅加強 `tv_map_logical_adaptive`；否則以「權重平衡 STATIC」為準。
 
+### 8/13 auto-weight 原型驗收（`scripts/auto_weight.sh`）
+
+工具流程：測各碟 solo 寫（8G，與疊碟同條件）→ 權重 = `max(1, round(solo/min_solo))` → 更新 config `seg0_weight`/`seg0_stripe`，並移除被 driver 存回的 `crc32`/`badmap` 行、強制 `policy=0`（static）。
+
+- `tv_s4_auto.conf`：測速 2077 : 412 : 518 : 216 → 權重 **10:2:2:1**（stripe 15728640），瓶頸模型 3092。
+- **驗收**：S4_auto 寫 8G = **2954 MB/s**（err=0）對模型 **-4.5%** ✓；分布計數器 **10:2:2:1 精確**（5727322112:1145044992:1145044992:572522496）。
+- **對比**：6:1:1:1 = 1966 → auto（10:2:2:1）= 2954，**+50%**；瓶頸從 D（216×9=2007）轉為 B（412×15/2=3092），快碟 A 不再被慢碟權重卡住。
+- 附註：config 檔經 driver 建卷後會寫回 `crc32=`/`badmap_*`/`[runtime] policy`；改檔後須同步清理（本工具已內建），否則 CRC mismatch 建卷 EIO。
+
 - **分布**：tv_s2 併發寫 8G 後計數器 `A=7363100672 B=1226833920` = **6:1 精確**（0 誤差），config 8/13 更新後權重語義正確。
 - `make test`：**267/267 assertions、5/5 suites**（49+25+14+170+9）；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /dev/nvme1n1 /dev/nvme0n1 /dev/sdc /dev/sdb`（4 碟展開清單，順序與 config disk0–3 一致）== create 參數 `0 41943040 tieredvol /home/yu/tv_s4.conf`。
 
@@ -315,6 +324,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 10. **多卷併發**：driver 本身零開銷（不共用碟併發≈孤立，±2%）；共享碟併發代價 40–69% 純為快碟物理爭用（併發和 ≈ 快碟 solo 2064，三組吻合），非 driver 問題。
 11. **加權吞吐由瓶頸碟決定（非原生總和）**：總吞吐 = `min(solo_i × 總權重/weight_i)`。S4 三次量測對模型 ±4%（8/12 +2.6%、8/13 +3.4%/+0.2%）；sdb 衰退（346→216）使 S4 瓶頸由 A 轉移 D，精確解釋 S4 從 3091 降至 1949。
 12. **權重-速比失配 = 加權吞吐上限的根因（8/13 晚實驗證實）**：6:1:1:1（瓶頸 D）1966 → 10:2:2:1（碟速比，瓶頸 A）2673，**提升 36%**、分布仍精確；`set_policy adaptive` 現狀 -44% 且 C/D 失衡，自適應選碟需加強或改採權重平衡。
+13. **auto-weight 工具有效（`scripts/auto_weight.sh`）**：自動測速設權重 10:2:2:1 後 S4 達 **2954**（對模型 -4.5%、分布精確），較 6:1:1:1 **+50%**；權重基準用 8G 平均 solo（非瞬間峰值）避免 SLC 陷阱；附 config 清理（crc32/badmap/policy）。
 
 使用 conf：`/home/yu/tv_s1.conf`、`tv_s2.conf`、`tv_s3.conf`、`tv_s4.conf`、`tv_mir.conf`
 （8/13 拓撲：disk0=nvme1n1, disk1=nvme0n1, disk2=sdc, disk3=sdb；8/12 舊拓撲為 disk0=nvme0n1, disk1=nvme1n1）。
