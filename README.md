@@ -57,7 +57,6 @@ vs LVM（現行拓撲，2026-08-12，同 fio libaio d32，見 `docs/RESULTS.md`�
 - Crash consistency / journaling
 - Metadata recovery
 - Dynamic online rebalancing
-- Write cache (Phase 1 C, enabled via `wc_enabled=1` module_param; enabled by default)
 
 ---
 

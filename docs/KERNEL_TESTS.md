@@ -14,7 +14,7 @@
   只提供 driver 需要**型別形狀**與少量 API 語意。
 - 測試檔 `tests/test_stripe_kernel.c` 直接 `#include "../driver/tieredvol_stripe.c"`
   原始碼（**driver 未做任何修改**），再以 gcc 編譯執行。
-- `make test` 已納入 `test_stripe_kernel`，共 6 個 suites。
+- `make test` 已納入 `test_stripe_kernel`，共 2 個 suites（`test_map` + `test_stripe_kernel`）。
 
 ### Mock 清單與簡化程度
 

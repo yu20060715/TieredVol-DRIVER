@@ -270,21 +270,21 @@ tv_borrow_lookup()（READ 熱路徑）
 
 | Module | Lines | Purpose |
 |--------|------:|---------|
-| `tieredvol_core.c` | 701 | DM lifecycle, map, module init/exit |
+| `tieredvol_core.c` | 762 | DM lifecycle, map, module init/exit |
 | `tieredvol_stripe.c` | 210 | Stripe-split helpers + parallel submit/end_io |
-| `tieredvol_map.c` | 236 | Stripe calculation: static, random |
-| `tieredvol_borrow.c` | 423 | Weight-borrowing: redirect/lookup/持久化 |
-| `tieredvol_meta.c` | 590 | Kernel metadata read/write + CRC32C |
-| `tieredvol_mirror.c` | 634 | Mirror I/O, read retry, rebuild, tieredvol_end_io |
-| `tieredvol_badmap.c` | 149 | Per-disk bad block bitmap + rebuild |
-| `tieredvol_wc.c` | 202 | Write-coalescing buffer + flush, init/destroy ctx (Phase 1 C) |
-| `tieredvol_log.c` | 146 | Log ring buffer |
-| `tieredvol_sysfs.c` | 273 | sysfs interface |
+| `tieredvol_map.c` | 122 | Stripe calculation: static, random |
+| `tieredvol_borrow.c` | 426 | Weight-borrowing: redirect/lookup/持久化 |
+| `tieredvol_meta.c` | 607 | Kernel metadata read/write + CRC32C |
+| `tieredvol_mirror.c` | 706 | Mirror I/O, read retry, rebuild, tieredvol_end_io |
+| `tieredvol_badmap.c` | 144 | Per-disk bad block bitmap + rebuild |
+| `tieredvol_wc.c` | 211 | Write-coalescing buffer + flush, init/destroy ctx (Phase 1 C) |
+| `tieredvol_log.c` | 51 | Log ring buffer |
+| `tieredvol_sysfs.c` | 146 | sysfs interface |
 | `tieredvol_message.c` | 60 | dmsetup message dispatch |
-| `msg_stats.c` | 174 | Statistics handlers |
-| `msg_policy.c` | 121 | Policy/borrow handlers |
-| `msg_mirror.c` | 331 | Mirror/rebuild handlers |
-| `msg_config.c` | 86 | Config/log handlers |
+| `tieredvol_msg_stats.c` | 133 | Statistics handlers |
+| `tieredvol_msg_policy.c` | 121 | Policy/borrow handlers |
+| `tieredvol_msg_mirror.c` | 330 | Mirror/rebuild handlers |
+| `tieredvol_msg_config.c` | 85 | Config/log handlers |
 
 ## vs TieredVol (Userspace)
 
