@@ -5,6 +5,7 @@ test_partition
 test_metadata
 test_map
 test_exec
+test_stripe_kernel
 src/*.o
 
 # Kernel module build artifacts (also in driver/.gitignore)
