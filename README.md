@@ -69,8 +69,8 @@ cd TieredVol-DRIVER
 # Build kernel module + run unit tests
 make module
 
-# Load kernel module
-sudo modprobe tieredvol
+# Load kernel module (若已載入舊 build，先卸載再載入新 build)
+sudo rmmod tieredvol 2>/dev/null; sudo modprobe tieredvol
 
 # Create a weighted volume from a config file (格式見 docs/CONFIG.md)
 # /etc/tieredvol/fastpool.conf 範例（diskN_name 用 stable by-id 路徑，見 docs/CONFIG.md）:
@@ -165,7 +165,7 @@ sudo fio --filename=/dev/mapper/fastpool --rw=read --bs=1M --size=8G \
 sudo dmsetup table fastpool
 sudo dmsetup status fastpool
 
-# 控制/查詢 (dm message)，完整清單見 docs/MAPPING.md
+# 控制/查詢 (dm message)，完整清單見 docs/CONFIG.md
 sudo dmsetup message fastpool 0 "status"
 sudo dmsetup message fastpool 0 "show_stats"
 sudo dmsetup message fastpool 0 "show_log"
@@ -341,8 +341,9 @@ seg0_count=2
 seg0_disks=0,1
 seg0_weight=2,1
 seg0_stripe=3145728
-seg0_mirror=1          # optional: mirror to disk index 1
-seg0_policy=static     # optional: static (default), random
+# mirror 需要「不參與 segment」的第 N+1 顆碟；此例 disk_count=2 無 mirror。
+# 若要 mirror：disk_count=3、seg0_disks=0,1、seg0_mirror=2（非參與碟）。
+seg0_policy=0          # optional: 0=static (default), 2=random, -1=inherit
 ```
 
 ```ini
@@ -364,7 +365,7 @@ borrow_area_mb=2048,0,0,0          # 每碟借用區大小（MB）
 - **System disk cannot be used** — dm returns EBUSY on mounted root partition.
 - **Module instability risk** — A kernel module bug can oops the system.
 - **NVMe write cache should stay ON** — Disabling it causes -21% throughput loss on some hardware.
-- **Virtual devices rejected** — Loop, ram, and zram devices are blocked by both the userspace tool and the kernel module. Only physical block devices (NVMe, SATA, SAS) are allowed.
+- **Virtual devices rejected** — Loop, ram, and zram devices are blocked by the kernel module. Only physical block devices (NVMe, SATA, SAS) are allowed.
 
 ## License
 

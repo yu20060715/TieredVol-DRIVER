@@ -87,6 +87,17 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 
 		if (tv_borrow_lookup(ctx, logical,
 				     &cur.disk, &bs)) {
+			if (cur.disk < 0 || cur.disk >= ctx->ndisks) {
+				pr_err("tieredvol: borrow entry out of range "
+				       "disk=%d sector=%llu\n",
+				       cur.disk,
+				       (unsigned long long)bio->bi_iter.bi_sector);
+				tv_log(TV_LOG_ERR, TV_LOG_IO,
+				       "borrow OOR sec=%llu disk=%d",
+				       bio->bi_iter.bi_sector, cur.disk);
+				bio_io_error(bio);
+				return DM_MAPIO_SUBMITTED;
+			}
 			cur.offset = bs << TV_SECTOR_SHIFT;
 			cur.length = bio->bi_iter.bi_size;
 		}
@@ -188,9 +199,22 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 							    ctx, d_id[ci],
 							    frag_logical,
 							    d_sz[ci],
-							    &d_id[ci], &bs))
+							    &d_id[ci], &bs)) {
+							if (d_id[ci] < 0 ||
+							    d_id[ci] >=
+								    ctx->ndisks) {
+								pr_err("tieredvol: borrow redirect OOR disk=%d\n",
+								       d_id[ci]);
+								tv_log(TV_LOG_ERR, TV_LOG_IO,
+								       "redirect OOR disk=%d sec=%llu",
+								       d_id[ci],
+								       (unsigned long long)frag_logical);
+								bio_io_error(bio);
+								return DM_MAPIO_SUBMITTED;
+							}
 							d_start[ci] =
 								bs << TV_SECTOR_SHIFT;
+						}
 						frag_logical += d_sz[ci];
 					}
 
@@ -214,6 +238,17 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 		if (tv_borrow_redirect(ctx, cur.disk, logical,
 				       bio->bi_iter.bi_size,
 				       &cur.disk, &bs)) {
+			if (cur.disk < 0 || cur.disk >= ctx->ndisks) {
+				pr_err("tieredvol: borrow redirect out of range "
+				       "disk=%d sector=%llu\n",
+				       cur.disk,
+				       (unsigned long long)bio->bi_iter.bi_sector);
+				tv_log(TV_LOG_ERR, TV_LOG_IO,
+				       "redirect OOR sec=%llu disk=%d",
+				       bio->bi_iter.bi_sector, cur.disk);
+				bio_io_error(bio);
+				return DM_MAPIO_SUBMITTED;
+			}
 			cur.offset = bs << TV_SECTOR_SHIFT;
 			borrowed = true;
 		}

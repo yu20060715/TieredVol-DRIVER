@@ -18,7 +18,7 @@ PASS=0; FAIL=0
 pass(){ echo "  [PASS] $1"; PASS=$((PASS+1)); }
 fail(){ echo "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 SECT(){ python3 -c "import configparser;c=configparser.ConfigParser();c.read('$1');print(int(c['weighted_striping']['seg0_end'])//512)"; }
-dmesg_bad(){ dmesg | grep -ciE "warning|oops|bug|hung_task|pw_remove MISS|pending-full|borrow.*fail"; }
+dmesg_bad(){ dmesg | grep -ciE "warning|oops|\\bbug\\b|hung_task|pw_remove MISS|pending-full|borrow.*fail"; }
 
 echo "==== borrow_verify: CFG=$CFG SIZE=$SIZE ===="
 dmsetup remove $DEV 2>/dev/null; true
@@ -60,7 +60,7 @@ fio --name=ro --filename=/dev/mapper/$DEV --rw=read --bs=1M --size=$SIZE \
     --direct=1 --ioengine=libaio --iodepth=32 --verify=crc32c --verify_only \
     --output-format=json --output=/tmp/bv_readoff.json >/dev/null 2>&1
 [ $? -eq 0 ] && pass "read after borrow_off rc=0" || fail "read after borrow_off 失敗"
-BAD=$(dmesg | grep -ciE "warning|oops|bug|hung_task|pw_remove MISS|pending-full|borrow.*fail")
+BAD=$(dmesg | grep -ciE "warning|oops|\\bbug\\b|hung_task|pw_remove MISS|pending-full|borrow.*fail")
 [ "$BAD" -eq 0 ] && pass "write/borrow 期間 dmesg 潔淨" || fail "write/borrow 期間 dmesg 有 bad (bad=$BAD)"
 dmesg -c >/dev/null 2>&1
 dmsetup message $DEV 0 borrow_on >/dev/null

@@ -25,7 +25,8 @@ test: test_map test_stripe_kernel
 		TR=$$((TR+1)); \
 	done; \
 	echo ""; \
-	echo "=== Suites: $$TP/$$TR passed ==="
+	echo "=== Suites: $$TP/$$TR passed ==="; \
+	if [ $$TP -ne $$TR ]; then exit 1; fi
 
 test-full: test
 	@TV_DEVS=$$(ls /dev/mapper/tv_* 2>/dev/null | head -1); \
@@ -42,20 +43,21 @@ lint:
 	@echo "=== Lint: syntax check ===" && \
 	errors=0; \
 	for f in tests/test_map.c tests/test_stripe_kernel.c; do \
-		gcc -fsyntax-only -Wall -Wextra -Wpedantic -std=gnu11 -D_GNU_SOURCE -Icommon -Itests -Itests/mock -Idriver -Wno-unused-parameter $$f 2>&1 || errors=$$((errors+1)); \
+		if ! gcc -fsyntax-only -Wall -Wextra -Wpedantic -std=gnu11 -D_GNU_SOURCE -Icommon -Itests -Itests/mock -Idriver -Wno-unused-parameter $$f 2>&1; then errors=$$((errors+1)); fi; \
 	done; \
-	echo "=== Lint: $$errors file(s) with issues ==="
+	echo "=== Lint: $$errors file(s) with issues ==="; \
+	if [ $$errors -ne 0 ]; then exit 1; fi
 
 # Kernel module targets
 module:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/driver modules
+	make -C /lib/modules/$(shell uname -r)/build M=$(CURDIR)/driver modules
 
 module_install:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/driver modules_install
+	make -C /lib/modules/$(shell uname -r)/build M=$(CURDIR)/driver modules_install
 	depmod -a
 
 module_clean:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/driver clean
+	make -C /lib/modules/$(shell uname -r)/build M=$(CURDIR)/driver clean
 
 # install / uninstall 以 kernel module 為主要產物（需 root）
 install: module_install
@@ -65,10 +67,11 @@ install: module_install
 
 uninstall:
 	rm -f $(DESTDIR)/lib/modules/$(shell uname -r)/extra/tieredvol.ko
+	rm -f $(DESTDIR)/lib/modules/$(shell uname -r)/updates/tieredvol.ko
 	depmod -a
 
 clean:
 	rm -f test_map test_stripe_kernel
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/driver clean
+	make -C /lib/modules/$(shell uname -r)/build M=$(CURDIR)/driver clean
 
 .PHONY: all install uninstall clean test test-full lint module module_install module_clean

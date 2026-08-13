@@ -4,7 +4,7 @@
 # 權重基準 = 8G 連續寫平均（與疊碟實驗同條件，避免 SLC 瞬間冷態峰值）。
 # 權重 = max(1, round(solo/min_solo))；stripe = chunk × 總權重。
 # 前置：sudo、碟空閒（raw 寫會覆蓋碟前段資料）。
-set -u
+set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CFG=${1:?usage: auto_weight.sh <config> [--solo-size=N] [--dry-run]}
 SIZE=8G
@@ -42,7 +42,7 @@ done
 echo "==== 測各碟 solo 寫（${SIZE}） ===="
 SOLO=()
 for d in "${DEVS[@]}"; do
-  dev=${d#/dev/}
+  dev=$(basename "$d")
   fio --name=s --filename="$d" --rw=write --bs=1M --size=$SIZE \
     --direct=1 --ioengine=libaio --iodepth=32 --numjobs=1 --end_fsync=1 \
     --output-format=json --output=/tmp/aw_${dev}.json >/dev/null 2>&1
@@ -63,6 +63,20 @@ import sys
 cfg, chunk = sys.argv[1], int(sys.argv[2])
 dry = sys.argv[3] == '1'
 solo = [float(x) for x in sys.argv[4:]]
+
+_POLY = 0x82F63B78
+_TABLE = []
+for _i in range(256):
+    _c = _i
+    for _ in range(8):
+        _c = (_c >> 1) ^ _POLY if _c & 1 else _c >> 1
+    _TABLE.append(_c & 0xFFFFFFFF)
+
+def crc32c(data: bytes, crc: int = 0) -> int:
+    for b in data:
+        crc = (crc >> 8) ^ _TABLE[(crc ^ b) & 0xFF]
+    return crc & 0xFFFFFFFF
+
 m = min(solo)
 w = [max(1, round(s / m)) for s in solo]
 tot = sum(w)
@@ -83,11 +97,12 @@ for l in lines:
     elif l.startswith('seg0_stripe='):
         out.append(f'seg0_stripe={stripe}')
     elif l.startswith('crc32='):
-        pass  # 移除，driver 無 crc32 行時不驗證
+        pass  # 移除，最後重算
     elif l.startswith('badmap_'):
         pass  # 清空舊壞塊 bitmap
     elif l.startswith('[runtime]'):
         in_runtime = True
+        out.append(l)
     elif in_runtime:
         # 保留 runtime 段的非 policy 行，policy 強制回 static
         if l.startswith('policy='):
@@ -99,7 +114,8 @@ for l in lines:
             out.append(l)
     else:
         out.append(l)
-open(cfg, 'w').write('\n'.join(out) + '\n')
-print(f"已更新 {cfg}（備份 {bak}）：權重 {w}、stripe {stripe}、已移除 crc32/badmap、policy→static")
+prefix = '\n'.join(out) + '\n'
+open(cfg, 'w').write(prefix + f'crc32={crc32c(prefix.encode())}\n')
+print(f"已更新 {cfg}（備份 {bak}）：權重 {w}、stripe {stripe}、crc32 重算、policy→static")
 EOF
 echo done

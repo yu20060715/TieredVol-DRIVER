@@ -27,7 +27,7 @@ MODCONF=/etc/modules-load.d/tieredvol.conf
 SRC_CONF="$(cd "$(dirname "$0")/../configs" && pwd)"   # repo configs/
 REPO="$(cd "$(dirname "$0")/.." && pwd)"               # repo root
 MOD_VER="$(uname -r)"
-MOD_NAME=/lib/modules/$MOD_VER/tieredvol.ko
+MOD_NAME=/lib/modules/$MOD_VER/updates/tieredvol.ko
 
 do_uninstall=0
 for a in "$@"; do
@@ -54,9 +54,9 @@ else
     echo "make module 失敗（需要 kernel headers）" >&2
     exit 1
 fi
+mkdir -p /lib/modules/$MOD_VER/updates /lib/modules/$MOD_VER/extra
 install -m 0644 "$REPO/driver/tieredvol.ko" \
     /lib/modules/$MOD_VER/updates/tieredvol.ko
-mkdir -p /lib/modules/$MOD_VER/extra
 install -m 0644 "$REPO/driver/tieredvol.ko" \
     /lib/modules/$MOD_VER/extra/tieredvol.ko
 depmod -a
@@ -160,10 +160,16 @@ systemctl daemon-reload
 systemctl enable tieredvol.service >/dev/null 2>&1
 echo "[4/5] $UNIT (enabled)"
 
-# 4) active configs（保留既有 *.borrow，砍掉非 active 舊 *.conf）
+# 4) active configs（同步 repo configs/；只移除下架 config 的殘留 .borrow，
+#    現役卷的借出表必須保留）
 mkdir -p "$CONF_DIR"
 find "$CONF_DIR" -maxdepth 1 -name '*.conf' -delete
 cp "$SRC_CONF"/*.conf "$CONF_DIR"/
+for b in "$CONF_DIR"/*.conf.borrow; do
+    [ -e "$b" ] || continue
+    base="${b%.borrow}"
+    [ -e "$base" ] || { rm -f "$b"; echo "removed stale borrow: $b"; }
+done
 echo "[5/5] $CONF_DIR/ <- $SRC_CONF/*.conf"
 ls "$CONF_DIR"/*.conf
 

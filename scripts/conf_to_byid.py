@@ -55,7 +55,7 @@ def _split_crc(data: bytes):
     prefix = data[:line_start]
     rest = data[line_start:]
     fields = rest.split(b"\n", 1)[0].split(b"=", 1)
-    stored = int(fields[1]) if len(fields) == 2 else None
+    stored = int(fields[1].strip()) if len(fields) == 2 else None
     return prefix, stored
 
 
@@ -110,7 +110,8 @@ def main():
         if check_only:
             ok = verify(new)
             print(f"[CHECK] {path}: converted {'OK' if ok else 'BAD crc'}")
-            rc = 0 if ok else 1
+            if not ok:
+                rc = 1
             continue
         shutil.copy2(path, path + ".bak-byid")
         with open(path, "wb") as f:

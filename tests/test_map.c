@@ -38,6 +38,7 @@ struct tieredvol_segment {
 	uint64_t stripe_size;
 	bool     mirror_enabled;
 	int      mirror_disk;
+	int      policy; /* -1 = inherit, 0 = static, 2 = random */
 };
 
 struct tieredvol_metadata {
@@ -157,7 +158,10 @@ static struct tieredvol_map tv_map_logical_random(u64 logical,
 	stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
 	offset_in = (logical - seg->logical_begin) % seg->stripe_size;
 
-	disk_idx = rand() % seg->disk_count;
+	/* Deterministic per-stripe selection (matches tieredvol_map.c): the
+	 * same logical offset must map to the same disk on read and write.
+	 */
+	disk_idx = (int)(stripe_no % seg->disk_count);
 
 	{
 		struct tieredvol_map map;
@@ -1022,11 +1026,33 @@ static void test_random_coverage(void) {
 
 	int hits[4] = {0};
 	for (int i = 0; i < 200; i++) {
-		struct tieredvol_map m = tv_map_logical_random(0, &meta, 1048576);
+		struct tieredvol_map m = tv_map_logical_random(
+			(u64)i * 1048576, &meta, 1048576);
 		if (m.disk >= 0 && m.disk < 4) hits[m.disk]++;
 	}
 	check(hits[0] > 0 && hits[1] > 0 && hits[2] > 0 && hits[3] > 0,
-		  "200 random calls hit all 4 disks at least once");
+		  "stripe-mapped calls hit all 4 disks at least once");
+}
+
+static void test_random_deterministic(void) {
+	printf("\n[TEST] tv_map_logical_random: deterministic read/write\n");
+	struct tieredvol_metadata meta;
+	make_meta_1seg(&meta, 4, 1048576);
+	meta.segments[0].weight[0] = 1;
+	meta.segments[0].weight[1] = 1;
+	meta.segments[0].weight[2] = 1;
+	meta.segments[0].weight[3] = 1;
+	meta.segments[0].stripe_size = 4 * 1048576;
+
+	for (int i = 0; i < 200; i++) {
+		u64 logical = (u64)(i * 7 + 3) * 1048576;
+		struct tieredvol_map a = tv_map_logical_random(
+			logical, &meta, 1048576);
+		struct tieredvol_map b = tv_map_logical_random(
+			logical, &meta, 1048576);
+		check(a.disk == b.disk && a.offset == b.offset,
+		      "same logical offset maps identically on repeat calls");
+	}
 }
 
 int main(void) {
@@ -1078,6 +1104,7 @@ int main(void) {
 
 	/* Additional edge cases */
 	test_random_coverage();
+	test_random_deterministic();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

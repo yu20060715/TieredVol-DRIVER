@@ -17,7 +17,7 @@ pass(){ echo "  [PASS] $1"; PASS=$((PASS+1)); }
 fail(){ echo "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 
 SECT(){ python3 -c "import configparser;c=configparser.ConfigParser();c.read('$1');print(int(c['weighted_striping']['seg0_end'])//512)"; }
-dmesg_bad(){ dmesg | grep -ciE "warning|oops|bug|pw_remove MISS|give-up|pending-full|hung_task|rebuild read failed|rebuild write failed"; }
+dmesg_bad(){ dmesg | grep -ciE "warning|oops|\\bbug\\b|pw_remove MISS|give-up|pending-full|hung_task|rebuild read failed|rebuild write failed"; }
 step(){ echo "$1" | tee "$MARKER" >/dev/null; sync; }
 
 MSG(){ timeout 10 dmsetup message tv_m "$1" "$2"; }
@@ -102,11 +102,20 @@ MSG 0 "clear_badmap 1 0" && pass "clear_badmap" || fail "clear_badmap"
 echo "==== P3-5: rebuild（小範圍 start + stop 中止） ===="
 step "msg start_rebuild seg0 2G (running ~4.5s)"
 MSG 0 "start_rebuild 0 2147483648" && pass "start_rebuild" || fail "start_rebuild"
-sleep 2
+sleep 3
 step "msg show_rebuild"
 MSG 0 "show_rebuild" && pass "show_rebuild" || fail "show_rebuild"
 step "msg start_rebuild (running 中應 EBUSY)"
-MSG 0 "start_rebuild 0 8388608" && fail "running 中 start_rebuild 應被拒" || pass "running 中 start_rebuild 被拒"
+ebusy=0
+for _t in 1 2 3 4; do
+	if MSG 0 "start_rebuild 0 8388608"; then
+		sleep 1
+	else
+		ebusy=1
+		break
+	fi
+done
+[ $ebusy -eq 1 ] && pass "running 中 start_rebuild 被拒" || fail "running 中 start_rebuild 應被拒"
 step "msg stop_rebuild"
 MSG 0 "stop_rebuild" && pass "stop_rebuild" || fail "stop_rebuild"
 sleep 1

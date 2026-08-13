@@ -53,7 +53,7 @@ seg1_stripe=4194304
 | `seg{X}_weight` | csv | 是 | weight 列表（逗號分隔，與 disks 對應） |
 | `seg{X}_stripe` | int | 是 | stripe 大小（bytes） |
 | `seg{X}_mirror` | int | 否 | mirror disk index（不指定則無 mirror） |
-| `seg{X}_policy` | string | 否 | dispatch policy（static / random） |
+| `seg{X}_policy` | int | 否 | dispatch policy：`-1`=繼承全域、`0`=static、`2`=random（預設 -1） |
 
 ## 參數計算
 
@@ -73,8 +73,9 @@ chunk_size 建議與 filesystem block size 或常用 I/O size 一致（1MB = 104
 
 > **權重推導方式**：以**平行仲裁**（所有碟同時打 raw，取實際並行吞吐）為準，
 > 不要用單碟 solo 測速（solo 會因 DMI 池 / PCIe 插槽互搶而失真）。
-> 現有 `/home/yu/tv3x.conf`、`tv4x.conf` 是舊拓撲（nvme0=WD 快、nvme1=P3 慢）調的，
-> **不適用於目前拓撲**（nvme0=P3 @ PCIe2.0 x1、nvme1=WD @ PCIe3.0 x4），需重新調校。
+> 本機現行拓撲：nvme0=WD SN750（PCIe3.0 x4，快）、nvme1=P3 Plus（受限 PCIe2.0 x1，慢）、
+> sdc=MX500、sdb=WD Blue；權重以 6:1:1:1 表示快碟承載主要寫入。
+> 換碟/換槽後請用 `scripts/auto_weight.sh` 重測並更新權重。
 
 ### segment 範圍
 
@@ -126,23 +127,29 @@ borrow_area_mb=2048,0,0,0 # 每碟借用區大小（MB，按 disk index 順序�
 | `show_stats` | - | 顯示 I/O stats |
 | `show_io_stats` | - | 顯示每碟 I/O bytes |
 | `show_inflight` | - | 顯示 inflight bio 統計 |
-| `show_mirror` | - | 顯示 mirror stats |
-| `show_degraded` | - | 顯示 degraded 狀態 |
-| `show_rebuild` | - | 顯示 rebuild 進度 |
-| `show_badmap` | - | 顯示 per-disk badmap chunk 統計 |
-| `show_errors` | - | 顯示錯誤計數 |
 | `show_bench` | - | 顯示內建 benchmark 結果 |
-| `show_log` | - | 顯示 log buffer |
+| `show_mirror` | - | 顯示 mirror stats |
+| `set_mirror` | `seg disk` | 設定 segment 的 mirror disk（不可為參與碟） |
+| `show_errors` | - | 顯示錯誤計數 |
+| `reset_errors` | - | 重置錯誤計數 |
+| `set_error_threshold` | `n` | 設定觸發 degraded 的連續錯誤門檻 |
+| `show_degraded` | - | 顯示 degraded 狀態 |
+| `clear_degraded` | - | 清除 degraded 狀態 |
+| `start_rebuild` | `seg bytes` | 開始重建指定 segment（`dmsetup message` 拆參數） |
+| `stop_rebuild` | - | 中止重建 |
+| `show_rebuild` | - | 顯示 rebuild 進度 |
+| `rebuild_badmap` | - | 重建被 badmap 標記的 chunks |
+| `set_badmap` | `disk chunk` | 將指定 disk 的 chunk 標記為 bad |
+| `clear_badmap` | `disk chunk` | 清除 bad 標記 |
+| `show_badmap` | - | 顯示 per-disk badmap chunk 統計 |
 | `borrow_on` / `borrow_off` | - | 啟用 / 停用 weight-borrowing（停用後已借 block 仍解析） |
 | `show_borrow` | - | 顯示 borrow 狀態（enabled、借用區、n_borrowed） |
-| `set_policy` | static/random | 切換全域 dispatch policy |
-| `set_seg_policy` | static/random | 切換單一 segment policy |
-| `set_mirror` | disk_index | 設定 mirror disk（不可為參與碟） |
-| `start_rebuild` / `stop_rebuild` | - | 手動觸發 / 停止 rebuild |
-| `set_badmap` | disk:chunk | 將 chunk 標記為 bad |
-| `set_loglevel` | int | 設定 log 等級 |
+| `set_policy` | `static\|random` | 切換全域 dispatch policy |
+| `set_seg_policy` | `seg static\|random\|inherit` | 切換單一 segment policy |
+| `set_loglevel` | `n` | 設定 log 等級 |
+| `show_log` | - | 顯示 log buffer |
+| `clear_log` | - | 清空 log buffer |
 | `reset_stats` / `reset_io_stats` | - | 重置 I/O stats |
-| `reset_errors` | - | 重置錯誤計數 |
 
 > `show_wear` / `reset_wear` / `show_adaptive` 已移除（adaptive/wear 系統刪除）。
 
@@ -158,4 +165,5 @@ sudo dmsetup message <name> 0 borrow_on
 - 所有 disk index 必須小於 `disk_count`
 - mirror disk 不可與 segment 的任一 primary disk 相同；若要 mirror，
   需有**不參與該 segment** 的第 N+1 顆碟（例如 `disk_count=5`、`seg0_disks=0,1,2,3`、`seg0_mirror=4`）
-- Weight 上限 16，最少 1
+- Weight 最少 1（無程式上限；`seg{X}_disks` / `seg{X}_weight` 數量必須等於 `seg{X}_count`，
+  且 `seg{X}_stripe` 必須等於 `Σ weight × chunk_size`，`chunk_size` ≥ 512 且為 512 倍數）

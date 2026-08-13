@@ -137,6 +137,30 @@ static u32 tv_compute_config_crc(const char *buf, size_t len)
 
 static DEFINE_MUTEX(tv_save_mutex);
 
+/* Bounded append helper for the metadata save buffer: never writes past
+ * maxlen and clamps off to maxlen so a pathological badmap range list can
+ * not overflow the kmalloc'd buffer. Truncation is detected by the caller
+ * (off == maxlen) and aborts the save instead of writing a corrupt file.
+ */
+static void save_emit(char *buf, int maxlen, int *off, const char *fmt, ...)
+{
+	va_list ap;
+	int room = maxlen - *off;
+	int n;
+
+	if (room <= 0) {
+		*off = maxlen;
+		return;
+	}
+	va_start(ap, fmt);
+	n = vsnprintf(buf + *off, room, fmt, ap);
+	va_end(ap);
+	if (n < 0 || n >= room)
+		*off = maxlen;
+	else
+		*off += n;
+}
+
 int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 {
 	struct file *f;
@@ -146,6 +170,7 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 	u32 crc;
 	loff_t pos = 0;
 	char bak_path[260];
+	const int maxlen = 65536;
 
 	if (!ctx->config_path[0])
 		return -ENOENT;
@@ -158,52 +183,52 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 		goto out_unlock;
 	}
 
-	off += scnprintf(buf + off, 65536 - off, "[weighted_striping]\n");
-	off += scnprintf(buf + off, 65536 - off, "version=%u\n",
+	save_emit(buf, maxlen, &off, "[weighted_striping]\n");
+	save_emit(buf, maxlen, &off, "version=%u\n",
 			  ctx->meta.version);
-	off += scnprintf(buf + off, 65536 - off, "chunk_size=%u\n",
+	save_emit(buf, maxlen, &off, "chunk_size=%u\n",
 			  ctx->meta.chunk_size);
-	off += scnprintf(buf + off, 65536 - off, "segment_count=%u\n",
+	save_emit(buf, maxlen, &off, "segment_count=%u\n",
 			  ctx->meta.segment_count);
-	off += scnprintf(buf + off, 65536 - off, "disk_count=%u\n",
+	save_emit(buf, maxlen, &off, "disk_count=%u\n",
 			  ctx->meta.disk_count);
 
 	for (u32 i = 0; i < ctx->meta.disk_count; i++)
-		off += scnprintf(buf + off, 65536 - off,
+		save_emit(buf, maxlen, &off,
 				 "disk%u_name=%s\n", i, ctx->meta.disk_names[i]);
 
 	for (u32 i = 0; i < ctx->meta.segment_count; i++) {
 		struct tieredvol_segment *seg = &ctx->meta.segments[i];
 
-		off += scnprintf(buf + off, 65536 - off,
+		save_emit(buf, maxlen, &off,
 				 "seg%u_begin=%llu\n", i, seg->logical_begin);
-		off += scnprintf(buf + off, 65536 - off,
+		save_emit(buf, maxlen, &off,
 				 "seg%u_end=%llu\n", i, seg->logical_end);
-		off += scnprintf(buf + off, 65536 - off,
+		save_emit(buf, maxlen, &off,
 				 "seg%u_count=%u\n", i, seg->disk_count);
 
-		off += scnprintf(buf + off, 65536 - off, "seg%u_disks=",
+		save_emit(buf, maxlen, &off, "seg%u_disks=",
 				 i);
 		for (u32 j = 0; j < seg->disk_count; j++)
-			off += scnprintf(buf + off, 65536 - off,
+			save_emit(buf, maxlen, &off,
 					 "%s%u", j ? "," : "", seg->disk_index[j]);
-		off += scnprintf(buf + off, 65536 - off, "\n");
+		save_emit(buf, maxlen, &off, "\n");
 
-		off += scnprintf(buf + off, 65536 - off, "seg%u_weight=",
+		save_emit(buf, maxlen, &off, "seg%u_weight=",
 				 i);
 		for (u32 j = 0; j < seg->disk_count; j++)
-			off += scnprintf(buf + off, 65536 - off,
+			save_emit(buf, maxlen, &off,
 					 "%s%u", j ? "," : "", seg->weight[j]);
-		off += scnprintf(buf + off, 65536 - off, "\n");
+		save_emit(buf, maxlen, &off, "\n");
 
-		off += scnprintf(buf + off, 65536 - off,
+		save_emit(buf, maxlen, &off,
 				 "seg%u_stripe=%llu\n", i, seg->stripe_size);
 		if (seg->mirror_enabled)
-			off += scnprintf(buf + off, 65536 - off,
+			save_emit(buf, maxlen, &off,
 					 "seg%u_mirror=%u\n", i,
 					 seg->mirror_disk);
 		if (seg->policy >= 0)
-			off += scnprintf(buf + off, 65536 - off,
+			save_emit(buf, maxlen, &off,
 					 "seg%u_policy=%d\n", i,
 					 seg->policy);
 	}
@@ -217,7 +242,7 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 		if (!bm->bitmap || bm->n_chunks == 0)
 			continue;
 
-		off += scnprintf(buf + off, 65536 - off, "badmap_%u=", i);
+		save_emit(buf, maxlen, &off, "badmap_%u=", i);
 
 		while (start < bm->n_chunks) {
 			/* Find next set bit */
@@ -229,33 +254,41 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 			u64 end = find_next_zero_bit(bm->bitmap, bm->n_chunks, start);
 
 			if (range_count > 0)
-				off += scnprintf(buf + off, 65536 - off, ",");
+				save_emit(buf, maxlen, &off, ",");
 			if (end == start + 1)
-				off += scnprintf(buf + off, 65536 - off, "%llu", start);
+				save_emit(buf, maxlen, &off, "%llu", start);
 			else
-				off += scnprintf(buf + off, 65536 - off, "%llu-%llu", start, end - 1);
+				save_emit(buf, maxlen, &off, "%llu-%llu", start, end - 1);
 			range_count++;
 			start = end;
 		}
-		off += scnprintf(buf + off, 65536 - off, "\n");
+		save_emit(buf, maxlen, &off, "\n");
 	}
 
-	off += scnprintf(buf + off, 65536 - off, "[runtime]\n");
-	off += scnprintf(buf + off, 65536 - off, "policy=%d\n",
+	save_emit(buf, maxlen, &off, "[runtime]\n");
+	save_emit(buf, maxlen, &off, "policy=%d\n",
 			  ctx->policy);
-	off += scnprintf(buf + off, 65536 - off, "borrow_enable=%d\n",
+	save_emit(buf, maxlen, &off, "borrow_enable=%d\n",
 			  ctx->meta.runtime_borrow_enable);
-	off += scnprintf(buf + off, 65536 - off, "borrow_watermark_kb=%u\n",
+	save_emit(buf, maxlen, &off, "borrow_watermark_kb=%u\n",
 			  ctx->meta.runtime_borrow_watermark_kb);
-	off += scnprintf(buf + off, 65536 - off, "borrow_area_mb=");
+	save_emit(buf, maxlen, &off, "borrow_area_mb=");
 	for (u32 i = 0; i < ctx->meta.disk_count; i++)
-		off += scnprintf(buf + off, 65536 - off,
+		save_emit(buf, maxlen, &off,
 				 "%s%u", i ? "," : "",
 				 ctx->meta.runtime_borrow_area_mb[i]);
-	off += scnprintf(buf + off, 65536 - off, "\n");
+	save_emit(buf, maxlen, &off, "\n");
 
 	crc = crc32c(0, buf, off);
-	off += scnprintf(buf + off, 65536 - off, "crc32=%u\n", crc);
+	save_emit(buf, maxlen, &off, "crc32=%u\n", crc);
+
+	if (off >= maxlen) {
+		pr_err("tieredvol: metadata too large for save buffer (%d B), "
+		       "aborting save (old config untouched)\n", off);
+		kfree(buf);
+		ret = -ENOSPC;
+		goto out_unlock;
+	}
 
 	scnprintf(bak_path, sizeof(bak_path), "%s.bak", ctx->config_path);
 
@@ -288,6 +321,8 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 
 	pos = 0;
 	ret = kernel_write(f, buf, off, &pos);
+	if (ret == off)
+		vfs_fsync(f, 1);
 	filp_close(f, NULL);
 
 	if (ret != off) {
@@ -327,6 +362,8 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 	int ret = 0;
 	u32 expected_crc = 0;
 	bool has_crc = false;
+	u32 seg_disks_parsed[TV_MAX_SEGS] = {};
+	u32 seg_weights_parsed[TV_MAX_SEGS] = {};
 
 	f = filp_open(path, O_RDONLY, 0);
 	if (IS_ERR(f))
@@ -364,6 +401,11 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 	/* Set default per-segment policy to -1 (inherit from ctx) */
 	for (u32 si = 0; si < TV_MAX_SEGS; si++)
 		meta->segments[si].policy = -1;
+
+	/* seg_disks_parsed/seg_weights_parsed track how many seg%u_disks /
+	 * seg%u_weight values were actually parsed, so the post-parse
+	 * validation can reject count mismatches (declared seg%u_count !=
+	 * number of values given). */
 
 	/* CRC32 pre-scan: find crc32= line before main parse loop.
 	 * Must not destroy the buffer — do NOT use parse_line() which writes \0.
@@ -444,7 +486,9 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 			}
 		} else if (strcmp(k, "chunk_size") == 0) {
 			if (parse_u32(v, &meta->chunk_size) < 0 ||
-			    meta->chunk_size == 0) {
+			    meta->chunk_size < 512 ||
+			    meta->chunk_size % 512) {
+				pr_err("tieredvol: chunk_size must be >= 512 and a multiple of 512\n");
 				ret = -EINVAL;
 				goto out;
 			}
@@ -496,12 +540,19 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 				goto out;
 			}
 		} else if (strcmp(suf, "_count") == 0) {
-			if (parse_u32(v, &seg->disk_count) < 0) {
+			if (parse_u32(v, &seg->disk_count) < 0 ||
+			    seg->disk_count == 0 ||
+			    seg->disk_count > TV_MAX_DISKS) {
+				pr_err("tieredvol: seg%lu disk_count must be 1..%d\n",
+				       idx, TV_MAX_DISKS);
 				ret = -EINVAL;
 				goto out;
 			}
 		} else if (strcmp(suf, "_stripe") == 0) {
-			if (parse_u64(v, &seg->stripe_size) < 0) {
+			if (parse_u64(v, &seg->stripe_size) < 0 ||
+			    seg->stripe_size == 0) {
+				pr_err("tieredvol: seg%lu stripe must be > 0\n",
+				       idx);
 				ret = -EINVAL;
 				goto out;
 			}
@@ -513,6 +564,7 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 				ret = -EINVAL;
 				goto out;
 			}
+			seg_disks_parsed[idx] = n;
 		} else if (strcmp(suf, "_weight") == 0) {
 			int n;
 
@@ -521,6 +573,7 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 				ret = -EINVAL;
 				goto out;
 			}
+			seg_weights_parsed[idx] = n;
 		} else if (strcmp(suf, "_mirror") == 0) {
 			u32 mirror_idx;
 
@@ -533,8 +586,22 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 		} else if (strcmp(suf, "_policy") == 0) {
 			long pv;
 
-			if (kstrtol(v, 10, &pv) == 0)
-				seg->policy = (int)pv;
+			if (kstrtol(v, 10, &pv)) {
+				pr_err("tieredvol: seg%lu policy must be integer "
+				       "(-1=inherit, 0=static, 2=random)\n",
+				       idx);
+				ret = -EINVAL;
+				goto out;
+			}
+			if (pv != -1 && pv != TV_POLICY_STATIC &&
+			    pv != TV_POLICY_RANDOM) {
+				pr_err("tieredvol: seg%lu policy=%ld invalid "
+				       "(-1=inherit, 0=static, 2=random)\n",
+				       idx, pv);
+				ret = -EINVAL;
+				goto out;
+			}
+			seg->policy = (int)pv;
 		}
 		} else if (strncmp(k, "badmap_", 7) == 0) {
 			unsigned long disk_idx;
@@ -547,8 +614,15 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 		} else if (strcmp(k, "policy") == 0) {
 			long v2;
 
-			if (kstrtol(v, 10, &v2) == 0)
-				meta->runtime_policy = (int)v2;
+			if (kstrtol(v, 10, &v2) ||
+			    (v2 != TV_POLICY_STATIC &&
+			     v2 != TV_POLICY_RANDOM)) {
+				pr_err("tieredvol: [runtime] policy must be "
+				       "0 (static) or 2 (random)\n");
+				ret = -EINVAL;
+				goto out;
+			}
+			meta->runtime_policy = (int)v2;
 		} else if (strcmp(k, "borrow_enable") == 0) {
 			long v3;
 
@@ -567,12 +641,35 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 		}
 	}
 
-	/* Validate disk indices and mirror safety */
+	/* Validate segments: disk indices, counts, weights, stripe math,
+	 * range sanity and segment layout (sorted, non-overlapping). */
 	{
 		u32 si, j;
 
 		for (si = 0; si < meta->segment_count; si++) {
 			struct tieredvol_segment *seg = &meta->segments[si];
+			u64 weight_sum = 0;
+
+			if (seg->disk_count == 0) {
+				pr_err("tieredvol: seg%u disk_count=0\n", si);
+				ret = -EINVAL;
+				goto out;
+			}
+			if (seg_disks_parsed[si] != seg->disk_count) {
+				pr_err("tieredvol: seg%u disk count mismatch "
+				       "(declared %u, parsed %u)\n",
+				       si, seg->disk_count, seg_disks_parsed[si]);
+				ret = -EINVAL;
+				goto out;
+			}
+			if (seg_weights_parsed[si] != seg->disk_count) {
+				pr_err("tieredvol: seg%u weight count mismatch "
+				       "(declared %u, parsed %u)\n",
+				       si, seg->disk_count,
+				       seg_weights_parsed[si]);
+				ret = -EINVAL;
+				goto out;
+			}
 
 			for (j = 0; j < seg->disk_count; j++) {
 				if (seg->disk_index[j] >= meta->disk_count) {
@@ -582,6 +679,51 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 					ret = -EINVAL;
 					goto out;
 				}
+				if (seg->weight[j] == 0) {
+					pr_err("tieredvol: seg%u weight[%u]=0 "
+					       "(must be >= 1)\n", si, j);
+					ret = -EINVAL;
+					goto out;
+				}
+				weight_sum += seg->weight[j];
+			}
+
+			if (seg->logical_end <= seg->logical_begin) {
+				pr_err("tieredvol: seg%u empty range [%llu, %llu)\n",
+				       si,
+				       (unsigned long long)seg->logical_begin,
+				       (unsigned long long)seg->logical_end);
+				ret = -EINVAL;
+				goto out;
+			}
+
+			if (meta->chunk_size &&
+			    weight_sum > U64_MAX / meta->chunk_size) {
+				pr_err("tieredvol: seg%u weight sum overflow\n",
+				       si);
+				ret = -EINVAL;
+				goto out;
+			}
+			if ((u64)weight_sum * meta->chunk_size !=
+			    seg->stripe_size) {
+				pr_err("tieredvol: seg%u stripe=%llu != "
+				       "sum(weights)*chunk=%llu\n",
+				       si,
+				       (unsigned long long)seg->stripe_size,
+				       (unsigned long long)weight_sum *
+					       meta->chunk_size);
+				ret = -EINVAL;
+				goto out;
+			}
+
+			if (si > 0 &&
+			    seg->logical_begin <
+				    meta->segments[si - 1].logical_end) {
+				pr_err("tieredvol: seg%u overlaps seg%u "
+				       "(must be sorted, non-overlapping)\n",
+				       si, si - 1);
+				ret = -EINVAL;
+				goto out;
 			}
 
 			if (seg->mirror_enabled) {

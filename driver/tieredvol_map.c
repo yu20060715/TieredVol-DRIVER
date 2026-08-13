@@ -105,7 +105,12 @@ struct tieredvol_map tv_map_logical_random(u64 logical,
 	stripe_no = (logical - seg->logical_begin) / seg->stripe_size;
 	offset_in = (logical - seg->logical_begin) % seg->stripe_size;
 
-	disk_idx = get_random_u32() % seg->disk_count;
+	/* Deterministic per-stripe selection (stripe_no % disk_count) so a
+	 * given logical offset always maps to the same disk on both reads
+	 * and writes. A true get_random_u32() selection here would map the
+	 * same offset to different disks and corrupt data on rewrite.
+	 */
+	disk_idx = (int)(stripe_no % seg->disk_count);
 
 	{
 		struct tieredvol_map map;

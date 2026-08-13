@@ -26,8 +26,9 @@ static ssize_t policy_show(struct kobject *kobj, struct kobj_attribute *attr,
 		return -ENODEV;
 	}
 	ret = sysfs_emit(buf, "%s\n",
-			  ctx->policy == TV_POLICY_RANDOM ?
-				  "random" : "static");
+			  ctx->policy == TV_POLICY_RANDOM ? "random" :
+			  ctx->policy == TV_POLICY_STATIC ? "static" :
+							    "unknown");
 	rcu_read_unlock();
 	return ret;
 }

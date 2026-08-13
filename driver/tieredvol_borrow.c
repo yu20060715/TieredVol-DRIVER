@@ -70,6 +70,9 @@ int tv_borrow_init(struct tieredvol_ctx *ctx)
 	 * always fully written and reads resolve to a complete copy.
 	 */
 	ctx->borrow.block_size = ctx->meta.chunk_size >> 3;
+	if (ctx->borrow.block_size == 0 ||
+	    seg_len % ctx->borrow.block_size != 0)
+		return 0;
 	ctx->borrow.n_blocks = seg_len / ctx->borrow.block_size;
 	ctx->borrow.watermark_bytes =
 		ctx->meta.runtime_borrow_watermark_kb ?
@@ -343,6 +346,8 @@ int tv_borrow_save(struct tieredvol_ctx *ctx)
 		w = kernel_write(f, snapshot, entry_bytes, &pos);
 		ret = (w == (ssize_t)entry_bytes) ? 0 : -EIO;
 	}
+	if (ret == 0)
+		vfs_fsync(f, 1);
 	filp_close(f, NULL);
 out:
 	kfree(snapshot);
@@ -403,13 +408,23 @@ int tv_borrow_load(struct tieredvol_ctx *ctx, const char *path_in,
 
 			if (!e->valid)
 				continue;
-			if (e->dst_disk >= ctx->ndisks)
+			/* Corrupt/out-of-range entry: drop it rather than
+			 * letting the runtime deref an invalid dst_disk or
+			 * map onto the wrong area.
+			 */
+			if (e->dst_disk >= ctx->ndisks ||
+			    e->dst_sector <
+				    ctx->borrow.area_base_sector[e->dst_disk]) {
+				e->valid = 0;
 				continue;
+			}
 			slot = (u32)((e->dst_sector -
 				      ctx->borrow.area_base_sector[e->dst_disk]) /
 				     block_sectors);
-			if (slot >= ctx->borrow.area_blocks[e->dst_disk])
+			if (slot >= ctx->borrow.area_blocks[e->dst_disk]) {
+				e->valid = 0;
 				continue;
+			}
 			if (slot >= ctx->borrow.used_blocks[e->dst_disk])
 				ctx->borrow.used_blocks[e->dst_disk] = slot + 1;
 			ctx->borrow.n_borrowed++;

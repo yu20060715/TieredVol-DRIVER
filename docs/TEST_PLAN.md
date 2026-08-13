@@ -90,7 +90,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 
 ## Mirror / Rebuild 專項（2026-08-12）— **已完成**
 
-拓撲：`/home/yu/tv_mir.conf`（A=nvme1n1 權重8 + B=nvme0n1 權重1 的 8:1 stripe、mirror→C=sdc，chunk=1MiB、stripe=9MiB）。
+拓撲：`/home/yu/tv_mir.conf`（A=WD nvme0n1 權重6 + B=P3 nvme1n1 權重1 的 6:1 stripe、mirror→C=sdc，chunk=1MiB、stripe=7MiB；與 repo `configs/tv_mir.conf` 一致）。
 
 ### 本日根因修正
 1. **Rebuild 崩潰（⑤，首次執行即爆）**：`tv_rebuild_thread` 只 `alloc_page` 單頁卻把整 chunk(1MiB) 塞進 `bio_add_page`。6.x `bio_add_page` **不截斷長度**（multi-page bvec 語意、回傳傳入值）→ 長度檢查形同虛設，送出「bi_size=1MiB(手動)+1MiB(bio_add_page)=2MiB、實體僅 1 頁」的 bio → `__blk_rq_map_sg` WARN + `iommu_dma_map_sg` NULL deref → oops 級聯 → 系統凍結重啟。修法：`alloc_pages(GFP_NOIO, get_order(sz))` compound page 涵蓋整個 chunk、**移除手動 `bi_iter.bi_size`**、`sz = min(chunk_bytes, cur.length)` 並以 `sz` 推進（一併修跨 stripe 邊界越界讀隱患）。
