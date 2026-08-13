@@ -110,10 +110,11 @@ sudo scripts/install_boot.sh        # 安裝 + enable；--uninstall 可移除
 
 交付內容：
 
-1. `/etc/modules-load.d/tieredvol.conf` — 開機載入 module
-2. `/etc/systemd/system/tieredvol.service` — oneshot：開機 `create`（`After=systemd-modules-load.service blockdev.target` + by-id 碟就緒重試）、關機 `remove`
-3. `/usr/local/sbin/tieredvol-boot` — helper，遍歷 `/etc/tieredvol/*.conf` 建卷
-4. `/etc/tieredvol/*.conf` — 從 repo `configs/` 安裝的 active config（`tv_s1/s2/s3/s4` + `tv_mir`，**現今拓撲：WD=disk0**）
+1. `tieredvol.ko` 重裝到 `/lib/modules/$(uname -r)/{extra,updates}/` + `depmod` — 確保開機載入的是目前 build（曾因只裝 config 未重裝 module，開機載入舊版、寫入坍到單碟）
+2. `/etc/modules-load.d/tieredvol.conf` — 開機載入 module
+3. `/etc/systemd/system/tieredvol.service` — oneshot：開機 `create`（`After=systemd-modules-load.service blockdev.target` + by-id 碟就緒重試）、關機 `remove`
+4. `/usr/local/sbin/tieredvol-boot` — helper，遍歷 `/etc/tieredvol/*.conf` 建卷
+5. `/etc/tieredvol/*.conf` — 從 repo `configs/` 安裝的 active config（`tv_s1/s2/s3/s4` + `tv_mir`，**現今拓撲：WD=disk0**）
 
 限制：
 
@@ -257,7 +258,7 @@ TieredVol-DRIVER/
 └── scripts/
     ├── auto_weight.sh             # fio 測速 + 產生 seg weight（docs/CONFIG.md）
     ├── conf_to_byid.py            # 批次把 diskN_name 轉 stable by-id（含 crc32 重算）
-    ├── install_boot.sh            # 開機持久安裝（modules-load.d + systemd unit）
+    ├── install_boot.sh            # 開機持久安裝（module 重裝 + modules-load.d + systemd unit + configs）
     ├── msg_probe.sh               # dm message 全 handler 回歸探測
     ├── borrow_verify.sh           # borrow 借出/持久化/重載驗證
     └── install_deps.sh            # Install dependencies + build

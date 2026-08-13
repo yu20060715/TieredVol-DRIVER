@@ -2,10 +2,11 @@
 # install_boot.sh — 開機持久：自動載入 tieredvol module + 自動重建卷。
 #
 # 交付內容：
-#   1. /etc/modules-load.d/tieredvol.conf   （開機載入 tieredvol.ko）
-#   2. /etc/systemd/system/tieredvol.service（oneshot：開機 create、關機 remove）
-#   3. /usr/local/sbin/tieredvol-boot       （helper：loop /etc/tieredvol/*.conf）
-#   4. /etc/tieredvol/*.conf                （active configs，from repo configs/）
+#   1. tieredvol.ko 重裝到 extra/ 與 updates/ + depmod（確保載入新 build）
+#   2. /etc/modules-load.d/tieredvol.conf   （開機載入 tieredvol.ko）
+#   3. /etc/systemd/system/tieredvol.service（oneshot：開機 create、關機 remove）
+#   4. /usr/local/sbin/tieredvol-boot       （helper：loop /etc/tieredvol/*.conf）
+#   5. /etc/tieredvol/*.conf                （active configs，from repo configs/）
 #
 # 限制（務必了解）：
 #   - 碟位綁定靠 /dev/disk/by-id（serial），重啟/換槽不變。
@@ -24,6 +25,9 @@ UNIT=/etc/systemd/system/tieredvol.service
 HELPER=/usr/local/sbin/tieredvol-boot
 MODCONF=/etc/modules-load.d/tieredvol.conf
 SRC_CONF="$(cd "$(dirname "$0")/../configs" && pwd)"   # repo configs/
+REPO="$(cd "$(dirname "$0")/.." && pwd)"               # repo root
+MOD_VER="$(uname -r)"
+MOD_NAME=/lib/modules/$MOD_VER/tieredvol.ko
 
 do_uninstall=0
 for a in "$@"; do
@@ -40,10 +44,28 @@ fi
 
 [ -d "$SRC_CONF" ] || { echo "找不到 repo configs/：$SRC_CONF"; exit 1; }
 
-# 1) modules-load.d
+# 1) kernel module：建置並覆寫 extra/ 與 updates/（updates/ 優先於 extra/）
+#    舊版 module 曾導致開機載入過時 build、寫入坍到單碟——開機持久必須連 module 一起裝。
+if [ -n "${NO_BUILD_MODULE:-}" ]; then
+    echo "[1/5] 略過建置（NO_BUILD_MODULE 已設定）"
+elif make -C "$REPO" module >/dev/null 2>&1; then
+    echo "[1/5] make module OK"
+else
+    echo "make module 失敗（需要 kernel headers）" >&2
+    exit 1
+fi
+install -m 0644 "$REPO/driver/tieredvol.ko" \
+    /lib/modules/$MOD_VER/updates/tieredvol.ko
+mkdir -p /lib/modules/$MOD_VER/extra
+install -m 0644 "$REPO/driver/tieredvol.ko" \
+    /lib/modules/$MOD_VER/extra/tieredvol.ko
+depmod -a
+echo "[1/5] module 已安裝：$MOD_NAME"
+
+# 2) modules-load.d
 mkdir -p /etc/modules-load.d
 printf 'tieredvol\n' > "$MODCONF"
-echo "[1/4] $MODCONF <- tieredvol"
+echo "[2/5] $MODCONF <- tieredvol"
 
 # 2) helper
 cat > "$HELPER" <<'HELP'
@@ -115,7 +137,7 @@ remove)
 esac
 HELP
 chmod 0755 "$HELPER"
-echo "[2/4] $HELPER"
+echo "[3/5] $HELPER"
 
 # 3) systemd unit（oneshot；開機 create、關機 remove → 觸發 .borrow save）
 cat > "$UNIT" <<UNIT
@@ -136,13 +158,13 @@ WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable tieredvol.service >/dev/null 2>&1
-echo "[3/4] $UNIT (enabled)"
+echo "[4/5] $UNIT (enabled)"
 
 # 4) active configs（保留既有 *.borrow，砍掉非 active 舊 *.conf）
 mkdir -p "$CONF_DIR"
 find "$CONF_DIR" -maxdepth 1 -name '*.conf' -delete
 cp "$SRC_CONF"/*.conf "$CONF_DIR"/
-echo "[4/4] $CONF_DIR/ <- $SRC_CONF/*.conf"
+echo "[5/5] $CONF_DIR/ <- $SRC_CONF/*.conf"
 ls "$CONF_DIR"/*.conf
 
 echo ""
