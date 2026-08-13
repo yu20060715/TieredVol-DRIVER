@@ -61,6 +61,8 @@ struct tieredvol_map {
 enum tv_policy {
 	TV_POLICY_STATIC = 0,
 	TV_POLICY_RANDOM = 2,
+	/* 值 1 曾為 TV_POLICY_ADAPTIVE（已移除）。policy 數值會
+	 * 持久化進 config（policy= / seg%u_policy=），勿重新編號。 */
 };
 
 /* Phase 2: Sub-structs for tieredvol_ctx */
@@ -194,7 +196,7 @@ int tv_metadata_load_kernel(struct tieredvol_metadata *meta,
 int tv_metadata_save_kernel(struct tieredvol_ctx *ctx);
 
 /* ---- tieredvol_log.c exports ---- */
-void tv_log(u8 level, u8 disk_idx, u8 event_type, const char *fmt, ...);
+void tv_log(u8 level, u8 event_type, const char *fmt, ...);
 
 #define TV_LOG_SIZE 512
 
@@ -213,7 +215,6 @@ enum tv_log_level {
 
 enum tv_log_event {
 	TV_LOG_IO      = 0,
-	TV_LOG_STALE   = 1,
 	TV_LOG_RECOVER = 2,
 	TV_LOG_MIRROR  = 3,
 	TV_LOG_CONFIG  = 4,

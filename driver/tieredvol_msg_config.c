@@ -35,7 +35,6 @@ static int msg_show_log(struct dm_target *ti, unsigned int argc,
 			(entries[i].timestamp_ns / 1000ULL) % 1000000ULL,
 			entries[i].level == TV_LOG_ERR ? "ERR" :
 			entries[i].level == TV_LOG_WARN ? "WRN" : "INF",
-			entries[i].event_type == TV_LOG_STALE ? "STALE" :
 			entries[i].event_type == TV_LOG_RECOVER ? "RCVR" :
 			entries[i].event_type == TV_LOG_MIRROR ? "MIRR" :
 			entries[i].event_type == TV_LOG_CONFIG ? "CONF" :

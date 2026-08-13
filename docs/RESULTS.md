@@ -308,7 +308,7 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 - 附註：config 檔經 driver 建卷後會寫回 `crc32=`/`badmap_*`/`[runtime] policy`；改檔後須同步清理（本工具已內建），否則 CRC mismatch 建卷 EIO。
 
 - **分布**：tv_s2 併發寫 8G 後計數器 `A=7363100672 B=1226833920` = **6:1 精確**（0 誤差），config 8/13 更新後權重語義正確。
-- `make test`：**267/267 assertions、5/5 suites**（49+25+14+170+9）；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /dev/nvme1n1 /dev/nvme0n1 /dev/sdc /dev/sdb`（4 碟展開清單，順序與 config disk0–3 一致）== create 參數 `0 41943040 tieredvol /home/yu/tv_s4.conf`。*(8/13 上午快照；當日稍後加入 128KB borrow 語意 + `.borrow` v2 格式 + kernel 源碼測試層後為 **301/301、6/6 suites**，見 TEST_PLAN「測試層架構」)*
+- `make test`：**267/267 assertions、5/5 suites**（49+25+14+170+9）；#11 `dmsetup table` 輸出 `0 41943040 tieredvol /dev/nvme1n1 /dev/nvme0n1 /dev/sdc /dev/sdb`（4 碟展開清單，順序與 config disk0–3 一致）== create 參數 `0 41943040 tieredvol /home/yu/tv_s4.conf`。*(8/13 上午快照；當日稍後加入 128KB borrow 語意 + `.borrow` v2 格式 + kernel 源碼測試層後為 **301/301、6/6 suites**；8/13 晚清理 userspace prototype `src/` 與其 4 個測試後為 **2 suites（test_map 301 + test_stripe_kernel 27）**，見 TEST_PLAN「測試層架構」)*
 
 ### 8/13 weight-borrowing 原型實機驗證（`tv_s4_borrow.conf`，權重 6:1:1:1）
 

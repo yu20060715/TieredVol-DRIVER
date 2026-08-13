@@ -20,7 +20,7 @@ static int msg_set_policy(struct dm_target *ti, unsigned int argc,
 	else
 		return -EINVAL;
 	pr_info("tieredvol: policy = %s\n", argv[1]);
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "policy=%s", argv[1]);
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG, "policy=%s", argv[1]);
 	tv_metadata_save_kernel(ctx);
 	return 0;
 }
@@ -48,7 +48,7 @@ static int msg_set_seg_policy(struct dm_target *ti, unsigned int argc,
 
 	ctx->meta.segments[seg_idx].policy = pol;
 	pr_info("tieredvol: seg%u policy=%d\n", seg_idx, pol);
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG,
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG,
 	       "seg%u policy=%d", seg_idx, pol);
 	tv_metadata_save_kernel(ctx);
 	return 0;
@@ -67,7 +67,7 @@ static int msg_borrow_on(struct dm_target *ti, unsigned int argc,
 		pr_info("tieredvol: borrow enable requested "
 			"(applied on reload)\n");
 	}
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "borrow_enable=1");
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG, "borrow_enable=1");
 	tv_metadata_save_kernel(ctx);
 	return 0;
 }
@@ -81,7 +81,7 @@ static int msg_borrow_off(struct dm_target *ti, unsigned int argc,
 	ctx->borrow.enabled = false;
 	pr_info("tieredvol: borrow disabled (existing borrowed blocks still "
 		"resolve to their borrow-area copy)\n");
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "borrow_enable=0");
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG, "borrow_enable=0");
 	tv_metadata_save_kernel(ctx);
 	return 0;
 }

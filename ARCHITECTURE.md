@@ -8,16 +8,11 @@ TieredVol-DRIVER is a **kernel device-mapper target** that implements weighted I
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  用戶態：tiered_setup CLI (src/)                              │
+│  用戶態：config 編輯 + dmsetup                                │
 │                                                              │
-│  main.c (82行)          CLI 入口                              │
-│  cmd_create.c (479行)   建立卷（含 modprobe + dmsetup）       │
-│  cmd_remove.c (190行)   刪除卷 + 狀態查詢                     │
-│  setup_discover.c (117行) 硬體發現                             │
-│  setup_bench.c (422行)   並行測速                             │
-│  tiered_metadata.c (156行) 寫 .conf 檔案                      │
-│  tiered_partition.c (95行)  計算權重 + segments               │
-│  exec_helper.c (115行)  fork/exec 外部指令                    │
+│  編輯 /etc/tieredvol/<name>.conf（INI，格式見 docs/CONFIG.md）│
+│  scripts/auto_weight.sh：fio 測速 → 填 segX_weight           │
+│  scripts/msg_probe.sh / borrow_verify.sh：功能回歸          │
 └───────────────────────────┬─────────────────────────────────┘
                             │
         寫入 .conf 檔案 + dmsetup create
@@ -87,7 +82,7 @@ tv_map_logical()  [tieredvol_map.c]
     │
     ├─── [borrow] ─── tv_borrow_redirect() [tieredvol_borrow.c]
     │       ├─ src in_flight ≥ watermark 且整 block 對齊
-    │       ├─ 選最少負載碟（排除 src/degraded/無空間）
+    │       ├─ 選最少負載碟（排除 degraded/無空間）
     │       ├─ 記錄 per-block 表 → 重導至借用區
     │       └─ 讀/重寫經 tv_borrow_lookup() 解析同一目的地
     │
@@ -245,13 +240,15 @@ tv_borrow_lookup()（READ 熱路徑）
 
 ## Userspace ↔ Kernel Communication
 
+> 用戶態角色已簡化：不再有 `tiered_setup` 建立工具（舊 prototype `src/` 已移除），改為「編輯 config → dmsetup」。以下為互動流程：
+
 ```
 ┌─────────────────┐     ┌─────────────────┐
-│  tiered_setup    │     │  tieredvol.ko   │
-│  (用戶態)        │     │  (內核態)        │
+│  使用者 (用戶態)  │     │  tieredvol.ko   │
+│  (編輯 config/dmsetup)     │  (內核態)        │
 └────────┬────────┘     └────────┬────────┘
          │                       │
-         │  1. 寫 .conf 檔案      │
+         │  1. 編輯 .conf 檔案    │
          │──────────────────────→│ (ctr 時讀取)
          │                       │
          │  2. dmsetup create     │
@@ -291,7 +288,9 @@ tv_borrow_lookup()（READ 熱路徑）
 
 ## vs TieredVol (Userspace)
 
-| | TieredVol (用戶態) | DRIVER (內核態) |
+> 歷史對比：userspace prototype（`src/` + `tiered_setup`）已移除，僅存本表作為設計演化參考。
+
+| | TieredVol (用戶態，已移除) | DRIVER (內核態) |
 |---|---|---|
 | **I/O 路徑** | 用戶態 `pwrite/pread` + pthread | 內核 `submit_bio()` 零拷貝 |
 | **Stripe 計算** | 純數學，用戶態計算 | 內核二元搜尋 |

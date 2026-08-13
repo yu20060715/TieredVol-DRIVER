@@ -75,7 +75,7 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 	if (cur.disk < 0 || cur.disk >= ctx->ndisks) {
 		pr_err("tieredvol: map failed for sector %llu\n",
 		       (unsigned long long)bio->bi_iter.bi_sector);
-		tv_log(TV_LOG_ERR, 0, TV_LOG_IO,
+		tv_log(TV_LOG_ERR, TV_LOG_IO,
 		       "map fail sec=%llu", bio->bi_iter.bi_sector);
 		bio_io_error(bio);
 		return DM_MAPIO_SUBMITTED;
@@ -135,7 +135,7 @@ static int tieredvol_map(struct dm_target *ti, struct bio *bio)
 		}
 		if (bio_data_dir(bio) == WRITE &&
 		    tv_badmap_test(ctx, cur.disk, chunk_no)) {
-			tv_log(TV_LOG_WARN, cur.disk, TV_LOG_IO,
+			tv_log(TV_LOG_WARN, TV_LOG_IO,
 			       "skip bad chunk %llu disk[%d]", chunk_no, cur.disk);
 			bio_endio(bio);
 			return DM_MAPIO_SUBMITTED;

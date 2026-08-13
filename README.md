@@ -67,19 +67,36 @@ vs LVM（現行拓撲，2026-08-12，同 fio libaio d32，見 `docs/RESULTS.md`�
 git clone https://github.com/yu20060715/TieredVol-DRIVER.git
 cd TieredVol-DRIVER
 
-# Build userspace tools + kernel module
-make
+# Build kernel module + run unit tests
 make module
 
-# Create a weighted volume (loads kernel module automatically)
-sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb,sdc
+# Load kernel module
+sudo modprobe tieredvol
 
-# Or manual fio (libaio — 別用 io_uring QD=256，會灌高假數字):
+# Create a weighted volume from a config file (格式見 docs/CONFIG.md)
+# /etc/tieredvol/fastpool.conf 範例:
+#   [weighted_striping]
+#   version=1
+#   chunk_size=1048576
+#   segment_count=1
+#   disk_count=3
+#   disk0_name=/dev/nvme0n1
+#   disk1_name=/dev/sdb
+#   disk2_name=/dev/sdc
+#   seg0_begin=0
+#   seg0_end=21474836480
+#   seg0_count=3
+#   seg0_disks=0,1,2
+#   seg0_weight=6,2,1
+S=$(python3 -c "import configparser;c=configparser.ConfigParser();c.read('/etc/tieredvol/fastpool.conf');print(int(c['weighted_striping']['seg0_end'])//512)")
+echo "0 $S tieredvol /etc/tieredvol/fastpool.conf" | sudo dmsetup create fastpool
+
+# Benchmark (libaio — 別用 io_uring QD=256，會灌高假數字):
 sudo fio --name=bench --filename=/dev/mapper/fastpool --rw=write --bs=1M \
   --size=8G --direct=1 --ioengine=libaio --iodepth=32 --numjobs=1 --end_fsync=1
 
 # Remove
-sudo ./tiered_setup --remove --name fastpool
+sudo dmsetup remove fastpool
 ```
 
 ---
@@ -109,8 +126,9 @@ NVMe idle waiting for SATA     All disks finish at approximately
 ### Tiered Storage (Kernel dm target)
 
 ```bash
-# Create weighted volume (kernel module)
-sudo tiered_setup --create --name fastpool --disks nvme0n1,sdb
+# Create weighted volume from config (見 docs/CONFIG.md)
+S=$(python3 -c "import configparser;c=configparser.ConfigParser();c.read('/etc/tieredvol/fastpool.conf');print(int(c['weighted_striping']['seg0_end'])//512)")
+echo "0 $S tieredvol /etc/tieredvol/fastpool.conf" | sudo dmsetup create fastpool
 
 # Benchmark the volume (libaio，見 docs/TEST_PLAN.md)
 sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=8G \
@@ -122,31 +140,19 @@ sudo fio --filename=/dev/mapper/fastpool --rw=read --bs=1M --size=8G \
 sudo dmsetup table fastpool
 sudo dmsetup status fastpool
 
+# 控制/查詢 (dm message)，完整清單見 docs/MAPPING.md
+sudo dmsetup message fastpool 0 "status"
+sudo dmsetup message fastpool 0 "show_stats"
+sudo dmsetup message fastpool 0 "show_log"
+sudo dmsetup message fastpool 0 "borrow_on"
+
 # Remove volume
-sudo tiered_setup --remove --name fastpool
-```
-
-### LVM Striping (Legacy)
-
-```bash
-# Create LVM striped volume (--lvm flag required)
-sudo tiered_setup --create --name pool --disks sdb:300,sdc:200 --lvm --fs ext4 --mount /mnt/pool
-
-# Benchmark
-sudo fio --filename=/dev/mapper/tv_vg_pool-tv_lv_pool --rw=write --bs=128k --size=5G \
-  --direct=1 --ioengine=io_uring --iodepth=256 --numjobs=1
-
-# Remove
-sudo tiered_setup --remove --name pool
+sudo dmsetup remove fastpool
 ```
 
 ### Disk Management
 
-```bash
-sudo tiered_setup --list         # List all disks
-sudo tiered_setup --bench --disks sdb,sdc,nvme0n1  # Benchmark disks
-sudo tiered_setup --status       # Show status
-```
+權重由 `scripts/auto_weight.sh`（python3 + fio，見 docs/CONFIG.md「weight 計算」）產生後填入 config。
 
 ---
 
@@ -167,14 +173,14 @@ sudo apt install lvm2 gcc make linux-headers-$(uname -r)
 ## Build
 
 ```bash
-make                    # Build tiered_setup
-make test               # Unit tests (235 assertions, 4 suites, no sudo)
-make module             # Build kernel module
+make module             # Build kernel module (主要產物)
+make test               # Unit tests (test_map + test_stripe_kernel，免 sudo)
+make lint               # Syntax check tests
 sudo make module_install # Install kernel module
 sudo depmod -a          # Update module dependencies
-sudo make test-full     # Unit + integration tests
+sudo make test-full     # Unit + integration (需 /dev/mapper/tv_* 存在)
 make clean              # Remove all build artifacts
-sudo make install       # Install to /usr/local/bin/
+sudo make install       # 等同 module_install（需 root）
 ```
 
 ---
@@ -187,13 +193,16 @@ TieredVol-DRIVER/
 ├── ARCHITECTURE.md
 ├── Makefile
 ├── common/
-│   └── tieredvol_meta_format.h     # Shared constants (kernel + userspace)
+│   └── tieredvol_meta_format.h     # Shared constants (kernel + tests)
 ├── driver/                         # Kernel dm-target module
 │   ├── tieredvol.h                 # Central header: all structs + exports
 │   ├── tieredvol_core.c            # DM lifecycle: ctr/dtr/map/status/init/exit
 │   ├── tieredvol_stripe.c          # Stripe-split helpers (B path)
 │   ├── tieredvol_map.c             # Logical→Physical: static/random + borrow
+│   ├── tieredvol_borrow.c          # Weight-borrowing redirect table (block index)
+│   ├── tieredvol_badmap.c          # Bad block map (bitmap per disk)
 │   ├── tieredvol_mirror.c          # Mirror I/O + pending tracking + end_io
+│   ├── tieredvol_wc.c              # Write coalescing buffer + flush
 │   ├── tieredvol_log.c             # Log ring buffer
 │   ├── tieredvol_meta.c            # Metadata read/write (config file)
 │   ├── tieredvol_sysfs.c           # sysfs interface
@@ -203,37 +212,27 @@ TieredVol-DRIVER/
 │   ├── tieredvol_msg_mirror.c      # Mirror/rebuild handlers
 │   ├── tieredvol_msg_config.c      # Config/log handlers
 │   └── Kbuild
-├── src/                            # Userspace tools
-│   ├── main.c                      # CLI entry point
-│   ├── tiered_types.h              # Core data structures
-│   ├── tiered_common.h             # Input validation
-│   ├── tiered_metadata.c           # Metadata save/load
-│   ├── tiered_partition.c          # Weight computation + segments
-│   ├── tiered_benchmark.c          # Raw device benchmark
-│   ├── warmup.c                    # SLC cache warm-up
-│   ├── cmd_create.c                # Volume creation (kernel dm-target + LVM)
-│   ├── cmd_remove.c                # Volume removal + status
-│   ├── exec_helper.c               # fork/exec wrappers
-│   ├── setup_discover.c            # Block device discovery
-│   └── setup_bench.c               # Parallel disk benchmarking
 ├── tests/
-│   ├── test_common.c               # Input validation tests
-│   ├── test_partition.c            # Weight/segment tests
-│   └── test_metadata.c             # Metadata round-trip tests
+│   ├── test_common.h               # Assertion macro (shared)
+│   ├── test_map.c                  # Logical→Physical mapping tests (301 assertions)
+│   ├── test_stripe_kernel.c        # Kernel stripe source vs mock headers (27 assertions)
+│   └── mock/linux/                 # Minimal mock kernel headers for userspace tests
 ├── docs/
 │   ├── ARCHITECTURE.md            # Kernel 架構總覽
 │   ├── DESIGN.md                  # 設計本質 + 不要亂改清單（先讀）
 │   ├── RESULTS.md                 # 疊碟測試結果（現況拓撲）
 │   ├── TEST_PLAN.md               # 疊碟驗收計畫（主目標）
 │   ├── CONFIG.md                  # 設定檔參考
-│   ├── USAGE.md                   # Usage tutorial
 │   ├── MAPPING.md                 # 映射/權重實驗紀錄
 │   ├── MIRROR.md                  # Mirror/RAID1 設計
 │   ├── WC.md                      # Write coalescing 設計
 │   ├── ROADMAP.md                 # Roadmap（已實作標記）
-│   └── PARTITION_SPLITTING.md     # Weighted striping algorithm
+│   └── PARTITION_SPLITTING.md     # Weighted striping algorithm（歷史 prototype）
 └── scripts/
-    └── install_deps.sh             # Install dependencies + build
+    ├── auto_weight.sh             # fio 測速 + 產生 seg weight（docs/CONFIG.md）
+    ├── msg_probe.sh               # dm message 全 handler 回歸探測
+    ├── borrow_verify.sh           # borrow 借出/持久化/重載驗證
+    └── install_deps.sh            # Install dependencies + build
 ```
 
 ### Kernel Module Architecture
@@ -244,6 +243,7 @@ TieredVol-DRIVER/
 | `tieredvol_stripe.c` | Stripe-split helpers: boundaries, ranges, parallel submit |
 | `tieredvol_map.c` | Logical→Physical mapping (static/random) |
 | `tieredvol_borrow.c` | Weight-borrowing: per-block redirect table, lookup, persistence |
+| `tieredvol_badmap.c` | Bad block map: bitmap per disk, set/clear/query, IO error marking |
 | `tieredvol_mirror.c` | Mirror I/O, pending tracking (per-CPU), mirror/destroy ctx, parallel end_io |
 | `tieredvol_wc.c` | Write-coalescing buffer + flush, init/destroy ctx (Phase 1 C) |
 | `tieredvol_log.c` | Log ring buffer |

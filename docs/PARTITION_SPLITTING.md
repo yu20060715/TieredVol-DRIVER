@@ -1,5 +1,7 @@
 # Partition Splitting — 切塊演算法
 
+> **歷史文件**：本篇描述的是已移除的 userspace prototype（`src/`）中 weighted striping 的切塊設計與模擬。現行實作已移入 kernel（`driver/tieredvol_map.c` + `driver/tieredvol_stripe.c`），演算法本質相同；結構對應與權重實驗紀錄見 `docs/ARCHITECTURE.md`、`docs/MAPPING.md`。文中 `src/tiered_types.h`、`tiered_setup` 等引用僅供歷史參考。
+
 本文檔說明 TieredVol Scheduler 的核心切塊演算法：根據每顆碟的速度與容量，計算每個 cycle 每顆碟拿幾塊（chunk）。
 
 > **原型限制**：Weight 在初始化時透過 benchmark 產生靜態值（含 SLC cache 預熱），不可在執行時變更。更改 weight 會使所有 logical-to-physical mapping 失效，除非執行資料遷移。
@@ -8,7 +10,7 @@
 
 ## 資料結構
 
-所有 struct 定義在 `src/tiered_types.h`。以下是說明：
+所有 struct 定義曾位於 `src/tiered_types.h`。以下是說明：
 
 ### TV_DISK
 
@@ -111,7 +113,7 @@ SATA:   480 MB/s
 
 ### 方法：四捨五入 + 上限
 
-目前實作（`tv_compute_weight()` in `tiered_partition.c`）採用簡單的四捨五入：
+目前實作（`tv_compute_weight()` in `tiered_partition.c`，歷史原型）採用簡單的四捨五入：
 
 ```c
 double w = speed / slowest;
@@ -192,7 +194,7 @@ C 只有 512GB，A 和 B 有 1TB。當 C 用完後，剩下三顆碟的比例就
 
 分段資訊：邏輯 offset 範圍, 碟數量, 碟 index 陣列, 權重陣列, stripe size。
 
-定義見 `src/tiered_types.h`。
+定義曾見於 `src/tiered_types.h`（歷史原型）。
 
 四顆碟容量：Disk0 4TB, Disk1 2TB, Disk2 2TB, Disk3 1TB
 
@@ -253,7 +255,7 @@ SATA 應拿：2400 × 480/1714  = 672KB
 
 ## Metadata
 
-Metadata 結構定義在 `src/tiered_types.h`（TV_METADATA）。
+Metadata 結構定義曾於 `src/tiered_types.h`（TV_METADATA，歷史原型）。
 
 儲存格式：
 ```
@@ -299,8 +301,7 @@ physical_offset = stripe_no × (weight × chunk) + offset_in_disk
 
 ## 整合到 TieredVol
 
-```
-sudo tiered_setup --create --name fastpool --disks nvme0n1,sda,sdb
+> 現行 kernel 版本使用 config + `dmsetup create`，見 `docs/CONFIG.md`。
 
 程式內部：
   1. benchmark → 取得速度
@@ -309,7 +310,7 @@ sudo tiered_setup --create --name fastpool --disks nvme0n1,sda,sdb
   4. 儲存 metadata 到 /etc/tieredvol/*.conf
   5. dmsetup create → 建立 tieredvol dm target
   6. dispatch 時查 weight → 每顆碟拿幾 chunks
-```
+
 
 ---
 
@@ -329,4 +330,4 @@ sudo tiered_setup --create --name fastpool --disks nvme0n1,sda,sdb
 ## 參考
 
 - Weighted striping 概念：參考儲存領域已有的 weighted allocation 概念
-- Ratio 近似演算法：四捨五入 + 上限（tv_compute_weight in tiered_partition.c）
+- Ratio 近似演算法：四捨五入 + 上限（tv_compute_weight in tiered_partition.c，歷史原型）

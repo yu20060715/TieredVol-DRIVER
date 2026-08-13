@@ -64,7 +64,7 @@ static int msg_set_mirror(struct dm_target *ti, unsigned int argc,
 	ctx->meta.segments[seg_idx].mirror_disk = disk_idx;
 	pr_info("tieredvol: seg%u mirror -> disk%u (%s)\n", seg_idx,
 		disk_idx, ctx->meta.disk_names[disk_idx]);
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "mirror seg%u->disk%u",
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG, "mirror seg%u->disk%u",
 	       seg_idx, disk_idx);
 	tv_metadata_save_kernel(ctx);
 	return 0;
@@ -94,7 +94,7 @@ static int msg_reset_errors(struct dm_target *ti, unsigned int argc,
 	for (i = 0; i < ctx->ndisks; i++)
 		atomic_set(&ctx->deg.error_count[i], 0);
 	pr_info("tieredvol: error counts reset\n");
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "errors reset");
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG, "errors reset");
 	return 0;
 }
 
@@ -109,7 +109,7 @@ static int msg_set_error_threshold(struct dm_target *ti, unsigned int argc,
 		return -EINVAL;
 	ctx->deg.error_threshold = thresh;
 	pr_info("tieredvol: error_threshold=%u\n", thresh);
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "err_thresh=%u", thresh);
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG, "err_thresh=%u", thresh);
 	return 0;
 }
 
@@ -142,7 +142,7 @@ static int msg_clear_degraded(struct dm_target *ti, unsigned int argc,
 			cleared++;
 			pr_info("tieredvol: disk[%d] %s cleared from DEGRADED\n",
 				i, ctx->meta.disk_names[i]);
-			tv_log(TV_LOG_INFO, i, TV_LOG_IO, "CLEARED degraded");
+			tv_log(TV_LOG_INFO, TV_LOG_IO, "CLEARED degraded");
 		}
 	}
 	snprintf(result, maxlen, "%d disk(s) cleared", cleared);
@@ -187,7 +187,7 @@ static int msg_start_rebuild(struct dm_target *ti, unsigned int argc,
 	}
 	pr_info("tieredvol: rebuild started seg%u %llu bytes\n",
 		seg_idx, ctx->rebuild.total);
-	tv_log(TV_LOG_INFO, ctx->meta.segments[seg_idx].mirror_disk,
+	tv_log(TV_LOG_INFO,
 	       TV_LOG_MIRROR, "rebuild start seg%u %llu bytes",
 	       seg_idx, ctx->rebuild.total);
 	return 0;
@@ -209,7 +209,7 @@ static int msg_stop_rebuild(struct dm_target *ti, unsigned int argc,
 	}
 	pr_info("tieredvol: rebuild stopped at %llu/%llu\n",
 		ctx->rebuild.offset, ctx->rebuild.total);
-	tv_log(TV_LOG_WARN, 0, TV_LOG_MIRROR,
+	tv_log(TV_LOG_WARN, TV_LOG_MIRROR,
 	       "rebuild stopped %llu/%llu",
 	       ctx->rebuild.offset, ctx->rebuild.total);
 	return 0;

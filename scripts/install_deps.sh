@@ -80,7 +80,7 @@ case "$DISTRO" in
 esac
 
 echo ""
-echo "Building TieredVol..."
+echo "Building TieredVol (kernel module)..."
 cd "$PROJECT_DIR"
 make clean
 make -j"$(nproc)" 2>&1 | sed 's/^/  /'
@@ -90,16 +90,16 @@ echo "=========================================="
 echo "  Build successful!"
 echo "=========================================="
 echo ""
-echo "  Binaries:"
-ls -la tiered_setup 2>/dev/null | awk '{print "    " $NF " (" $5 " bytes)"}'
+echo "  Artifact:"
+ls -la driver/tieredvol.ko 2>/dev/null | awk '{print "    " $NF " (" $5 " bytes)"}'
 echo ""
 
 if [[ $DO_INSTALL -eq 1 ]]; then
-    echo "Installing to /usr/local/bin/..."
+    echo "Installing kernel module..."
     sudo make install
     echo ""
-    echo "Installed! Run with:"
-    echo "  sudo tiered_setup --list"
+    echo "Installed! Load with:"
+    echo "  sudo modprobe tieredvol"
 fi
 
 if [[ $DO_TEST -eq 1 ]]; then
@@ -109,6 +109,7 @@ fi
 
 echo ""
 echo "Quick start:"
-echo "  sudo ./tiered_setup --list"
-echo "  sudo ./tiered_setup --create --name fastpool --disks nvme0n1,sdb --lvm"
-echo "  sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=2G --direct=1 --ioengine=io_uring --iodepth=256"
+echo "  # 1. 準備 config（格式見 docs/CONFIG.md）：/etc/tieredvol/<name>.conf"
+echo "  S=\$(python3 -c \"import configparser;c=configparser.ConfigParser();c.read('/etc/tieredvol/fastpool.conf');print(int(c['weighted_striping']['seg0_end'])//512)\")"
+echo "  echo \"0 \$S tieredvol /etc/tieredvol/fastpool.conf\" | sudo dmsetup create fastpool"
+echo "  sudo fio --filename=/dev/mapper/fastpool --rw=write --bs=1M --size=2G --direct=1 --ioengine=libaio --iodepth=32"

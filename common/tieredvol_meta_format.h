@@ -1,7 +1,7 @@
 /*
  * tieredvol_meta_format.h — Shared metadata format definitions
  *
- * Used by both kernel module (driver/) and userspace tool (src/).
+ * Used by kernel module (driver/) and userspace kernel-source tests (tests/).
  * Defines on-disk config format constants and key names.
  *
  * SPDX-License-Identifier: GPL-2.0-only

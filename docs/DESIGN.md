@@ -85,7 +85,7 @@ DM 會再對剩餘部分重進 map()。**跨碟拆分基本由 DM 做，driver �
 
 ### Weight-borrowing（`driver/tieredvol_borrow.c`）
 - 慢碟 in-flight ≥ watermark 且整 block 對齊 → 重導至最少負載碟（排除
-  src/degraded/無空間）的 over-provisioned 借用區，per-block 表記錄。
+  degraded/無空間）的 over-provisioned 借用區，per-block 表記錄。
 - **一致性不變式**：`borrow_off` 只停新借；lookup 與 need==0 的重寫
   永遠解析至借用區（不檢查 enabled），故已借 block 的讀寫不受開關影響。
 - 借用區配置是 all-or-none（整 block），避免部分配置造成表不一致。
@@ -116,9 +116,9 @@ DM 會再對剩餘部分重進 map()。**跨碟拆分基本由 DM 做，driver �
 
 ### Config（`driver/tieredvol_meta.c` + `common/tieredvol_meta_format.h`）
 - **單一真相來源**：`/etc/tieredvol/<name>.conf` INI 檔。
-- kernel 與 userspace（`src/`）共用同一格式；kernel 載入驗 **CRC32C**；kernel save 先寫 `.bak`。
+- kernel 載入驗 **CRC32C**；kernel save 先寫 `.bak`（userspace parser 已隨舊 prototype `src/` 移除）。
 - dm table 本身極簡：`0 <sectors> tieredvol <config_path>`——佈局全部在 config 裡。
-- **不變式：改 config 格式 = 改 kernel parser + userspace parser + CRC 演算法，三處同步。**
+- **不變式：改 config 格式 = 改 kernel parser + CRC 演算法，兩處同步。**
 
 ## 6. 為什麼亂改會出 bug（承重牆清單）
 
@@ -128,12 +128,12 @@ DM 會再對剩餘部分重進 map()。**跨碟拆分基本由 DM 做，driver �
 | boundary 算術與不變式（segment 排序、stripe=Σweight、max_io_len ≤ stripe） | 映射錯位、資料寫錯碟 |
 | WC 讀序（read 必先 flush） | 讀到舊資料 |
 | mirror 寫 fire-and-forget + pending ring 的生命週期 | mirror 資料不一致 / ring 溢出 |
-| config 雙端 parser + CRC | 載入失敗、靜默損壞 |
+| config kernel parser + CRC | 載入失敗、靜默損壞 |
 | borrow 表一致性（off 仍解析、all-or-none 配置、.borrow 存/載） | 資料讀寫錯碟 / 跨 reload 位址漂移 |
 
 ## 修改規則
 
 1. 先講清楚「改哪個不變式、為什麼可以改」，再動 code。
 2. 動平行路徑或完成語義，必須解釋與 kref/timer 的互動。
-3. 改 config 格式：kernel、userspace、CRC 三處同步。
+3. 改 config 格式：kernel parser、CRC 兩處同步。
 4. 加測試：dmsetup 計數器（rd=/wr= ops/bytes）能驗證分布是否精確。

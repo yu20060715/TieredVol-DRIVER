@@ -241,7 +241,7 @@ void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 		pwc = mempool_alloc(ctx->mirror_pw_pool, GFP_NOIO);
 		if (!pwc) {
 			atomic64_inc(&ctx->mirror.mirror_errors);
-			tv_log(TV_LOG_ERR, cur.disk, TV_LOG_MIRROR,
+			tv_log(TV_LOG_ERR, TV_LOG_MIRROR,
 			       "mirror pwc alloc fail seg%d", cur.seg_idx);
 			return;
 		}
@@ -268,7 +268,7 @@ void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 		if (!clone) {
 			mempool_free(pwc, ctx->mirror_pw_pool);
 			atomic64_inc(&ctx->mirror.mirror_errors);
-			tv_log(TV_LOG_ERR, cur.disk, TV_LOG_MIRROR,
+			tv_log(TV_LOG_ERR, TV_LOG_MIRROR,
 			       "mirror alloc fail seg%d", cur.seg_idx);
 			return;
 		}
@@ -308,7 +308,7 @@ void tv_mirror_handle(struct tieredvol_ctx *ctx, struct bio *bio,
 		tv_pw_add(ctx, ctx->devs[seg->mirror_disk]->bdev,
 			  mirror_sec, bio_sz);
 		submit_bio(clone);
-		tv_log(TV_LOG_INFO, cur.disk, TV_LOG_MIRROR,
+		tv_log(TV_LOG_INFO, TV_LOG_MIRROR,
 		       "mirrored %uKB seg%d->disk%d",
 		       bio_sz >> 10, cur.seg_idx, seg->mirror_disk);
 		goto done;
@@ -323,7 +323,7 @@ fail_copy:
 		bio_put(clone);
 		mempool_free(pwc, ctx->mirror_pw_pool);
 		atomic64_inc(&ctx->mirror.mirror_errors);
-		tv_log(TV_LOG_ERR, cur.disk, TV_LOG_MIRROR,
+		tv_log(TV_LOG_ERR, TV_LOG_MIRROR,
 		       "mirror copy fail seg%d", cur.seg_idx);
 done:
 		return;
@@ -466,7 +466,7 @@ int tieredvol_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 			int errs;
 
 			errs = atomic_inc_return(&ctx->deg.error_count[disk_id]);
-			tv_log(TV_LOG_ERR, disk_id, TV_LOG_IO,
+			tv_log(TV_LOG_ERR, TV_LOG_IO,
 			       "I/O error on %s status=%d err=%d",
 			       ctx->meta.disk_names[disk_id],
 			       bio->bi_status, errs);
@@ -478,7 +478,7 @@ int tieredvol_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 					disk_id, ctx->meta.disk_names[disk_id],
 					errs,
 					ctx->deg.error_threshold);
-				tv_log(TV_LOG_WARN, disk_id, TV_LOG_IO,
+				tv_log(TV_LOG_WARN, TV_LOG_IO,
 				       "DEGRADED err=%d", errs);
 				schedule_work(&ctx->trigger_event);
 			}
@@ -489,7 +489,7 @@ int tieredvol_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 				u64 chunk_no = phy_byte / ctx->meta.chunk_size;
 
 				tv_badmap_set(ctx, disk_id, chunk_no);
-				tv_log(TV_LOG_ERR, disk_id, TV_LOG_IO,
+				tv_log(TV_LOG_ERR, TV_LOG_IO,
 				       "WRITE err mark bad chunk %llu", chunk_no);
 			}
 		}
@@ -571,7 +571,7 @@ int tv_rebuild_thread(void *data)
 		if (ctx->rebuild.offset >= ctx->rebuild.total) {
 			pr_info("tieredvol: rebuild seg%d complete (%llu bytes)\n",
 				ctx->rebuild.seg_idx, ctx->rebuild.total);
-			tv_log(TV_LOG_INFO, seg->mirror_disk, TV_LOG_MIRROR,
+			tv_log(TV_LOG_INFO, TV_LOG_MIRROR,
 			       "rebuild seg%d complete %llu bytes",
 			       ctx->rebuild.seg_idx, ctx->rebuild.total);
 			atomic_set(&ctx->rebuild.running, 0);

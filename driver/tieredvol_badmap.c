@@ -128,7 +128,7 @@ void tv_badmap_rebuild(struct tieredvol_ctx *ctx)
 				recovered++;
 			} else {
 				clear_bit(chunk, ctx->badmaps[d].bitmap);
-				tv_log(TV_LOG_WARN, d, TV_LOG_RECOVER,
+				tv_log(TV_LOG_WARN, TV_LOG_RECOVER,
 				       "bad chunk %llu lost", chunk);
 				failed++;
 			}

@@ -69,7 +69,7 @@ chunk_size 建議與 filesystem block size 或常用 I/O size 一致（1MB = 104
 
 從 benchmark 速度計算：`weight = speed / slowest_speed`。
 
-不指定則 `tiered_setup --create` 會自動測速計算。
+未指定時由 `scripts/auto_weight.sh`（python3 + fio 並行測速）產生後填入 config。
 
 > **權重推導方式**：以**平行仲裁**（所有碟同時打 raw，取實際並行吞吐）為準，
 > 不要用單碟 solo 測速（solo 會因 DMI 池 / PCIe 插槽互搶而失真）。
@@ -90,17 +90,18 @@ Segment 1: 1TB ~ 2TB   → disks [0,1]
 Segment 2: 2TB ~ 4TB   → disks [0]
 ```
 
-## Carve 語法
+## Carve 語法（歷史：userspace prototype 已移除）
 
-建立時用 `碟名:GB` 指定 carve 容量：
+建立時用 `碟名:GB` 指定 carve 容量（舊 `tiered_setup` 語法，僅供參考）：
 
 ```bash
 sudo tiered_setup --create --name pool --disks nvme0n1:100,sdb:50
 ```
 
-- DM path（預設）和 LVM path 都支援
-- 不指定 `:GB` 時使用整碟（扣 1GB）
-- dm-linear 從 sector 0 開始 carve，剩餘空間不能再次使用
+> 現行 kernel 版本：config 中 `seg{X}_end - seg{X}_begin` 即 carve 範圍，用 `dmsetup create` 建立。
+> - DM path（預設）和 LVM path 都支援
+> - 不指定 `:GB` 時使用整碟（扣 1GB）
+> - dm-linear 從 sector 0 開始 carve，剩餘空間不能再次使用
 
 ## Borrow 運行期設定（`[runtime]` 節，可選）
 

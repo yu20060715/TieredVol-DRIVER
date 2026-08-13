@@ -298,7 +298,7 @@ int tv_metadata_save_kernel(struct tieredvol_ctx *ctx)
 		goto out_unlock;
 	}
 
-	tv_log(TV_LOG_INFO, 0, TV_LOG_CONFIG, "metadata saved crc=0x%08x",
+	tv_log(TV_LOG_INFO, TV_LOG_CONFIG, "metadata saved crc=0x%08x",
 	       crc);
 	pr_info("tieredvol: metadata saved crc=0x%08x to %s\n", crc,
 		ctx->config_path);

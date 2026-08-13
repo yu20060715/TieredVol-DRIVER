@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * tieredvol_log.c — Log ring buffer, EMA load tracking
+ * tieredvol_log.c — Log ring buffer
  *
  * Extracted from tieredvol_core.c in Phase 1 refactoring.
  */
@@ -27,13 +27,12 @@ raw_spinlock_t tv_log_lock = __RAW_SPIN_LOCK_UNLOCKED(tv_log_lock);
 
 u8 tv_log_level = TV_LOG_INFO;
 
-void tv_log(u8 level, u8 disk_idx, u8 event_type, const char *fmt, ...)
+void tv_log(u8 level, u8 event_type, const char *fmt, ...)
 {
 	struct tv_log_entry entry;
 	va_list args;
 	unsigned long flags;
 
-	(void)disk_idx;
 	if (level > tv_log_level)
 		return;
 
