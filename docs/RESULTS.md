@@ -499,10 +499,31 @@ solo（8G）**A=2056.5、B=413.1、C=518.0、D=220.3**（Σsolo=3208）。**v1 �
 - **D8（確定性重現）**：同權（A:B:C=4:3:2）重建 3 次：vol1 寫 ramp → vol2 讀回 byte 精確；vol2 覆寫 0x3C → vol3 讀回全 0x3C。**雙向確定**。
 - **E9（sparse + lockdep）**：`make C=2 CHECK=sparse` **抓到 1 個真 bug**——`tv_borrow_redirect`（tieredvol_borrow.c）在 `borrow_off` 後（entries 保留、enabled=false）遇未借區小寫入（need>0）分支**帶 spinlock（irqs off）直接 return** → 下一個碰 `borrow.lock` 的 I/O 死鎖（B4 全 1M 寫被 WC 緩衝而未觸發）。已修復（該分支加 unlock）並驗證：borrow_off + 512K 小寫入不再掛、讀回正確。剩 2 個 blk_status_t 良性 cast。**lockdep**：本機 kernel 6.14.0-27-generic 的 `CONFIG_PROVE_LOCKING` 未開，無法跑 runtime lockdep；以 sparse lock-context 檢查替代（即上述 bug 來源）。
 - **當機調查**：兩次硬當無 panic/oops（硬當不留痕跡）、SMART 全乾淨（sdb 重配置/待處理/CRC 皆 0、28°C）。boot -2 日誌在 `pkill -9 -f busyd`（SIGKILL 兩個對 /dev/sdb 做 64 深佇列 1M direct 寫的背景 fio）後 **2 秒內中斷**；boot -1（35 秒）殘留態再掛。**根因 = AHCI/SATA 控制器被深佇列 direct I/O 的 SIGKILL wedged**（B85 老晶片組，前次 SIGTERM 未掛、本次 -9 掛，時序吻合）；tieredvol driver 當下完全閒置、非其責任。後續改用固定 `--runtime` 自然結束 fio 不再觸發。
+- **B4 補充（8/14 晚第二批）**：上述「借調中性」僅在 **D 飽和背景**下成立。**D 閒置時 borrow ON 反而淨損 ~24–29%**：m_s4b（borrow ON，area 2048MB@A、watermark 256KB）1M 寫 4G=2769、8G=2344（8G 時 2G 表滿 + unborrow 回寫更慢），vs 同權重 borrow OFF ~3300。原因：D 份額寫入被重導到 A 的 borrow area，加重 A 瓶頸（A 由 64/104 變 ~68/104 負載）。**A1 排水態 2517 即 borrow-on config 所致**。生產 tv_s4 borrow off 是正確選擇。
+
+## 8/14 晚第二批：6.4.2 三張表 + F12 SLC 曲線（USB 計畫更新版）
+
+協議同主表（排水態，先 64G 排水再量）；fio 參數固定 `--direct=1 --ioengine=libaio --iodepth=32 --numjobs=1`。三配置：TieredVol S4（`tv_s4.conf` [64:27:9:4]、20G carve、**borrow off**）、LVM 4d stripe（`pvcreate` 4 碟→`lvcreate --stripes 4 --stripesize 1M -L 20G`，測完 `vgremove/pvremove` 還原裸碟）、單碟 A（裸碟 by-id 直連）。LVM 測試需裸碟 → 生產卷暫時拆除、測後原樣重建。
+
+| 測試（8G） | TieredVol S4 | LVM 4d stripe | 單碟 A |
+|------|-------------|---------------|--------|
+| 4K 隨機寫 | **663** | 570 | 812 |
+| 4K 隨機讀 | **680** | 496 | 533 |
+| 1M 50:50 混寫 | **R1149 / W1175** | R366 / W375 | R584 / W597 |
+
+- **vs LVM**：TieredVol 三項全勝——4K 寫 **+16%**、4K 讀 **+37%**、1M 混寫 **~3.1x**（LVM 4 碟 stripe 在 1M randrw 下 seek 橫跨 1M strip、RMW 爭用，僅 366/375）。
+- **vs 單碟 A**：4K 寫 663<812（-18%，聚合含慢碟 B/C/D 的 4K 隨機表現，且 1M chunk 使 4K I/O 單碟落點）；4K 讀 **+28%**；1M 混寫 **~2x**（4 碟聚合在混合負載的優勢）。
+- 註：S4 數字為 20G 生產 carve；LVM/單碟測前各排水 64G。
+
+**B. F12 SLC 衰減曲線（結果：平坦，無衰減可觀測）**——原始數據 `docs/data/slc_curve_{20g,100g}.txt`。
+
+- **20G carve（生產 tv_s4）**：60s 回充後每 1G 記瞬時吞吐，**80 點全程平坦 ~3300**（2800–3400 雜訊、無趨勢）。
+- **100G carve（同權重、無 borrow）**：**40 點全程平坦 ~3200**（2830–3357、無趨勢）。
+- **解釋**：64:27:9:4 是 **A-bound**（穩態天花板 = A solo ~2064 × 104/64 ≈ 3350）。60s 回充協定下 A 跑在穩態速，聚合 1M 順序寫**從頭頂在天花板**，SLC 增額無從顯現（8/14 下午 S2=3547≈模型 3571、S3=3370≈模型 3364 同證）。SLC 增額只在 A 非瓶頸的配置才可觀測。F12 圖應畫水平線 ~3300 並註記此瓶頸封頂效應。
 
 ---
 
 > 復現指引：各項的 config（`configs/test/`）、完整命令與 dAerr 合成裝置配方見 `docs/SUPPLEMENTARY_20260814.md`。
 
-現役 conf（**8/14 晚 B@x4 + D 重加權**，基於 8/14 下午 B@x4 實證權重）：`/etc/tieredvol/tv_s1.conf` [1]、`tv_s2.conf` **[37:27]**（寫 3547）、`tv_s3.conf` **[64:30:10]**（DMI-aware 3370）、`tv_mir.conf` **[37:27]**+mirror=C、`tv_s4.conf` **[64:27:9:4]**（A1 排水態 2517/4292）（對應 repo `configs/`）。8G write+verify 分布對確定性映射**逐 chunk 吻合**（tv_s3/tv_s4 為 78 條整 stripe + 80 partial chunks A-優先；tv_mir C 收到全量 mirror 8G）。
+現役 conf（**8/14 晚 B@x4 + D 重加權**，基於 8/14 下午 B@x4 實證權重）：`/etc/tieredvol/tv_s1.conf` [1]、`tv_s2.conf` **[37:27]**（寫 3547）、`tv_s3.conf` **[64:30:10]**（DMI-aware 3370）、`tv_mir.conf` **[37:27]**+mirror=C、`tv_s4.conf` **[64:27:9:4]**（borrow off，1M 順序寫穩態 ~3300；A1 的 2517 為 borrow-on config） （對應 repo `configs/`）。8G write+verify 分布對確定性映射**逐 chunk 吻合**（tv_s3/tv_s4 為 78 條整 stripe + 80 partial chunks A-優先；tv_mir C 收到全量 mirror 8G）。
 （碟位史：8/13 午 disk0=nvme1n1、8/13 晚回到 disk0=nvme0n1；8/14 下午 A=SN750=nvme1n1（CPU 直連）、B=P3 Plus=nvme0n1（PCH x4）；8/14 晚第一次重開機後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x1）；**8/14 晚換碟回 B@x4 + D 後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x4）**。config 一律用 by-id，與 nvme 編號無關。）
