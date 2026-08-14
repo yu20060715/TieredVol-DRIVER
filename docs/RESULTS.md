@@ -502,5 +502,7 @@ solo（8G）**A=2056.5、B=413.1、C=518.0、D=220.3**（Σsolo=3208）。**v1 �
 
 ---
 
+> 復現指引：各項的 config（`configs/test/`）、完整命令與 dAerr 合成裝置配方見 `docs/SUPPLEMENTARY_20260814.md`。
+
 現役 conf（**8/14 晚 B@x4 + D 重加權**，基於 8/14 下午 B@x4 實證權重）：`/etc/tieredvol/tv_s1.conf` [1]、`tv_s2.conf` **[37:27]**（寫 3547）、`tv_s3.conf` **[64:30:10]**（DMI-aware 3370）、`tv_mir.conf` **[37:27]**+mirror=C、`tv_s4.conf` **[64:27:9:4]**（A1 排水態 2517/4292）（對應 repo `configs/`）。8G write+verify 分布對確定性映射**逐 chunk 吻合**（tv_s3/tv_s4 為 78 條整 stripe + 80 partial chunks A-優先；tv_mir C 收到全量 mirror 8G）。
 （碟位史：8/13 午 disk0=nvme1n1、8/13 晚回到 disk0=nvme0n1；8/14 下午 A=SN750=nvme1n1（CPU 直連）、B=P3 Plus=nvme0n1（PCH x4）；8/14 晚第一次重開機後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x1）；**8/14 晚換碟回 B@x4 + D 後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x4）**。config 一律用 by-id，與 nvme 編號無關。）
