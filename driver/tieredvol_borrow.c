@@ -249,8 +249,10 @@ bool tv_borrow_redirect(struct tieredvol_ctx *ctx, int src_disk,
 	/* New borrows only when borrow is enabled, the source is backlogged
 	 * and the range covers whole blocks (no holes in the borrow-area
 	 * copy). */
-	if (!ctx->borrow.enabled)
+	if (!ctx->borrow.enabled) {
+		spin_unlock_irqrestore(&ctx->borrow.lock, flags);
 		return false;
+	}
 	if ((u32)atomic_read(&ctx->io.in_flight_bytes[src_disk]) <
 	    ctx->borrow.watermark_bytes) {
 		spin_unlock_irqrestore(&ctx->borrow.lock, flags);

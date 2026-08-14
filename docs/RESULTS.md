@@ -485,5 +485,22 @@ solo（8G）**A=2056.5、B=413.1、C=518.0、D=220.3**（Σsolo=3208）。**v1 �
 17. **B85 DMI 上限 = 三碟聚合的硬體天花板（8/14 下午）**：B+C 共用 DMI 上行 ~1300 MB/s。比例權重 S3 [64,47,16] 僅 2561；DMI-aware [64,30,10] 達 3370（+32%），但 S3_max = A+DMI ≈ 3364 < S2_max = A+B ≈ 3590 → **a+b+c 寫入恆 ≤ a+b，C 只加容量**（硬體限制、非 driver 缺陷；全速三碟需無 DMI 牆平台如 B650M AM5）。
 18. **8/14 兩組實驗定案**：實驗 1（B@x1）三碟聚合 2078<2410<2896（Σsolo 96.9%）＋實驗 2（B@x4）a+b=3547（+47%）——權重-速比匹配與插槽解鎖的完整證明。量測協定（寫前空檔 60s 等 SLC 回充）確保跨日可比。
 
-現役 conf（8/14 晚重加權，B@x1 + D 回池）：`/etc/tieredvol/tv_s1.conf` [1]、`tv_s2.conf` [83:17]、`tv_s3.conf` [81:16:20]、`tv_mir.conf` [83:17]+mirror=C、`tv_s4.conf` [82:16:20:9]（D 回池後回歸）（對應 repo `configs/`）。
-（歷史碟位：8/13 午 disk0=nvme1n1、8/13 晚回到 disk0=nvme0n1；8/14 下午 A=SN750=nvme1n1（CPU 直連）、B=P3 Plus=nvme0n1（PCH x4）；**8/14 晚重開機後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x1）**。config 一律用 by-id，與 nvme 編號無關。）
+## 8/14 晚補測（USB 計畫檔 A–E，B@x4 + D 回池）
+
+拓撲與 8/14 下午相同：A=SN750（8.0 GT/s x4、CPU 直連）、B=P3 Plus（5.0 GT/s **x4**、PCH）、C=MX500、D=WD Blue 回池、E=BX100 開機。排水態協定同前。
+
+- **A1（主表 S4 64:27:9:4，排水態×2）**：寫 2530/2503 → 中位 **2517 MB/s**；讀 4290/4293 → **4292 MB/s**；兩輪分布與確定性映射**零誤差**（A=10104M/B=4239M/C=1413M/D=628M）；B+C+D 寫份額 ≈970 < DMI 1300（排水態 A 為瓶頸、DMI 未飽和）。
+- **A2（MIR 讀）**：A:B=4:3→C 卷讀 16G = **3799 MB/s**；讀分布 A:B=74978:56247≈4:3 精確、C=0。
+- **A3（vs LVM @B@x4）**：LVM 4 碟 1M stripe 20G = 寫 1616/讀 1791；TV S4 fresh 寫 3091/讀 3575 → **寫 ~1.9x、讀 2.0x**（排水態 2517/4292 → 讀 2.4x）；**1.96–3.5x 方向不變**。
+- **B4（借調效益，最有價值的負結果）**：無背景 off=2348/on=2197/off=2154（on 落在 SLC 漂移帶內，純開銷小）；D 飽和 off=1851/1865、on=1949/1742（平均 1858 vs 1846，**≈相等**）。**借調在 64:27:9:4 下中性**：D 份額僅 3.85%（~96 MB/s ≪ solo 229），D 天然非瓶頸、無功可借；與 8/13 的 +3%（6:1:1:1、D 真瓶頸）互補——借調只在「慢碟真為瓶頸」的拓撲有正效益。另記：100G carve 的 borrow 表（819200×16B≈13 MB）超 kmalloc 上限 → ENOMEM，20G carve（2.6 MB）可用。
+- **C5（mirror 讀重試，fail injection）**：對 A 掛 1M dm-error 窗（dAerr=linear+error+linear 合成裝置）→ 讀該區**成功**（A err=1，資料必來自 mirror）；在 C 的 mirror 區（mirror_sec=logical>>9）埋 0xD5 → volume 讀回 **byte 精確 0xD5**。證明 fallback 讀到正確 mirror sector。**統計小洞**：mirror retry 讀不計入 per-disk rd counter（show_stats/sysfs C 顯示 rd=0）。
+- **C6（write 錯誤→自動 badmap）**：寫入失敗 chunk 自動標記（後續讀 = **zero-fill** 全 0、重寫被 **skip** 且無錯誤資料不變）；sysfs err=1。
+- **D7（WC read-after-write）**：部分 stripe 寫入未 flush 前立即讀回正確（讀觸發 flush）；fio 6G write+verify **0 mismatch**；重讀 6G 0 mismatch。
+- **D8（確定性重現）**：同權（A:B:C=4:3:2）重建 3 次：vol1 寫 ramp → vol2 讀回 byte 精確；vol2 覆寫 0x3C → vol3 讀回全 0x3C。**雙向確定**。
+- **E9（sparse + lockdep）**：`make C=2 CHECK=sparse` **抓到 1 個真 bug**——`tv_borrow_redirect`（tieredvol_borrow.c）在 `borrow_off` 後（entries 保留、enabled=false）遇未借區小寫入（need>0）分支**帶 spinlock（irqs off）直接 return** → 下一個碰 `borrow.lock` 的 I/O 死鎖（B4 全 1M 寫被 WC 緩衝而未觸發）。已修復（該分支加 unlock）並驗證：borrow_off + 512K 小寫入不再掛、讀回正確。剩 2 個 blk_status_t 良性 cast。**lockdep**：本機 kernel 6.14.0-27-generic 的 `CONFIG_PROVE_LOCKING` 未開，無法跑 runtime lockdep；以 sparse lock-context 檢查替代（即上述 bug 來源）。
+- **當機調查**：兩次硬當無 panic/oops（硬當不留痕跡）、SMART 全乾淨（sdb 重配置/待處理/CRC 皆 0、28°C）。boot -2 日誌在 `pkill -9 -f busyd`（SIGKILL 兩個對 /dev/sdb 做 64 深佇列 1M direct 寫的背景 fio）後 **2 秒內中斷**；boot -1（35 秒）殘留態再掛。**根因 = AHCI/SATA 控制器被深佇列 direct I/O 的 SIGKILL wedged**（B85 老晶片組，前次 SIGTERM 未掛、本次 -9 掛，時序吻合）；tieredvol driver 當下完全閒置、非其責任。後續改用固定 `--runtime` 自然結束 fio 不再觸發。
+
+---
+
+現役 conf（8/14 晚重加權，B@x1 + D 回池，**尚未為 B@x4 重新加權**）：`/etc/tieredvol/tv_s1.conf` [1]、`tv_s2.conf` [83:17]、`tv_s3.conf` [81:16:20]、`tv_mir.conf` [83:17]+mirror=C、`tv_s4.conf` [82:16:20:9]（對應 repo `configs/`）。
+（碟位史：8/13 午 disk0=nvme1n1、8/13 晚回到 disk0=nvme0n1；8/14 下午 A=SN750=nvme1n1（CPU 直連）、B=P3 Plus=nvme0n1（PCH x4）；8/14 晚第一次重開機後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x1）；**8/14 晚換碟回 B@x4 + D 後 A=SN750=nvme0n1、B=P3 Plus=nvme1n1（PCH x4）**。config 一律用 by-id，與 nvme 編號無關。）

@@ -209,3 +209,4 @@ sudo fio --name=r --filename=/dev/mapper/<name> --rw=read --bs=1M --size=8G \
 | **P4 多卷併發** | **完成**（2026-08-13，三組對照全 PASS，driver 零併發開銷） | `docs/RESULTS.md` |
 | **8/14 全卷自動加權定案（S1–S3，B@x1）** | **完成**（2026-08-14 早冷態，S3=2896 = Σsolo 96.9%） | `docs/RESULTS.md` |
 | **8/14 插槽解鎖＋DMI 兩組實驗定案（B@x4）** | **完成**（2026-08-14 下午，a+b=3547 對 x1 +47%；DMI 上限定位 S3≈S2、C 只加容量） | `docs/RESULTS.md` |
+| **8/14 晚補測（USB 計畫 A–E，B@x4 + D 回池）** | **完成**（2026-08-14 晚，A1 主表 64:27:9:4 排水態 2517/4292、A2 MIR 3799、A3 LVM 方向不變、B4 借調中性、C5 mirror 讀重試 0xD5 byte 精確、C6 badmap+zero-fill、D7 WC read-after-write、D8 確定性、E9 sparse 抓到並修復 borrow 鎖洩漏；lockdep 因 kernel 未開 PROVE_LOCKING 以 sparse 替代） | `docs/RESULTS.md` |
